@@ -312,8 +312,16 @@ bool SwapChain::CreateSwapChain()
 	if (!SelectSurfaceFormat() || !SelectPresentMode())
 		return false;
 
-	// Select number of images in swap chain, we prefer one buffer in the background to work on
-	uint32_t image_count = surface_capabilities.minImageCount + 1;
+	// Select number of images in swap chain. We normally prefer one buffer in the
+	// background to work on (minImageCount + 1), but for IMMEDIATE present mode
+	// we want the minimum so a freshly-rendered frame can scan out as fast as
+	// possible — each extra in-flight image is another ~16ms of input lag.
+	// On Android this is especially noticeable for Slippi since the Adreno
+	// minImageCount tends to be 2 and the system compositor already adds a
+	// frame of its own.
+	uint32_t image_count = surface_capabilities.minImageCount;
+	if (m_present_mode != VK_PRESENT_MODE_IMMEDIATE_KHR)
+		image_count += 1;
 
 	// maxImageCount can be zero, in which case there isn't an upper limit on the number of buffers.
 	if (surface_capabilities.maxImageCount > 0)

@@ -24,24 +24,56 @@ public final class SlippiDefaults {
 
     private SlippiDefaults() {}
 
+    /**
+     * Bump this whenever any of the canned configs below changes. We rewrite
+     * the file in place when {@code <user>/Config/defaults_version} is older
+     * so tuning improvements actually reach users on app upgrade without
+     * requiring them to clear app data. Hand-edited overrides aren't a
+     * concern — there's no settings UI yet, so anyone touching the ini files
+     * directly is implicitly opting out of the version bump.
+     */
+    private static final int DEFAULTS_VERSION = 2;
+    private static final String DEFAULTS_VERSION_FILE = "defaults_version";
+
     public static void writeIfMissing(File configDir) {
         if (!configDir.exists() && !configDir.mkdirs()) {
             Log.w(TAG, "Could not create " + configDir);
             return;
         }
-        writeIfMissing(new File(configDir, "Dolphin.ini"), DOLPHIN_INI);
-        writeIfMissing(new File(configDir, "GFX.ini"), GFX_INI);
-        writeIfMissing(new File(configDir, "GCPadNew.ini"), GCPAD_INI);
-        writeIfMissing(new File(configDir, "WiimoteNew.ini"), WIIMOTE_INI);
-        writeIfMissing(new File(configDir, "Logger.ini"), LOGGER_INI);
+        File versionFile = new File(configDir, DEFAULTS_VERSION_FILE);
+        int existing = readVersion(versionFile);
+        boolean force = existing < DEFAULTS_VERSION;
+        writeOrUpgrade(new File(configDir, "Dolphin.ini"), DOLPHIN_INI, force);
+        writeOrUpgrade(new File(configDir, "GFX.ini"), GFX_INI, force);
+        writeOrUpgrade(new File(configDir, "GCPadNew.ini"), GCPAD_INI, force);
+        writeOrUpgrade(new File(configDir, "WiimoteNew.ini"), WIIMOTE_INI, force);
+        writeOrUpgrade(new File(configDir, "Logger.ini"), LOGGER_INI, force);
+        if (force) writeVersion(versionFile, DEFAULTS_VERSION);
     }
 
-    private static void writeIfMissing(File f, String content) {
-        if (f.exists()) return;
+    private static void writeOrUpgrade(File f, String content, boolean force) {
+        if (!force && f.exists()) return;
         try (FileWriter w = new FileWriter(f)) {
             w.write(content);
         } catch (IOException e) {
             Log.e(TAG, "Failed to write " + f + ": " + e);
+        }
+    }
+
+    private static int readVersion(File f) {
+        if (!f.exists()) return 0;
+        try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(f))) {
+            return Integer.parseInt(r.readLine().trim());
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private static void writeVersion(File f, int v) {
+        try (FileWriter w = new FileWriter(f)) {
+            w.write(Integer.toString(v));
+        } catch (IOException e) {
+            Log.w(TAG, "writeVersion: " + e);
         }
     }
 
@@ -53,7 +85,11 @@ public final class SlippiDefaults {
             + "[Core]\n"
             + "GFXBackend = Vulkan\n"
             + "HLE_BS2 = True\n"
-            + "TimingVariance = 40\n"
+            // Match desktop Slippi's TimingVariance — 40 (the upstream
+            // Dolphin default) lets the emulator drift up to 40ms before
+            // resyncing, which surfaces as occasional ~2-frame stutters
+            // and a sloppier feel. 8 keeps the audio/video clock tight.
+            + "TimingVariance = 8\n"
             + "CPUCore = 4\n"
             + "Fastmem = True\n"
             + "CPUThread = True\n"
@@ -143,7 +179,12 @@ public final class SlippiDefaults {
             + "SWZFreeze = True\n"
             + "ShaderCompilationMode = 0\n"
             + "WaitForShadersBeforeStarting = True\n"
-            + "BackendMultithreading = True\n"
+            // BackendMultithreading=True buffers GPU command submission on a
+            // worker thread, which is a small frame-rate win but adds ~1
+            // frame of input-to-display latency. Disable it for Slippi:
+            // input feel matters more than a few extra %FPS on a phone GPU
+            // that's already saturating at 60.
+            + "BackendMultithreading = False\n"
             + "[Enhancements]\n"
             + "ForceTextureFiltering = False\n"
             + "MaxAnisotropy = 0\n"
