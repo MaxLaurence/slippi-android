@@ -626,6 +626,44 @@ std::string CodeToUTF8(const char* fromcode, const std::basic_string<T>& input)
 	return CodeTo("UTF-8", fromcode, input);
 }
 
+// Minimal UTF-8 → Shift-JIS converter for the player-name pipeline.
+// SHIFT-JIS is byte-compatible with ASCII for 0x00-0x7F, and
+// ConvertNarrowSpecialSHIFTJIS() runs after this and rewrites the
+// punctuation that Melee's font requires in wide-form, so all we
+// need to do is preserve the ASCII bytes and drop multi-byte UTF-8
+// sequences (replaced with '?'). This covers the overwhelmingly
+// common case of latin-alphabet display names like "Mango" / "Hbox".
+//
+// Required because Android's bundled libiconv-1.14 cannot open the
+// SJIS converter at runtime (charset alias registration issue), and
+// without the fallback ConvertStringForGame() returns 31 NUL bytes,
+// producing the blank player-name rectangles in CSS / HUD / results.
+static std::string MinimalUTF8ToSJIS(const std::string& input)
+{
+	std::string out;
+	out.reserve(input.size());
+	for (size_t i = 0; i < input.size();)
+	{
+		unsigned char c = (unsigned char)input[i];
+		if (c < 0x80)
+		{
+			out.push_back((char)c);
+			i += 1;
+			continue;
+		}
+		// Skip the rest of this UTF-8 codepoint and emit a placeholder.
+		size_t skip = 1;
+		if      ((c & 0xE0) == 0xC0) skip = 2;
+		else if ((c & 0xF0) == 0xE0) skip = 3;
+		else if ((c & 0xF8) == 0xF0) skip = 4;
+		if (i + skip > input.size())
+			skip = input.size() - i;
+		out.push_back('?');
+		i += skip;
+	}
+	return out;
+}
+
 // Minimal Shift-JIS → UTF-8 converter that handles the subset Slippi actually
 // puts through this path: ASCII characters (passthrough) and the full-width
 // number sign `0x81 0x94` (U+FF03 `＃`, used inside Melee connect codes like
@@ -734,6 +772,8 @@ std::string UTF8ToSHIFTJIS(const std::string &input)
 	free(fallbacks);
 #else
 	auto str = CodeTo("SJIS", "UTF-8", input);
+	if (str.empty() && !input.empty())
+		str = MinimalUTF8ToSJIS(input);
 #endif
 	return str;
 }
