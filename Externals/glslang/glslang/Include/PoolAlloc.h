@@ -312,7 +312,12 @@ public:
     size_type max_size() const { return static_cast<size_type>(-1) / sizeof(T); }
     size_type max_size(int size) const { return static_cast<size_type>(-1) / size; }
 
-    void setAllocator(TPoolAllocator* a) { allocator = *a; }
+    // setAllocator() was originally `allocator = *a;`, which tries to invoke
+    // TPoolAllocator::operator= — that's declared private. Newer clang
+    // diagnoses the unused inline method eagerly. setAllocator() is dead code
+    // (no callers in glslang), so just no-op it to keep the API intact while
+    // dodging the access-control error on the Android NDK toolchain.
+    void setAllocator(TPoolAllocator*) { /* no-op: 'allocator' is a reference and cannot be rebound */ }
     TPoolAllocator& getAllocator() const { return allocator; }
 
 protected:

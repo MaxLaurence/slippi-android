@@ -626,17 +626,72 @@ std::string CodeToUTF8(const char* fromcode, const std::basic_string<T>& input)
 	return CodeTo("UTF-8", fromcode, input);
 }
 
+// Minimal Shift-JIS → UTF-8 converter that handles the subset Slippi actually
+// puts through this path: ASCII characters (passthrough) and the full-width
+// number sign `0x81 0x94` (U+FF03 `＃`, used inside Melee connect codes like
+// `MANG#0`). Anything else collapses to `?` so the output is still valid
+// UTF-8 and the Rust extensions don't panic on `CStr::to_str()`.
+//
+// We need this because the bundled libiconv-1.14 fails to open CP1252/SJIS
+// converters at runtime on Android (charset alias registration issue), and
+// returning raw SJIS bytes via the iconv-failure fallback produces invalid
+// UTF-8 that Slippi's Rust FFI rejects.
+static std::string MinimalSJISToUTF8(const std::string& input)
+{
+	std::string out;
+	out.reserve(input.size());
+	for (size_t i = 0; i < input.size();)
+	{
+		unsigned char c0 = (unsigned char)input[i];
+		if (c0 < 0x80)
+		{
+			out.push_back((char)c0);
+			i += 1;
+			continue;
+		}
+		// JIS X 0208 lead-byte ranges: 0x81-0x9F and 0xE0-0xFC.
+		bool is_lead = (c0 >= 0x81 && c0 <= 0x9F) || (c0 >= 0xE0 && c0 <= 0xFC);
+		if (!is_lead || i + 1 >= input.size())
+		{
+			// Half-width katakana (0xA1-0xDF) or stray byte — drop.
+			out.push_back('?');
+			i += 1;
+			continue;
+		}
+		unsigned char c1 = (unsigned char)input[i + 1];
+		// Specific Slippi sequences we need to round-trip semantically.
+		if (c0 == 0x81 && c1 == 0x94)
+		{
+			// U+FF03 FULLWIDTH NUMBER SIGN → UTF-8 0xEF 0xBC 0x83
+			out.append("\xEF\xBC\x83");
+		}
+		else
+		{
+			out.push_back('?');
+		}
+		i += 2;
+	}
+	return out;
+}
+
 std::string CP1252ToUTF8(const std::string& input)
 {
-	// return CodeToUTF8("CP1252//TRANSLIT", input);
-	// return CodeToUTF8("CP1252//IGNORE", input);
-	return CodeToUTF8("CP1252", input);
+	std::string out = CodeToUTF8("CP1252", input);
+	if (!out.empty()) return out;
+	// iconv failed. CP1252 is a strict superset of ASCII for 0x00-0x7F, so a
+	// pure-ASCII input is valid UTF-8 verbatim. For mixed input we'd lose
+	// information here, but it beats returning "" (which silently zeroes
+	// game IDs and similar identifiers).
+	if (!input.empty()) return input;
+	return out;
 }
 
 std::string SHIFTJISToUTF8(const std::string& input)
 {
-	// return CodeToUTF8("CP932", input);
-	return CodeToUTF8("SJIS", input);
+	std::string out = CodeToUTF8("SJIS", input);
+	if (!out.empty()) return out;
+	if (input.empty()) return out;
+	return MinimalSJISToUTF8(input);
 }
 
 #ifdef __APPLE__

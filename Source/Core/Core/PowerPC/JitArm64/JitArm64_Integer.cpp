@@ -25,12 +25,12 @@ void JitArm64::ComputeRC(ARM64Reg reg, int crf, bool needs_sext)
 
 		SXTW(XA, reg);
 
-		STR(INDEX_UNSIGNED, XA, PPC_REG, PPCSTATE_OFF(cr_val[crf]));
+		STR(INDEX_UNSIGNED, XA, PPC_REG, PPCSTATE_OFF(cr_val[0]) + crf * sizeof(u64));
 		gpr.Unlock(WA);
 	}
 	else
 	{
-		STR(INDEX_UNSIGNED, EncodeRegTo64(reg), PPC_REG, PPCSTATE_OFF(cr_val[crf]));
+		STR(INDEX_UNSIGNED, EncodeRegTo64(reg), PPC_REG, PPCSTATE_OFF(cr_val[0]) + crf * sizeof(u64));
 	}
 }
 
@@ -43,7 +43,7 @@ void JitArm64::ComputeRC(u64 imm, int crf, bool needs_sext)
 	if (imm & 0x80000000 && needs_sext)
 		SXTW(XA, WA);
 
-	STR(INDEX_UNSIGNED, XA, PPC_REG, PPCSTATE_OFF(cr_val[crf]));
+	STR(INDEX_UNSIGNED, XA, PPC_REG, PPCSTATE_OFF(cr_val[0]) + crf * sizeof(u64));
 	gpr.Unlock(WA);
 }
 

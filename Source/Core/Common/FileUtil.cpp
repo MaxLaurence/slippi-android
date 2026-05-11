@@ -777,11 +777,16 @@ std::string GetHomeDirectory()
 	else
 	{
 		const char *home = getenv("USERPROFILE");
-		homeDir = std::string(home) + "\\Documents";
+		homeDir = home ? std::string(home) + "\\Documents" : std::string();
 	}
 #else
+	// Android apps run sandboxed with no HOME envvar — std::string(nullptr)
+	// segfaults, so fall back to the user dir we've already configured.
 	const char *home = getenv("HOME");
-	homeDir = std::string(home);
+	if (home)
+		homeDir = std::string(home);
+	else
+		homeDir = GetUserPath(D_USER_IDX);
 #endif
 
 	return homeDir;
@@ -795,6 +800,12 @@ std::string GetSysDirectory()
 	sysDir = GetBundleDirectory() + DIR_SEP + SYSDATA_DIR;
 #elif defined(_WIN32) || defined(LINUX_LOCAL_DEV)
 	sysDir = GetExeDirectory() + DIR_SEP + SYSDATA_DIR;
+#elif defined(ANDROID)
+	// On Android the APK ships Sys/ as assets. The Java launcher extracts
+	// them into the app's private files dir at <files_dir>/dolphin/Sys/.
+	// We can't use /sdcard on modern Android (scoped storage), so anchor
+	// off the user dir that the Java side already configured.
+	sysDir = GetUserPath(D_USER_IDX) + "Sys";
 #else
 	sysDir = SYSDATA_DIR;
 #endif

@@ -22,20 +22,20 @@ FixupBranch JitArm64::JumpIfCRFieldBit(int field, int bit, bool jump_if_set)
 	switch (bit)
 	{
 	case CR_SO_BIT:  // check bit 61 set
-		LDR(INDEX_UNSIGNED, XA, PPC_REG, PPCSTATE_OFF(cr_val[field]));
+		LDR(INDEX_UNSIGNED, XA, PPC_REG, PPCSTATE_OFF(cr_val[0]) + field * sizeof(u64));
 		branch = jump_if_set ? TBNZ(XA, 61) : TBZ(XA, 61);
 	break;
 	case CR_EQ_BIT:  // check bits 31-0 == 0
-		LDR(INDEX_UNSIGNED, WA, PPC_REG, PPCSTATE_OFF(cr_val[field]));
+		LDR(INDEX_UNSIGNED, WA, PPC_REG, PPCSTATE_OFF(cr_val[0]) + field * sizeof(u64));
 		branch = jump_if_set ? CBZ(WA) : CBNZ(WA);
 	break;
 	case CR_GT_BIT:  // check val > 0
-		LDR(INDEX_UNSIGNED, XA, PPC_REG, PPCSTATE_OFF(cr_val[field]));
+		LDR(INDEX_UNSIGNED, XA, PPC_REG, PPCSTATE_OFF(cr_val[0]) + field * sizeof(u64));
 		CMP(XA, SP);
 		branch = B(jump_if_set ? CC_GT : CC_LE);
 	break;
 	case CR_LT_BIT:  // check bit 62 set
-		LDR(INDEX_UNSIGNED, XA, PPC_REG, PPCSTATE_OFF(cr_val[field]));
+		LDR(INDEX_UNSIGNED, XA, PPC_REG, PPCSTATE_OFF(cr_val[0]) + field * sizeof(u64));
 		branch = jump_if_set ? TBNZ(XA, 62) : TBZ(XA, 62);
 	break;
 	default:
@@ -78,8 +78,8 @@ void JitArm64::mcrf(UGeckoInstruction inst)
 	{
 		ARM64Reg WA = gpr.GetReg();
 		ARM64Reg XA = EncodeRegTo64(WA);
-		LDR(INDEX_UNSIGNED, XA, PPC_REG, PPCSTATE_OFF(cr_val[inst.CRFS]));
-		STR(INDEX_UNSIGNED, XA, PPC_REG, PPCSTATE_OFF(cr_val[inst.CRFD]));
+		LDR(INDEX_UNSIGNED, XA, PPC_REG, PPCSTATE_OFF(cr_val[0]) + inst.CRFS * sizeof(u64));
+		STR(INDEX_UNSIGNED, XA, PPC_REG, PPCSTATE_OFF(cr_val[0]) + inst.CRFD * sizeof(u64));
 		gpr.Unlock(WA);
 	}
 }
@@ -90,7 +90,7 @@ void JitArm64::mfsr(UGeckoInstruction inst)
 	JITDISABLE(bJITSystemRegistersOff);
 
 	gpr.BindToRegister(inst.RD, false);
-	LDR(INDEX_UNSIGNED, gpr.R(inst.RD), PPC_REG, PPCSTATE_OFF(sr[inst.SR]));
+	LDR(INDEX_UNSIGNED, gpr.R(inst.RD), PPC_REG, PPCSTATE_OFF(sr[0]) + inst.SR * sizeof(u32));
 }
 
 void JitArm64::mtsr(UGeckoInstruction inst)
@@ -99,7 +99,7 @@ void JitArm64::mtsr(UGeckoInstruction inst)
 	JITDISABLE(bJITSystemRegistersOff);
 
 	gpr.BindToRegister(inst.RS, true);
-	STR(INDEX_UNSIGNED, gpr.R(inst.RS), PPC_REG, PPCSTATE_OFF(sr[inst.SR]));
+	STR(INDEX_UNSIGNED, gpr.R(inst.RS), PPC_REG, PPCSTATE_OFF(sr[0]) + inst.SR * sizeof(u32));
 }
 
 void JitArm64::mfsrin(UGeckoInstruction inst)

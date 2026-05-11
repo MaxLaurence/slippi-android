@@ -299,6 +299,14 @@ void VulkanContext::PopulateBackendInfoFeatures(VideoConfig* config, VkPhysicalD
 	// Depth clamping implies shaderClipDistance and depthClamp
 	config->backend_info.bSupportsDepthClamp =
 		(features.depthClamp == VK_TRUE && features.shaderClipDistance == VK_TRUE);
+
+	// Adreno GPUs use ASTC, not BC/DXT. Without this check, CMPR textures get uploaded
+	// as VK_FORMAT_BC2_UNORM_BLOCK which Adreno cannot handle, producing solid colored
+	// rectangles at hit contact points in Melee.
+	const bool bc_supported = (features.textureCompressionBC == VK_TRUE);
+	config->backend_info.bSupportedFormats[PC_TEX_FMT_DXT1] = bc_supported;
+	config->backend_info.bSupportedFormats[PC_TEX_FMT_DXT3] = bc_supported;
+	config->backend_info.bSupportedFormats[PC_TEX_FMT_DXT5] = bc_supported;
 }
 
 void VulkanContext::PopulateBackendInfoMultisampleModes(

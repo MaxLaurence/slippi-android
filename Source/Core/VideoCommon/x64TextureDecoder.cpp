@@ -1065,6 +1065,7 @@ static PC_TexFormat TexDecoder_Decode_real(u8 *dst, const u8 *src, u32 width, u3
 // TODO: complete SSE2 optimization of less often used texture formats.
 // TODO: refactor algorithms using _mm_loadl_epi64 unaligned loads to prefer 128-bit aligned loads.
 
+#if _M_SSE >= 0x200
 static PC_TexFormat TexDecoder_Decode_RGBA(u32 * dst, const u8 * src, u32 width, u32 height, u32 texformat, u32 tlutaddr, TlutFormat tlutfmt)
 {
 	const u32 Wsteps4 = (width + 3) / 4;
@@ -2113,6 +2114,7 @@ static PC_TexFormat TexDecoder_Decode_RGBA(u32 * dst, const u8 * src, u32 width,
 
 
 
+#endif // _M_SSE >= 0x200
 void TexDecoder_SetTexFmtOverlayOptions(bool enable, bool center)
 {
 	TexFmt_Overlay_Enable = enable;
@@ -2129,13 +2131,93 @@ PC_TexFormat TexDecoder_Decode(u8 *dst, const u8 *src, u32 width, u32 height, u3
 	if (retval == PC_TEX_FMT_NONE)
 	{
 #endif
+#if _M_SSE >= 0x200
 		if (rgbaOnly)
 		{
 			retval = TexDecoder_Decode_RGBA((u32*)dst, src, width, height, texformat, tlutaddr, tlutfmt);
 		}
 		else
+#endif
 		{
 			retval = TexDecoder_Decode_real(dst, src, width, height, texformat, tlutaddr, tlutfmt, compressed_supported);
+#if _M_SSE < 0x200
+			// On non-SSE platforms TexDecoder_Decode_RGBA is unavailable, so
+			// TexDecoder_Decode_real was called regardless of rgbaOnly.  When the
+			// backend requested RGBA32 (rgbaOnly=true) but got a compact format
+			// back, expand it in-place so the backend doesn't misinterpret the
+			// 2-bytes-per-pixel IA data as 4-bytes-per-pixel RGBA.
+			if (rgbaOnly && retval != PC_TEX_FMT_NONE)
+			{
+				const u32 npixels = width * height;
+				if (retval == PC_TEX_FMT_IA8 || retval == PC_TEX_FMT_IA4_AS_IA8)
+				{
+					// TexDecoder_Decode_real stores IA8 as u16: high byte=I, low byte=A.
+					// Expand backwards (in-place 2→4 byte) to RGBA32 (R=G=B=I, A=A).
+					const u16* s16 = (const u16*)dst + npixels - 1;
+					u32* d32 = (u32*)dst + npixels - 1;
+					for (s32 i = (s32)npixels - 1; i >= 0; i--, s16--, d32--)
+					{
+						u16 val = *s16;
+						u8 intensity = (u8)(val >> 8);
+						u8 alpha     = (u8)(val & 0xFF);
+						*d32 = (u32)intensity
+						     | ((u32)intensity << 8)
+						     | ((u32)intensity << 16)
+						     | ((u32)alpha     << 24);
+					}
+					retval = PC_TEX_FMT_RGBA32;
+				}
+				else if (retval == PC_TEX_FMT_I8 || retval == PC_TEX_FMT_I4_AS_I8)
+				{
+					// I8: 1 byte per pixel (intensity). SSE2 path replicates I to all 4
+					// channels including alpha (IIII) so TEV can use texture.alpha as a
+					// mask. Matching that behaviour here — A=0xFF would break alpha effects.
+					const u8* s8 = (const u8*)dst + npixels - 1;
+					u32* d32 = (u32*)dst + npixels - 1;
+					for (s32 i = (s32)npixels - 1; i >= 0; i--, s8--, d32--)
+					{
+						u8 intensity = *s8;
+						*d32 = (u32)intensity
+						     | ((u32)intensity << 8)
+						     | ((u32)intensity << 16)
+						     | ((u32)intensity << 24);
+					}
+					retval = PC_TEX_FMT_RGBA32;
+				}
+				else if (retval == PC_TEX_FMT_RGB565)
+				{
+					// RGB565: u16 per pixel, already byte-swapped.
+					// Expand to RGBA32 in-place.
+					const u16* s16 = (const u16*)dst + npixels - 1;
+					u32* d32 = (u32*)dst + npixels - 1;
+					for (s32 i = (s32)npixels - 1; i >= 0; i--, s16--, d32--)
+					{
+						u16 val = *s16;
+						u8 r = (u8)(((val >> 11) & 0x1F) * 255 / 31);
+						u8 g = (u8)(((val >>  5) & 0x3F) * 255 / 63);
+						u8 b = (u8)(((val      ) & 0x1F) * 255 / 31);
+						*d32 = (u32)r | ((u32)g << 8) | ((u32)b << 16) | 0xFF000000u;
+					}
+					retval = PC_TEX_FMT_RGBA32;
+				}
+				else if (retval == PC_TEX_FMT_BGRA32)
+				{
+					// Both backends set bSupportedFormats[BGRA32]=false and expect RGBA32.
+					// Swap R and B in-place: BGRA(B,G,R,A) → RGBA(R,G,B,A).
+					u32* pixels = (u32*)dst;
+					for (u32 i = 0; i < npixels; i++)
+					{
+						u32 v = pixels[i];
+						pixels[i] = (v & 0xFF000000u)        // A stays at byte[3]
+						          | ((v & 0x00FF0000u) >> 16) // R: byte[2] → byte[0]
+						          | (v & 0x0000FF00u)         // G stays at byte[1]
+						          | ((v & 0x000000FFu) << 16);// B: byte[0] → byte[2]
+					}
+					retval = PC_TEX_FMT_RGBA32;
+				}
+				// PC_TEX_FMT_DXT1/3/5 are compressed formats handled natively; no conversion needed.
+			}
+#endif
 		}
 #ifdef _WIN32
 	}

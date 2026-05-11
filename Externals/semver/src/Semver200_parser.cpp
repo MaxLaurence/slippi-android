@@ -88,9 +88,8 @@ namespace version {
 
 		/// Validate that prerelease and build version identifiers are comprised of allowed chars only.
 		inline void prerelease_version_validator(const string&, const char c) {
-			bool res = false;
 			for (const auto& r : allowed_prerel_id_chars) {
-				res |= (c >= r.first && c <= r.second);
+				(void)((c >= r.first && c <= r.second));
 			}
 			//if (!res)
 			//	throw Parse_error("invalid character encountered: " + string(1, c));

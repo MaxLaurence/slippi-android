@@ -1540,13 +1540,13 @@ void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight,
 	OSD::DrawMessages();
 
 #ifdef ANDROID
-	if (s_surface_needs_change.IsSet())
+	if (m_surface_needs_change.IsSet())
 	{
-		GLInterface->UpdateHandle(s_new_surface_handle);
+		GLInterface->UpdateHandle(m_new_surface_handle);
 		GLInterface->UpdateSurface();
-		s_new_surface_handle = nullptr;
-		s_surface_needs_change.Clear();
-		s_surface_changed.Set();
+		m_new_surface_handle = nullptr;
+		m_surface_needs_change.Clear();
+		m_surface_changed.Set();
 	}
 #endif
 
@@ -2150,9 +2150,9 @@ void Renderer::ChangeSurface(void* new_surface_handle)
 	// This is only necessary for Android at this point, although handling resizes here
 	// would be more efficient than polling.
 #ifdef ANDROID
-	s_new_surface_handle = new_surface_handle;
-	s_surface_needs_change.Set();
-	s_surface_changed.Wait();
+	m_new_surface_handle = new_surface_handle;
+	m_surface_needs_change.Set();
+	m_surface_changed.Wait();
 #endif
 }
 }
