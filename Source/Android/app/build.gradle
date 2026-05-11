@@ -1,92 +1,136 @@
-apply plugin: 'com.android.application'
+plugins {
+    id 'com.android.application'
+}
 
 android {
-    // Leanback support requires >22
-    compileSdkVersion 24
-    buildToolsVersion '24.0.3'
-
-    lintOptions {
-        // This is important as it will run lint but not abort on error
-        // Lint has some overly obnoxious "errors" that should really be warnings
-        abortOnError false
-
-        //Uncomment disable lines for test builds...
-        //disable 'MissingTranslation'
-        //disable 'ExtraTranslation'
-    }
+    namespace 'org.dolphinemu.dolphinemu'
+    compileSdk 34
+    ndkVersion '27.1.12297006'
 
     defaultConfig {
-        // TODO If this is ever modified, change application_id in strings.xml
-        applicationId "org.dolphinemu.dolphinemu"
-        minSdkVersion 21
-        targetSdkVersion 21
+        applicationId 'org.dolphinemu.dolphinemu'
+        minSdk 29
+        targetSdk 34
+        versionCode 1
+        versionName '3.6.0-android'
 
-        // TODO This should be set to the Buildbot build number for release builds, and be "1" for debug builds.
-        versionCode 13
+        externalNativeBuild {
+            cmake {
+                // Point corrosion directly at the specific rustup-managed
+                // toolchain pinned in Externals/SlippiRustExtensions/rust-toolchain.toml.
+                // This avoids relying on corrosion's auto-detection of the
+                // "active" toolchain via `rustup toolchain list`, which fails
+                // when invoked from outside the override directory.
+                def homeDir = System.getProperty('user.home')
+                def rustToolchain = ''
+                try {
+                    def tomlText = new File("${rootDir}/../../Externals/SlippiRustExtensions/rust-toolchain.toml").text
+                    def m = (tomlText =~ /channel\s*=\s*"([^"]+)"/)
+                    if (m.find()) rustToolchain = m.group(1)
+                } catch (Exception ignored) {}
+                if (!rustToolchain) rustToolchain = '1.88.0'
+                def rustupRoot = "${homeDir}/.rustup/toolchains/${rustToolchain}-aarch64-apple-darwin/bin"
+                def rustcPath = new File(rustupRoot, 'rustc').exists() ? "${rustupRoot}/rustc" : ''
+                def cargoPath = new File(rustupRoot, 'cargo').exists() ? "${rustupRoot}/cargo" : ''
+                def rustupPath = new File("${homeDir}/.cargo/bin/rustup").exists()
+                        ? "${homeDir}/.cargo/bin/rustup" : ''
 
-        // TODO This should be set to the string currently provided by NativeLibrary.GetVersionString().
-        versionName "0.13"
-    }
+                arguments(
+                    '-DANDROID_STL=c++_shared',
+                    '-DANDROID_PLATFORM=android-29',
+                    '-DCMAKE_BUILD_TYPE=Release',
+                    '-DENABLE_PCH=OFF',
+                    // ENABLE_GENERIC=OFF lets the top-level CMakeLists pick up
+                    // the aarch64 branch and turn on the JitArm64 sources —
+                    // without it we'd get a JIT-less interpreter-only build,
+                    // which is unplayable for Melee.
+                    '-DENABLE_GENERIC=OFF',
+                    '-DUSE_EGL=1',
+                    '-DUSE_X11=0',
+                    '-DUSE_UPNP=0',
+                    '-DDISABLE_WX=1',
+                    '-DENABLE_QT2=0',
+                    '-DENABLE_HEADLESS=OFF',
+                    '-DENABLE_TESTS=OFF',
+                    '-DENABLE_VULKAN=ON'
+                )
+                if (rustcPath) arguments "-DRust_COMPILER=${rustcPath}"
+                if (cargoPath) arguments "-DRust_CARGO=${cargoPath}"
+                if (rustupPath) arguments "-DRust_RUSTUP=${rustupPath}"
+                arguments '-DRust_RESOLVE_RUSTUP_TOOLCHAINS=OFF'
 
-    signingConfigs {
-        release {
-            if (project.hasProperty('keystore')) {
-                storeFile file(project.property('keystore'))
-                storePassword project.property('storepass')
-                keyAlias project.property('keyalias')
-                keyPassword project.property('keypass')
+                abiFilters 'arm64-v8a'
+                cppFlags '-std=c++17 -fexceptions -frtti'
+                targets 'main'
             }
         }
-    }
 
-    // Define build types, which are orthogonal to product flavors.
-    buildTypes {
-        // Signed by release key, allowing for upload to Play Store.
-        release {
-            signingConfig signingConfigs.release
-        }
-
-        // Signed by debug key disallowing distribution on Play Store.
-        // Attaches 'debug' suffix to version and package name, allowing installation alongside the release build.
-        debug {
-            // TODO If this is ever modified, change application_id in debug/strings.xml
-            applicationIdSuffix ".debug"
-            versionNameSuffix '-debug'
-            jniDebuggable true
+        ndk {
+            abiFilters 'arm64-v8a'
         }
     }
 
     externalNativeBuild {
         cmake {
-            path "../../../CMakeLists.txt"
+            path '../../../CMakeLists.txt'
+            version '3.22.1'
         }
     }
 
-    defaultConfig {
-        externalNativeBuild {
-            cmake {
-                arguments "-DANDROID_STL=c++_static", "-DCMAKE_BUILD_TYPE=RelWithDebInfo", "-DENABLE_PCH=OFF" // , "-DENABLE_GENERIC=ON"
-                abiFilters "arm64-v8a" //, "armeabi-v7a", "x86_64", "x86"
-            }
+    buildFeatures {
+        buildConfig = true
+        viewBinding = true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs = ['src/main/java']
+            res.srcDirs = ['src/main/res']
+            // Mirror the Sys/ tree we populate from CMake — without an
+            // explicit assets dir, AGP doesn't pick up the bundled
+            // codehandler.bin / GameFiles / Slippi/InjectionLists / etc.
+            assets.srcDirs = ['src/main/assets']
+            manifest.srcFile 'src/main/AndroidManifest.xml'
         }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix '.debug'
+            versionNameSuffix '-debug'
+            jniDebuggable true
+            minifyEnabled false
+        }
+        release {
+            minifyEnabled false
+        }
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+        resources {
+            excludes += ['META-INF/LICENSE*', 'META-INF/NOTICE*']
+        }
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
     }
 }
 
 dependencies {
-    compile 'com.android.support:support-v13:24.2.1'
-    compile 'com.android.support:cardview-v7:24.2.1'
-    compile 'com.android.support:recyclerview-v7:24.2.1'
-    compile 'com.android.support:design:24.2.1'
-
-    // Android TV UI libraries.
-    compile 'com.android.support:leanback-v17:24.2.1'
-
-    // For showing the banner as a circle a-la Material Design Guidelines
-    compile 'de.hdodenhof:circleimageview:2.1.0'
-
-    // For loading huge screenshots from the disk.
-    compile 'com.squareup.picasso:picasso:2.5.2'
-
-    // Allows FRP-style asynchronous operations in Android.
-    compile 'io.reactivex:rxandroid:1.2.1'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'androidx.core:core:1.12.0'
+    implementation 'androidx.documentfile:documentfile:1.0.1'
+    implementation 'androidx.preference:preference:1.2.1'
+    implementation 'com.google.android.material:material:1.11.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
 }
