@@ -40,3 +40,5 @@ build/
 *.so
 *.iml
 build.properties
+.cxx/
+app/.cxx/
