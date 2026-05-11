@@ -1,8 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="dark_bg">#FF0E1116</color>
-    <color name="card_bg">#FF1A1F2A</color>
+    <!-- Slippi brand green. Used as adaptive icon background, primary
+         accent / button color, and tint for the logo glyph on dark
+         surfaces. -->
+    <color name="slippi_green">#FF44A963</color>
+    <color name="slippi_green_pressed">#FF2F8F4D</color>
+
+    <!-- Dark UI palette tuned to make the green pop without being
+         neon-saturated against the rest of the app. -->
+    <color name="dark_bg">#FF0B100E</color>
+    <color name="card_bg">#FF14201A</color>
+    <color name="card_stroke">#FF24322C</color>
     <color name="text_primary">#FFEDEDED</color>
-    <color name="text_secondary">#FFA0A0A0</color>
-    <color name="accent">#FF8E5BFF</color>
+    <color name="text_secondary">#FF8FA398</color>
+
+    <!-- Legacy aliases (in case any leftover references). -->
+    <color name="accent">@color/slippi_green</color>
 </resources>

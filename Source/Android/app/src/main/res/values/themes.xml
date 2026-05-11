@@ -1,8 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.SlippiDolphin" parent="Theme.Material3.DayNight.NoActionBar">
+    <style name="Theme.SlippiDolphin" parent="Theme.Material3.Dark.NoActionBar">
         <item name="android:windowBackground">@color/dark_bg</item>
         <item name="android:statusBarColor">@color/dark_bg</item>
+        <item name="android:navigationBarColor">@color/dark_bg</item>
+
+        <!-- Material3 color slots — wire everything to the Slippi green so
+             toggles, ripples, and outlined buttons all pick it up
+             automatically. -->
+        <item name="colorPrimary">@color/slippi_green</item>
+        <item name="colorOnPrimary">#FF0B100E</item>
+        <item name="colorPrimaryContainer">@color/slippi_green</item>
+        <item name="colorOnPrimaryContainer">#FF0B100E</item>
+        <item name="colorSecondary">@color/slippi_green</item>
+        <item name="colorOnSecondary">#FF0B100E</item>
+        <item name="colorTertiary">@color/slippi_green</item>
+        <item name="colorSurface">@color/card_bg</item>
+        <item name="colorOnSurface">@color/text_primary</item>
+        <item name="colorOnSurfaceVariant">@color/text_secondary</item>
+        <item name="colorOutline">@color/card_stroke</item>
+        <item name="android:colorBackground">@color/dark_bg</item>
     </style>
 
     <style name="Theme.SlippiDolphin.Emulation" parent="Theme.SlippiDolphin">

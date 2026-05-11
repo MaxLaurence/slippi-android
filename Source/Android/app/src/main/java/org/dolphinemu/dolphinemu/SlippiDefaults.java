@@ -32,7 +32,7 @@ public final class SlippiDefaults {
      * concern — there's no settings UI yet, so anyone touching the ini files
      * directly is implicitly opting out of the version bump.
      */
-    private static final int DEFAULTS_VERSION = 2;
+    private static final int DEFAULTS_VERSION = 3;
     private static final String DEFAULTS_VERSION_FILE = "defaults_version";
 
     public static void writeIfMissing(File configDir) {
@@ -83,7 +83,7 @@ public final class SlippiDefaults {
             + "Fullscreen = True\n"
             + "RenderToMain = False\n"
             + "[Core]\n"
-            + "GFXBackend = Vulkan\n"
+            + "GFXBackend = OGL\n"
             + "HLE_BS2 = True\n"
             // Match desktop Slippi's TimingVariance — 40 (the upstream
             // Dolphin default) lets the emulator drift up to 40ms before

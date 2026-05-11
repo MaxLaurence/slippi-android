@@ -1,10 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Slippi Dolphin</string>
-    <string name="pick_iso">Pick Melee ISO</string>
-    <string name="pick_user_json">Import user.json</string>
-    <string name="play">Play</string>
-    <string name="iso_label_empty">ISO: not selected</string>
-    <string name="user_json_label_empty">user.json: not provided (offline play only)</string>
-    <string name="info_text">Slippi Dolphin for Android — alpha build.\n\n1. Pick a Melee NTSC 1.02 ISO from your device.\n2. (Optional) Import a user.json from a desktop Slippi launcher to enable online play.\n3. Hit Play.</string>
+    <string name="header_title">Slippi</string>
+    <string name="build_chip">android · alpha</string>
+    <string name="iso_section">Melee ISO</string>
+    <string name="user_json_section">Slippi user.json</string>
+    <string name="iso_label_empty">No ISO selected</string>
+    <string name="user_json_label_empty">Not provided (offline only)</string>
+    <string name="pick_iso">Choose</string>
+    <string name="pick_user_json">Import</string>
+    <string name="play">PLAY</string>
+    <string name="graphics_label">Graphics backend</string>
+    <string name="backend_vulkan">Vulkan</string>
+    <string name="backend_ogl">OpenGL</string>
+    <string name="adapter_none">No GC adapter detected</string>
+    <string name="adapter_connected">GC adapter ✓</string>
 </resources>
