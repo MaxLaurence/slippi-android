@@ -1,0 +1,218 @@
+package org.dolphinemu.dolphinemu;
+
+import android.util.Log;
+
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+
+/**
+ * Writes sane Slippi/Melee default config files on first launch.
+ *
+ * Values lifted from connoranastasio's ROCKNIX deploy script (which mirrors
+ * what the Slippi desktop launcher writes) — tuned for an Adreno GPU running
+ * Vulkan with the Slippi netplay flow. Differences from desktop:
+ *   - Backend = OGL fallback would crash today; we lock to Vulkan.
+ *   - DSP Backend = OpenSLES (only option available on the NDK).
+ *   - SIDevice0/1 default to 6 (standard pad) instead of 12 (USB adapter),
+ *     since no GC USB adapter is present on a phone.
+ *   - EFBAccessEnable = False and EnableGPUTextureDecoding = True keep the
+ *     Adreno R/B-channel artifacts and CMPR colored-square bug at bay.
+ */
+public final class SlippiDefaults {
+    private static final String TAG = "SlippiDefaults";
+
+    private SlippiDefaults() {}
+
+    public static void writeIfMissing(File configDir) {
+        if (!configDir.exists() && !configDir.mkdirs()) {
+            Log.w(TAG, "Could not create " + configDir);
+            return;
+        }
+        writeIfMissing(new File(configDir, "Dolphin.ini"), DOLPHIN_INI);
+        writeIfMissing(new File(configDir, "GFX.ini"), GFX_INI);
+        writeIfMissing(new File(configDir, "GCPadNew.ini"), GCPAD_INI);
+        writeIfMissing(new File(configDir, "WiimoteNew.ini"), WIIMOTE_INI);
+        writeIfMissing(new File(configDir, "Logger.ini"), LOGGER_INI);
+    }
+
+    private static void writeIfMissing(File f, String content) {
+        if (f.exists()) return;
+        try (FileWriter w = new FileWriter(f)) {
+            w.write(content);
+        } catch (IOException e) {
+            Log.e(TAG, "Failed to write " + f + ": " + e);
+        }
+    }
+
+    private static final String DOLPHIN_INI = ""
+            + "[Display]\n"
+            + "FullscreenResolution = Auto\n"
+            + "Fullscreen = True\n"
+            + "RenderToMain = False\n"
+            + "[Core]\n"
+            + "GFXBackend = Vulkan\n"
+            + "HLE_BS2 = True\n"
+            + "TimingVariance = 40\n"
+            + "CPUCore = 4\n"
+            + "Fastmem = True\n"
+            + "CPUThread = True\n"
+            + "DSPHLE = True\n"
+            + "SkipIdle = True\n"
+            + "SyncOnSkipIdle = False\n"
+            + "SyncGPU = False\n"
+            + "FPRF = False\n"
+            + "AccurateNaNs = False\n"
+            + "SelectedLanguage = 0\n"
+            + "OverrideGCLang = False\n"
+            + "DPL2Decoder = False\n"
+            + "Latency = 2\n"
+            // Match desktop Slippi: SlotA = 255 (NONE). The Slippi EXI device
+            // is hardcoded into SlotB via the default of
+            // `SConfig::m_EXIDevice[1] = EXIDEVICE_SLIPPI` in ConfigManager.h
+            // (no config key reads SlotB) — and the netplay Gecko codes in
+            // Sys/GameSettings/GALE01r2.ini explicitly say "Slippi device must
+            // be in Slot B." With both slots set to Slippi, the EXI command
+            // routing gets confused and Melee never escapes the memory-card
+            // screen, so leave SlotA empty.
+            + "SlotA = 255\n"
+            + "SerialPort1 = 255\n"
+            + "SIDevice0 = 6\n"
+            + "AdapterRumble0 = False\n"
+            + "SimulateKonga0 = False\n"
+            + "SIDevice1 = 6\n"
+            + "AdapterRumble1 = False\n"
+            + "SimulateKonga1 = False\n"
+            + "SIDevice2 = 0\n"
+            + "SIDevice3 = 0\n"
+            + "EmulationSpeed = 1.00000000\n"
+            + "FrameSkip = 0x00000000\n"
+            + "Overclock = 1.0\n"
+            + "OverclockEnable = False\n"
+            + "AutoDiscChange = True\n"
+            // Slippi Jukebox = the OST player implemented in Rust on top of
+            // cpal/rodio. cpal's Android backend needs extra init / Oboe
+            // wiring that isn't hooked up here; it SIGABRTs the
+            // SlippiJukebox thread on launch. Disable for now — Melee plays
+            // its own DSP-emulated music regardless.
+            + "SlippiJukeboxEnabled = False\n"
+            + "[DSP]\n"
+            + "EnableJIT = True\n"
+            + "DumpAudio = False\n"
+            + "Backend = OpenSLES\n"
+            + "Volume = 100\n"
+            + "DSPThread = True\n"
+            + "[General]\n"
+            + "ISOPaths = 0\n";
+
+    private static final String GFX_INI = ""
+            + "[Hardware]\n"
+            + "VSync = False\n"
+            + "Adapter = 0\n"
+            + "[Settings]\n"
+            + "AspectRatio = 5\n"
+            + "InternalResolution = 2\n"
+            + "Crop = False\n"
+            + "wideScreenHack = False\n"
+            + "UseXFB = False\n"
+            + "UseRealXFB = False\n"
+            + "SafeTextureCacheColorSamples = 128\n"
+            + "ShowFPS = True\n"
+            + "ShowNetPlayPing = True\n"
+            + "LogRenderTimeToFile = False\n"
+            + "OverlayStats = False\n"
+            + "OverlayProjStats = False\n"
+            + "DumpTextures = False\n"
+            + "HiresTextures = False\n"
+            + "ConvertHiresTextures = False\n"
+            + "CacheHiresTextures = False\n"
+            + "DumpEFBTarget = False\n"
+            + "FreeLook = False\n"
+            + "UseFFV1 = False\n"
+            + "EnablePixelLighting = False\n"
+            + "FastDepthCalc = True\n"
+            + "MSAA = 0\n"
+            + "SSAA = False\n"
+            + "EFBScale = 2\n"
+            + "TexFmtOverlayEnable = False\n"
+            + "TexFmtOverlayCenter = False\n"
+            + "Wireframe = False\n"
+            + "DisableFog = False\n"
+            + "BorderlessFullscreen = False\n"
+            + "SWZComploc = True\n"
+            + "SWZFreeze = True\n"
+            + "ShaderCompilationMode = 0\n"
+            + "WaitForShadersBeforeStarting = True\n"
+            + "BackendMultithreading = True\n"
+            + "[Enhancements]\n"
+            + "ForceTextureFiltering = False\n"
+            + "MaxAnisotropy = 0\n"
+            + "PostProcessingShader =\n"
+            + "[Stereoscopy]\n"
+            + "StereoMode = 0\n"
+            + "StereoDepth = 20\n"
+            + "StereoConvergencePercentage = 100\n"
+            + "StereoSwapEyes = False\n"
+            + "[Hacks]\n"
+            + "EFBAccessEnable = False\n"
+            + "BBoxEnable = False\n"
+            + "ForceProgressive = True\n"
+            + "EFBToTextureEnable = True\n"
+            + "EFBScaledCopy = False\n"
+            + "EFBEmulateFormatChanges = False\n"
+            + "SkipDuplicateXFBs = True\n"
+            + "XFBToTextureEnable = True\n"
+            + "FullAsyncShaderCompilation = False\n"
+            + "WaitForShaderCompilation = True\n"
+            + "EnableGPUTextureDecoding = True\n";
+
+    // Bind Player 1 of the GameCube pad to the Android Touchscreen device that
+    // ButtonManager publishes (ciface::Android::PopulateDevices). The Java
+    // EmulationActivity translates physical pad / Thor gamepad events into the
+    // Touchscreen device's internal codes (BUTTON_A=0, STICK_MAIN_LEFT=13, etc.)
+    // — see EmulationActivity.dispatchKeyEvent / dispatchGenericMotionEvent.
+    //
+    // The "Button N" / "Axis N" suffix references the index passed to
+    // AddInput() in Source/Core/InputCommon/ControllerInterface/Android/Android.cpp
+    // and matches the ButtonType enum in Source/Android/jni/ButtonManager.h.
+    private static final String GCPAD_INI = ""
+            + "[GCPad1]\n"
+            + "Device = Android/0/Touchscreen\n"
+            + "Buttons/A = `Button 0`\n"
+            + "Buttons/B = `Button 1`\n"
+            + "Buttons/X = `Button 3`\n"
+            + "Buttons/Y = `Button 4`\n"
+            + "Buttons/Z = `Button 5`\n"
+            + "Buttons/Start = `Button 2`\n"
+            + "Main Stick/Up = `Axis 11`\n"
+            + "Main Stick/Down = `Axis 12`\n"
+            + "Main Stick/Left = `Axis 13`\n"
+            + "Main Stick/Right = `Axis 14`\n"
+            + "C-Stick/Up = `Axis 16`\n"
+            + "C-Stick/Down = `Axis 17`\n"
+            + "C-Stick/Left = `Axis 18`\n"
+            + "C-Stick/Right = `Axis 19`\n"
+            + "Triggers/L = `Axis 20`\n"
+            + "Triggers/R = `Axis 21`\n"
+            + "Triggers/L-Analog = `Axis 20`\n"
+            + "Triggers/R-Analog = `Axis 21`\n"
+            + "D-Pad/Up = `Button 6`\n"
+            + "D-Pad/Down = `Button 7`\n"
+            + "D-Pad/Left = `Button 8`\n"
+            + "D-Pad/Right = `Button 9`\n"
+            + "[GCPad2]\nDevice = Android/1/Touchscreen\n"
+            + "[GCPad3]\nDevice = Android/2/Touchscreen\n"
+            + "[GCPad4]\nDevice = Android/3/Touchscreen\n";
+
+    private static final String WIIMOTE_INI = ""
+            + "[Wiimote1]\nSource = 0\n"
+            + "[Wiimote2]\nSource = 0\n"
+            + "[Wiimote3]\nSource = 0\n"
+            + "[Wiimote4]\nSource = 0\n"
+            + "[BalanceBoard]\nSource = 0\n";
+
+    private static final String LOGGER_INI = ""
+            + "[Options]\n"
+            + "WriteToFile = False\n"
+            + "WriteToConsole = False\n";
+}

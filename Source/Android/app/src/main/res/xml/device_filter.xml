@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Official Nintendo GameCube Controller Adapter for Wii U (WUP-028) -->
+    <usb-device vendor-id="1406" product-id="823" />
+</resources>
