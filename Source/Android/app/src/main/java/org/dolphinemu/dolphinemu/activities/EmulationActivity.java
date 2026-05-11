@@ -5,6 +5,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PerformanceHintManager;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -32,6 +33,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     private Thread emuThread;
     private volatile boolean emuStarted;
     private SurfaceView surfaceView;
+    private PerformanceHintManager.Session hintSession;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -63,6 +65,10 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (hintSession != null) {
+            try { hintSession.close(); } catch (Throwable ignored) {}
+            hintSession = null;
+        }
         if (emuStarted) {
             try {
                 NativeLibrary.StopEmulation();
@@ -94,12 +100,60 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
 
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
+        // On Android 11+ tell the system compositor that this surface is a
+        // 60Hz game. With FRAME_RATE_COMPATIBILITY_FIXED_SOURCE the
+        // SurfaceFlinger can pick a display mode that matches without
+        // resampling, which cuts a frame of latency on devices that idle at
+        // 120Hz and would otherwise jitter our 60fps output. The
+        // CHANGE_FRAME_RATE_ALWAYS strategy avoids the 2-second seamless
+        // transition delay so Melee starts at 60Hz right away.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                holder.getSurface().setFrameRate(60f,
+                        android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
+            } catch (IllegalStateException ignored) {}
+        }
         NativeLibrary.SurfaceChanged(holder.getSurface());
         if (!emuStarted) {
             emuStarted = true;
             emuThread = new Thread(NativeLibrary::Run, "DolphinEmuMain");
             emuThread.start();
+            registerPerfHintWhenReady();
         }
+    }
+
+    /**
+     * Register an Android PerformanceHintManager session (API 31+) keyed on
+     * the emulation thread's Linux TID, with a 16.6 ms target work duration.
+     * This tells the kernel scheduler "this thread has a hard 60fps deadline"
+     * — without it, the SoC's energy-aware scheduler will sometimes downclock
+     * the big core mid-frame, which surfaces as exactly the "feels like an
+     * extra frame or two of latency" the user reported.
+     *
+     * The emulation thread doesn't call gettid() until it starts running, so
+     * we poll the native getter on the main thread for up to a second.
+     */
+    private void registerPerfHintWhenReady() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return;
+        final PerformanceHintManager mgr =
+                (PerformanceHintManager) getSystemService(PERFORMANCE_HINT_SERVICE);
+        if (mgr == null) return;
+        ui.post(new Runnable() {
+            int attempts = 0;
+            @Override public void run() {
+                int tid = NativeLibrary.GetEmuThreadTid();
+                if (tid <= 0) {
+                    if (++attempts < 100) ui.postDelayed(this, 10);
+                    return;
+                }
+                try {
+                    hintSession = mgr.createHintSession(new int[]{tid}, 16_666_666L);
+                    Log.i(TAG, "PerformanceHintSession created for tid=" + tid);
+                } catch (Throwable t) {
+                    Log.w(TAG, "PerformanceHintSession failed: " + t);
+                }
+            }
+        });
     }
 
     @Override

@@ -10,8 +10,13 @@
 #include <cstdlib>
 #include <jni.h>
 #include <memory>
+#include <atomic>
 #include <mutex>
+#include <sched.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
 #include <thread>
+#include <unistd.h>
 
 #include "ButtonManager.h"
 
@@ -46,6 +51,7 @@
 ANativeWindow* surf;
 std::string g_filename;
 std::string g_set_userpath = "";
+static std::atomic<int> g_emu_thread_tid{0};
 
 JavaVM* g_java_vm;
 jclass g_jni_class;
@@ -753,9 +759,70 @@ JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SurfaceDestr
     surf = nullptr;
   }
 }
+// Try to keep this thread on the SoC's big core(s) and out of the CFS
+// fair-share rotation. Slippi's emu thread is single-hot and feeds the
+// renderer + EXI poll every frame; any scheduler hiccup is felt as
+// input lag. On 8-core ARM phones the kernel typically numbers cores
+// efficiency-first (0..N small, last few big), so binding to the top
+// half of the available mask is a decent heuristic when we can't query
+// the cluster topology.
+static void PinEmuThreadToPerformanceCores()
+{
+  // setpriority(PRIO_PROCESS, 0, niceval) on Bionic uses Android's
+  // thread-priority convention: -8 == THREAD_PRIORITY_URGENT_DISPLAY.
+  // Lower is higher priority. We can't ask for real-time without root,
+  // but URGENT_DISPLAY is what SurfaceFlinger uses and is the highest
+  // priority a normal app can request.
+  if (setpriority(PRIO_PROCESS, 0, -8) != 0)
+  {
+    __android_log_print(ANDROID_LOG_WARN, DOLPHIN_TAG,
+        "setpriority(-8) failed: %d", errno);
+  }
+
+  cpu_set_t mask;
+  CPU_ZERO(&mask);
+  if (sched_getaffinity(0, sizeof(mask), &mask) != 0)
+    return;
+
+  int total = CPU_COUNT(&mask);
+  if (total <= 1)
+    return;
+
+  // Keep only the upper half of the allowed cores. On the Ayn Thor /
+  // SD8 Gen 2 this lands the emu thread on the Cortex-X3 + A715 cluster
+  // rather than the A510 efficiency cores.
+  cpu_set_t pinned;
+  CPU_ZERO(&pinned);
+  int kept = 0;
+  int want = total / 2;
+  for (int cpu = CPU_SETSIZE - 1; cpu >= 0 && kept < want; --cpu)
+  {
+    if (CPU_ISSET(cpu, &mask))
+    {
+      CPU_SET(cpu, &pinned);
+      ++kept;
+    }
+  }
+  if (kept > 0)
+  {
+    if (sched_setaffinity(0, sizeof(pinned), &pinned) != 0)
+    {
+      __android_log_print(ANDROID_LOG_WARN, DOLPHIN_TAG,
+          "sched_setaffinity failed: %d", errno);
+    }
+  }
+}
+
+JNIEXPORT jint JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetEmuThreadTid(JNIEnv*, jobject)
+{
+  return g_emu_thread_tid.load();
+}
+
 JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_Run(JNIEnv* env, jobject obj)
 {
   __android_log_print(ANDROID_LOG_INFO, DOLPHIN_TAG, "Running : %s", g_filename.c_str());
+  g_emu_thread_tid.store((int)syscall(SYS_gettid));
+  PinEmuThreadToPerformanceCores();
 
   // Install our callbacks
   OSD::AddCallback(OSD::CallbackType::Initialization, ButtonManager::Init);

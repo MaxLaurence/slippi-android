@@ -5,6 +5,10 @@
 #include <algorithm>
 #include <jni.h>
 #include <mutex>
+#ifdef ANDROID
+#include <sched.h>
+#include <sys/resource.h>
+#endif
 
 #include "Common/Event.h"
 #include "Common/Flag.h"
@@ -127,6 +131,27 @@ static void Read()
 {
   Common::SetCurrentThreadName("GC Adapter Read Thread");
   NOTICE_LOG(SERIALINTERFACE, "GC Adapter read thread started");
+
+#ifdef ANDROID
+  // Match the emu-thread treatment: bump scheduling priority and pin to the
+  // SoC's big cores. Without this the Android scheduler can park this
+  // thread on a Cortex-A510 efficiency core, where the JNI hop + USB
+  // request_wait loop takes long enough to fall behind the WUP-028's 1 ms
+  // poll cadence — which surfaces as input frames appearing to drop.
+  setpriority(PRIO_PROCESS, 0, -8);
+  cpu_set_t mask;
+  CPU_ZERO(&mask);
+  if (sched_getaffinity(0, sizeof(mask), &mask) == 0)
+  {
+    int total = CPU_COUNT(&mask);
+    cpu_set_t pinned;
+    CPU_ZERO(&pinned);
+    int kept = 0, want = total / 2;
+    for (int cpu = CPU_SETSIZE - 1; cpu >= 0 && kept < want; --cpu)
+      if (CPU_ISSET(cpu, &mask)) { CPU_SET(cpu, &pinned); ++kept; }
+    if (kept > 0) sched_setaffinity(0, sizeof(pinned), &pinned);
+  }
+#endif
 
   bool first_read = true;
   JNIEnv* env;

@@ -80,6 +80,8 @@ public final class NativeLibrary {
     public static native void SetProfiling(boolean enable);
     public static native void WriteProfileResults();
     public static native void eglBindAPI(int api);
+    /** Linux TID of the running emulation thread, or 0 if not started. */
+    public static native int GetEmuThreadTid();
     private static native void CacheClassesAndMethods();
 
     static {
