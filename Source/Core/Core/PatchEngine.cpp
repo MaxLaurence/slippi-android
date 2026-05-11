@@ -32,7 +32,9 @@
 #include "Core/PatchEngine.h"
 #include "Core/PowerPC/PowerPC.h"
 
-using namespace Common;
+#ifdef ANDROID
+#include <android/log.h>
+#endif
 
 namespace PatchEngine
 {
@@ -168,6 +170,19 @@ void LoadPatches()
 	Gecko::MergeCodes(globalIni, localIni, current_set);
 	Gecko::MarkEnabledCodes(globalIni, localIni, current_set);
 	Gecko::SetActiveCodes(current_set);
+
+#ifdef ANDROID
+	{
+		int enabled = 0;
+		for (const auto& g : current_set)
+			if (g.enabled) ++enabled;
+		__android_log_print(ANDROID_LOG_INFO, "SlippiPatch",
+		    "game id=%s rev=%d gecko codes total=%zu enabled=%d",
+		    SConfig::GetInstance().GetGameID().c_str(),
+		    SConfig::GetInstance().m_revision,
+		    current_set.size(), enabled);
+	}
+#endif
 
 	// Load action replay codes
 	LoadPatchSection("OnFrame", onFrame, globalIni, localIni);

@@ -138,7 +138,7 @@ void SetUserDirectory(const std::string &custom_path)
 	if (*user_path.rbegin() != DIR_SEP_CHR)
 		user_path += DIR_SEP;
 
-#elif defined(__APPLE__) || defined(ANDROID)
+#elif defined(__APPLE__)
 
 	if (File::Exists(ROOT_DIR DIR_SEP USERDATA_DIR))
 	{
@@ -155,6 +155,14 @@ void SetUserDirectory(const std::string &custom_path)
 		user_path = File::GetApplicationSupportDirectory() + "/netplay/User" DIR_SEP;
 #endif
 	}
+
+#elif defined(ANDROID)
+
+	// On Android, the Java side always calls SetUserDirectory() with the
+	// app's private files directory before Init() runs, so this branch is
+	// only here to satisfy the compiler. If we ever land here, fall back to
+	// /sdcard/dolphin-emu/, which matches the legacy Dolphin Android default.
+	user_path = "/sdcard/dolphin-emu/";
 
 #else
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Common/CommonTypes.h"
+
 #include <SlippiLib/SlippiGame.h>
 #include <queue>
 #include <string>

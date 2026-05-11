@@ -589,6 +589,19 @@ endif()
 message("Using static Corrosion from Externals for Rust linking support")
 add_subdirectory(Externals/corrosion)
 
+# Import the Slippi Rust extensions crate here so both the desktop wxWidgets
+# frontend and the Android JNI .so can link against it. The crate's build is
+# corrosion-driven; targets that need it just `target_link_libraries(..
+# slippi_rust_extensions)`.
+set(_slippi_rust_feature_args)
+if(DIS_PLAYBACK)
+	set(_slippi_rust_feature_args FEATURES "playback")
+endif()
+corrosion_import_crate(
+	MANIFEST_PATH ${CMAKE_SOURCE_DIR}/Externals/SlippiRustExtensions/Cargo.toml
+	${_slippi_rust_feature_args}
+)
+
 if(NOT ANDROID)
 	set(PORTAUDIO_FOUND TRUE)
 	add_definitions(-DHAVE_PORTAUDIO=1)

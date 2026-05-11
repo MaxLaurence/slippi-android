@@ -198,10 +198,15 @@ set(SRCS	ActionReplay.cpp
 			Slippi/SlippiReplayComm.cpp
 			Slippi/SlippiSavestate.cpp
 			Slippi/SlippiSpectate.cpp
-			Slippi/SlippiTimer.cpp
 			Slippi/SlippiUser.cpp
 			Slippi/SlippiDirectCodes.cpp
 			)
+
+# SlippiTimer hooks into wxWidgets playback UI — pull it in only when we
+# actually build the wxWidgets frontend.
+if(NOT ANDROID AND NOT DISABLE_WX)
+	set(SRCS ${SRCS} Slippi/SlippiTimer.cpp)
+endif()
 
 if(_M_X86)
 	set(SRCS ${SRCS}

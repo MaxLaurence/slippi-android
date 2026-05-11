@@ -1,4 +1,5 @@
 #include "SlippiSpectate.h"
+#include "Common/Common.h"
 #include "Common/CommonTypes.h"
 #include "Common/Logging/Log.h"
 #include "base64.hpp"

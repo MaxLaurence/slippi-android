@@ -158,7 +158,13 @@ static void Read()
       jbyte* java_data = env->GetByteArrayElements(*java_controller_payload, nullptr);
       {
         std::lock_guard<std::mutex> lk(s_read_mutex);
-        memcpy(s_controller_payload, java_data, 0x37);
+        // Upstream wrote `memcpy(s_controller_payload, java_data, 0x37)` here,
+        // but s_controller_payload is u8[37] (and the GC adapter only sends
+        // 37 bytes per poll). 0x37 == 55 — clang/Bionic _FORTIFY_SOURCE
+        // catches that as a write past the end and SIGABRTs on launch.
+        // The 0x37 was almost certainly someone typing hex when they meant
+        // decimal 37.
+        memcpy(s_controller_payload, java_data, sizeof(s_controller_payload));
         s_controller_payload_size.store(read_size);
       }
       env->ReleaseByteArrayElements(*java_controller_payload, java_data, 0);
@@ -262,8 +268,23 @@ void StopScanThread()
     s_adapter_detect_thread.join();
 }
 
-GCPadStatus Input(int chan)
+// Slippi added a high-resolution timestamp out-param so the netplay layer can
+// correlate pad reads with sample times. The Android USB path doesn't have
+// real time-of-poll info available here, so just stamp `now()` if requested.
+bool IsReadingAtReducedRate()
 {
+  return false;
+}
+
+double ReadRate()
+{
+  return 0.0;
+}
+
+GCPadStatus Input(int chan, std::chrono::high_resolution_clock::time_point* tp)
+{
+  if (tp)
+    *tp = std::chrono::high_resolution_clock::now();
   if (!UseAdapter() || !s_detected || !s_fd)
     return {};
 

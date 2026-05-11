@@ -38,8 +38,10 @@
 #include "Core/PowerPC/PowerPC.h"
 
 // Not clean but idk a better way atm
+#ifndef ANDROID
 #include "DolphinWX/Frame.h"
 #include "DolphinWX/Main.h"
+#endif
 
 // The Rust library that houses a "shadow" EXI Device that we can call into.
 #include "SlippiRustExtensions.h"
@@ -2876,7 +2878,9 @@ void CEXISlippi::handleLogInRequest()
 	bool logInRes = user->AttemptLogin();
 	if (!logInRes)
 	{
+#ifndef ANDROID
 		main_frame->LowerRenderWindow();
+#endif
 		user->OpenLogInPage();
 		user->ListenForLogIn();
 	}

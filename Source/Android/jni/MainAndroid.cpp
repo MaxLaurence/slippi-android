@@ -484,8 +484,6 @@ JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_StopEmulatio
                                                                                   jobject obj)
 {
   std::lock_guard<std::mutex> guard(s_host_identity_lock);
-  Core::SaveScreenShot("thumb");
-  Renderer::s_screenshotCompleted.WaitFor(std::chrono::seconds(2));
   Core::Stop();
   updateMainFrameEvent.Set();  // Kick the waiting event
 }
@@ -755,13 +753,6 @@ JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SurfaceDestr
     surf = nullptr;
   }
 }
-JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_RefreshWiimotes(JNIEnv* env,
-                                                                                    jobject obj)
-{
-  std::lock_guard<std::mutex> guard(s_host_identity_lock);
-  WiimoteReal::Refresh();
-}
-
 JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_Run(JNIEnv* env, jobject obj)
 {
   __android_log_print(ANDROID_LOG_INFO, DOLPHIN_TAG, "Running : %s", g_filename.c_str());

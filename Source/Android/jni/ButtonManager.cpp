@@ -4,10 +4,14 @@
 
 #include <unordered_map>
 
+#include <android/log.h>
+
 #include "Common/FileUtil.h"
 #include "Common/IniFile.h"
 #include "Common/Thread.h"
 #include "jni/ButtonManager.h"
+
+#define BM_TAG "SlippiButtonMgr"
 
 namespace ButtonManager
 {
@@ -108,6 +112,7 @@ static void AddBind(const std::string& dev, sBind* bind)
 
 void Init()
 {
+  __android_log_print(ANDROID_LOG_INFO, BM_TAG, "ButtonManager::Init starting");
   // Initialize our touchScreenKey buttons
   for (int a = 0; a < 8; ++a)
   {
@@ -371,6 +376,18 @@ bool GetButtonPressed(int padID, ButtonType button)
   for (const auto& ctrl : m_controllers)
     pressed |= ctrl.second->ButtonValue(padID, button);
 
+  // Log the first time we see GCPad actually query a button as pressed —
+  // tells us whether ControllerInterface is polling Touchscreen at all.
+  if (pressed)
+  {
+    static bool s_logged_first_press = false;
+    if (!s_logged_first_press)
+    {
+      s_logged_first_press = true;
+      __android_log_print(ANDROID_LOG_INFO, BM_TAG,
+          "GetButtonPressed: first pressed read padID=%d button=%d", padID, (int)button);
+    }
+  }
   return pressed;
 }
 float GetAxisValue(int padID, ButtonType axis)
@@ -390,6 +407,9 @@ float GetAxisValue(int padID, ButtonType axis)
 bool GamepadEvent(const std::string& dev, int button, int action)
 {
   auto it = m_controllers.find(dev);
+  __android_log_print(ANDROID_LOG_INFO, BM_TAG,
+      "GamepadEvent dev=%s button=%d action=%d found=%d num_devices=%zu",
+      dev.c_str(), button, action, it != m_controllers.end() ? 1 : 0, m_controllers.size());
   if (it != m_controllers.end())
     return it->second->PressEvent(button, action);
   return false;
