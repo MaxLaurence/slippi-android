@@ -24,8 +24,15 @@ work. For the official desktop launcher, go to https://slippi.gg.
 4. First-launch flow:
    - **Pick Melee 1.02 NTSC ISO** (the launcher will copy it into
      app-private storage so the C++ side gets a real `fopen`-able path).
-   - **Import `user.json`** copied from a desktop Slippi launcher install.
-     On macOS it lives at `~/Library/Application Support/com.project-slippi.dolphin/Slippi/user.json`.
+   - **Import `user.json`** copied from a desktop Slippi install.
+     Where to find it on the desktop:
+     - **Windows (Slippi Launcher):** `%APPDATA%\Slippi Launcher\netplay\User\Slippi\user.json`
+       — paste that into Explorer's address bar; or, if you installed
+       portably, `<your-Slippi-Dolphin-folder>\User\Slippi\user.json`.
+     - **macOS (Slippi Launcher):** `~/Library/Application Support/Slippi Launcher/netplay/User/Slippi/user.json`
+     - **macOS (standalone Slippi Dolphin):** `~/Library/Application Support/com.project-slippi.dolphin/Slippi/user.json`
+     - **Linux (Slippi Launcher):** `~/.config/Slippi Launcher/netplay/User/Slippi/user.json`
+
      The Android equivalent lands at `<app-files>/dolphin/Slippi/user.json`.
    - **Pick a graphics backend** — Vulkan (default) or OpenGL. OpenGL
      tends to feel marginally tighter on Adreno; Vulkan has lower CPU
