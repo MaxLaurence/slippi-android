@@ -1913,14 +1913,54 @@ out float4 ocol0;
 #define SampleInputLocation(index, location) (texture(pp_inputs[index], float3(location, v_layer)))
 #define SampleInputLayer(index, layer) (texture(pp_inputs[index], float3(v_source_uv, float(layer))))
 #define SampleInputLayerLocation(index, layer, location) (texture(pp_inputs[index], float3(location, float(layer))))
-#define GetFragmentCoord() (gl_FragCoord.xy)
-#define GetTargetCoordinates() (v_target_uv)
-#define GetCoordinates() (v_source_uv)
-#define GetLayer() (v_layer)
+// The corresponding helpers in the HLSL variant of this generator
+// (around line 2088) are declared as proper functions, but the GL
+// variant historically used parameterless macros that expand to
+// parenthesized expressions. Adreno's GLSL ES compiler (Adreno 740,
+// driver V@0676.53) chokes when the resulting `f((v_source_uv))`
+// double-parenthesized argument shows up as the only argument of a
+// function call, producing a "syntax error" with INTERNAL ERROR: no
+// main(). Promote the four parameterless ones to real functions so
+// they round-trip through the parser cleanly.
+float2 GetFragmentCoord() { return gl_FragCoord.xy; }
+float2 GetTargetCoordinates() { return v_target_uv; }
+float2 GetCoordinates() { return v_source_uv; }
+float GetLayer() { return v_layer; }
 // Input sampling with offset, macro because offset must be a constant expression.
 #define SampleInputOffset(index, offset) (textureOffset(pp_inputs[index], float3(v_source_uv, v_layer), offset))
 #define SampleInputLayerOffset(index, layer, offset) (textureOffset(pp_inputs[index], float3(v_source_uv, float(layer)), offset))
-float4 GetBicubicSampleLocation(int idx, float2 location, out float4 scalingFactor);
+
+// Forward declaration of the resolution accessor used by the bicubic
+// implementation below. Its real definition lives further down with the
+// rest of the introspection helpers (after the uniforms are in scope),
+// but Adreno's GLSL ES compiler chokes when GetBicubicSampleLocation
+// itself is only forward-declared with an `out` parameter — providing
+// the body up-front sidesteps that parser quirk.
+float2 GetInputResolution(int index);
+
+float4 GetBicubicSampleLocation(int idx, float2 location, out float4 scalingFactor)
+{
+	float2 textureDimensions    = GetInputResolution(idx);
+	float2 invTextureDimensions = 1.f / textureDimensions;
+
+	location *= textureDimensions;
+
+	float2 texelCenter   = floor( location - 0.5f ) + 0.5f;
+	float2 fracOffset    = location - texelCenter;
+	float2 fracOffset_x2 = fracOffset * fracOffset;
+	float2 fracOffset_x3 = fracOffset * fracOffset_x2;
+	float2 weight0 = fracOffset_x2 - 0.5f * ( fracOffset_x3 + fracOffset );
+	float2 weight1 = 1.5f * fracOffset_x3 - 2.5f * fracOffset_x2 + 1.f;
+	float2 weight3 = 0.5f * ( fracOffset_x3 - fracOffset_x2 );
+	float2 weight2 = 1.f - weight0 - weight1 - weight3;
+
+	scalingFactor = float4(weight0 + weight1,  weight2 + weight3);
+	scalingFactor = scalingFactor.xzxz * scalingFactor.yyww;
+	float2 f0 = weight1 / ( weight0 + weight1 );
+	float2 f1 = weight3 / ( weight2 + weight3 );
+
+	return float4(texelCenter - 1.f + f0,texelCenter + 1.f + f1) * invTextureDimensions.xyxy;
+}
 
 float4 SampleInputBicubicLocation0(float2 location)
 {
@@ -2164,7 +2204,11 @@ void rnd_advance()
 uint RandomSeeduint(float2 seed)
 {
 	float noise = RandomSeedfloat(seed);
-	return uint(noise * 0xFFFFFF);
+	// GLSL ES is strict about implicit int→float promotion in arithmetic;
+	// `noise * 0xFFFFFF` errors with "no operation '*' exists that takes
+	// a left-hand operand of type 'float' and a right operand of type
+	// 'const int'" on Adreno's GL ES 3.2 compiler. Use a float literal.
+	return uint(noise * 16777215.0);
 }
 
 void Randomize()
@@ -2175,7 +2219,7 @@ void Randomize()
 uint Rndint()
 {
 	rnd_advance();
-	return uint(global_rnd_state * 0xFFFFFF);
+	return uint(global_rnd_state * 16777215.0);
 }
 
 float Rndfloat()
@@ -2220,29 +2264,8 @@ float4 Rndfloat4()
 	return val;
 }
 
-float4 GetBicubicSampleLocation(int idx, float2 location, out float4 scalingFactor)
-{
-	float2 textureDimensions    = GetInputResolution(idx);
-	float2 invTextureDimensions = 1.f / textureDimensions;
-
-					location *= textureDimensions;
-
-						float2 texelCenter   = floor( location - 0.5f ) + 0.5f;
-	float2 fracOffset    = location - texelCenter;
-	float2 fracOffset_x2 = fracOffset * fracOffset;
-	float2 fracOffset_x3 = fracOffset * fracOffset_x2;
-	float2 weight0 = fracOffset_x2 - 0.5f * ( fracOffset_x3 + fracOffset );
-	float2 weight1 = 1.5f * fracOffset_x3 - 2.5f * fracOffset_x2 + 1.f;
-	float2 weight3 = 0.5f * ( fracOffset_x3 - fracOffset_x2 );
-	float2 weight2 = 1.f - weight0 - weight1 - weight3;
-
-					scalingFactor = float4(weight0 + weight1,  weight2 + weight3);	
-	scalingFactor = scalingFactor.xzxz * scalingFactor.yyww;
-	float2 f0 = weight1 / ( weight0 + weight1 );
-	float2 f1 = weight3 / ( weight2 + weight3 );
-
-		return float4(texelCenter - 1.f + f0,texelCenter + 1.f + f1) * invTextureDimensions.xyxy;
-}
+// (GetBicubicSampleLocation moved up — defined just before the
+//  SampleInputBicubicLocation* functions that consume it.)
 
 #define SetOutput(color) ocol0 = color
 // Option check macro
