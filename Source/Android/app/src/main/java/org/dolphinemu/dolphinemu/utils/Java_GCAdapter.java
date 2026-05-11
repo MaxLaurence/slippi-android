@@ -12,7 +12,11 @@ import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbEndpoint;
 import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbManager;
+import android.hardware.usb.UsbRequest;
 import android.util.Log;
+
+import java.nio.ByteBuffer;
+import java.util.ArrayDeque;
 
 import org.dolphinemu.dolphinemu.DolphinApplication;
 
@@ -61,6 +65,20 @@ public final class Java_GCAdapter {
     @SuppressWarnings("unused")
     public static final byte[] controller_payload = new byte[37];
     private static boolean sReceiverRegistered;
+
+    // Async receive pipeline: keep a small number of UsbRequests queued on
+    // the IN endpoint so the kernel can dispatch the next URB the instant
+    // the WUP-028 has new pad data instead of going idle through every JNI
+    // round-trip. We deliberately use IN_FLIGHT=2 (not larger): the URBs
+    // satisfy in FIFO order at 1 ms intervals, and {@code requestWait()}
+    // returns the *oldest* completion — anything beyond a tiny pipeline
+    // depth just lets stale snapshots accumulate, surfacing as "inputs feel
+    // sloppy / dropped" because by the time the consumer drains them the
+    // player has already moved on. 2 covers the small JNI re-queue gap
+    // without backing data up by more than ~1 ms.
+    private static final int IN_FLIGHT = 2;
+    private static final ArrayDeque<UsbRequest> sInFlight = new ArrayDeque<>();
+    private static ByteBuffer[] sBuffers;
 
     private static final BroadcastReceiver sPermissionReceiver = new BroadcastReceiver() {
         @Override
@@ -166,6 +184,12 @@ public final class Java_GCAdapter {
         sOut = null;
         for (int i = 0; i < sInterface.getEndpointCount(); i++) {
             UsbEndpoint ep = sInterface.getEndpoint(i);
+            Log.i(TAG, "OpenAdapter: endpoint " + i
+                    + " addr=0x" + Integer.toHexString(ep.getAddress())
+                    + " type=" + ep.getType()
+                    + " dir=" + (ep.getDirection() == UsbConstants.USB_DIR_IN ? "IN" : "OUT")
+                    + " interval=" + ep.getInterval()
+                    + "ms maxPacket=" + ep.getMaxPacketSize());
             if (ep.getDirection() == UsbConstants.USB_DIR_IN) sIn = ep;
             else sOut = ep;
         }
@@ -176,13 +200,63 @@ public final class Java_GCAdapter {
         }
         // Init: tell the adapter to start sending pad reports.
         sConnection.bulkTransfer(sOut, new byte[]{0x13}, 1, 16);
-        Log.i(TAG, "OpenAdapter: ready");
+
+        // Pre-queue IN_FLIGHT UsbRequests against the IN endpoint. With a
+        // single in-flight transfer (the old synchronous bulkTransfer
+        // approach) every JNI hop is a serialization point that idles the
+        // USB host between packets, capping us well below the adapter's
+        // native 1000Hz. Queuing several keeps the kernel's URB scheduler
+        // fed.
+        sInFlight.clear();
+        sBuffers = new ByteBuffer[IN_FLIGHT];
+        for (int i = 0; i < IN_FLIGHT; i++) {
+            UsbRequest req = new UsbRequest();
+            if (!req.initialize(sConnection, sIn)) {
+                Log.w(TAG, "OpenAdapter: UsbRequest.initialize failed");
+                close();
+                return false;
+            }
+            req.setClientData(i);
+            sBuffers[i] = ByteBuffer.allocate(controller_payload.length);
+            if (!req.queue(sBuffers[i], controller_payload.length)) {
+                Log.w(TAG, "OpenAdapter: initial UsbRequest.queue failed");
+                close();
+                return false;
+            }
+            sInFlight.add(req);
+        }
+
+        Log.i(TAG, "OpenAdapter: ready (async, in_flight=" + IN_FLIGHT + ")");
         return true;
     }
 
-    public static synchronized int Input() {
-        if (sConnection == null || sIn == null) return 0;
-        return sConnection.bulkTransfer(sIn, controller_payload, controller_payload.length, 16);
+    public static int Input() {
+        UsbDeviceConnection conn;
+        synchronized (Java_GCAdapter.class) {
+            conn = sConnection;
+            if (conn == null || sIn == null || sInFlight.isEmpty()) return 0;
+        }
+        // Blocks until any of the queued IN requests completes — that's
+        // exactly one USB poll cycle (matches the endpoint's bInterval).
+        // requestWait() is called outside the class lock so concurrent
+        // Output() / QueryAdapter() calls don't pile up behind it.
+        UsbRequest done = conn.requestWait();
+        if (done == null) return 0;
+        synchronized (Java_GCAdapter.class) {
+            Object clientData = done.getClientData();
+            if (!(clientData instanceof Integer) || sBuffers == null) return 0;
+            int slot = (Integer) clientData;
+            if (slot < 0 || slot >= sBuffers.length) return 0;
+            ByteBuffer buf = sBuffers[slot];
+            int len = Math.min(buf.position(), controller_payload.length);
+            buf.rewind();
+            buf.get(controller_payload, 0, len);
+            // Re-queue immediately so the kernel always has IN_FLIGHT
+            // outstanding URBs.
+            buf.clear();
+            done.queue(buf, controller_payload.length);
+            return len;
+        }
     }
 
     public static synchronized int Output(byte[] rumble) {
@@ -199,6 +273,12 @@ public final class Java_GCAdapter {
     }
 
     private static synchronized void close() {
+        for (UsbRequest r : sInFlight) {
+            try { r.cancel(); } catch (Throwable ignored) {}
+            try { r.close(); } catch (Throwable ignored) {}
+        }
+        sInFlight.clear();
+        sBuffers = null;
         if (sConnection != null) {
             try {
                 if (sInterface != null) sConnection.releaseInterface(sInterface);
