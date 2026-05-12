@@ -100,6 +100,30 @@ public final class StickCalibration {
                 DEFAULT_DEADZONE_C, DEFAULT_SENSITIVITY_C, DEFAULT_OUTPUT_CAP);
     }
 
+    /**
+     * Default scale for raw providers whose values are still firmware-saturated
+     * (notably Ayn/Odin's currentRawEvent on the Thor, which clips to roughly
+     * ±25% of its nominal range even though the API surface is ±1.0). Users can
+     * refine this further with the wizard.
+     */
+    private static final float DEFAULT_SATURATED_PROVIDER_SCALE = 4.0f;
+
+    public static StickCalibration compensatingMain() {
+        return new StickCalibration(0f, 0f,
+                DEFAULT_SATURATED_PROVIDER_SCALE, DEFAULT_SATURATED_PROVIDER_SCALE,
+                DEFAULT_SATURATED_PROVIDER_SCALE, DEFAULT_SATURATED_PROVIDER_SCALE,
+                DEFAULT_DEADZONE_MAIN, DEFAULT_SENSITIVITY_MAIN, DEFAULT_OUTPUT_CAP,
+                true);
+    }
+
+    public static StickCalibration compensatingC() {
+        return new StickCalibration(0f, 0f,
+                DEFAULT_SATURATED_PROVIDER_SCALE, DEFAULT_SATURATED_PROVIDER_SCALE,
+                DEFAULT_SATURATED_PROVIDER_SCALE, DEFAULT_SATURATED_PROVIDER_SCALE,
+                DEFAULT_DEADZONE_C, DEFAULT_SENSITIVITY_C, DEFAULT_OUTPUT_CAP,
+                true);
+    }
+
     public final float centerX;          // -1..+1
     public final float centerY;          // -1..+1
     public final float scaleXPos;        // multiplier: captured rightward max -> 1.0

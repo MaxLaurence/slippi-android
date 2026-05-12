@@ -172,6 +172,11 @@ public final class OdinMappingInput implements RawStickInputProvider {
         }
     }
 
+    @Override
+    public boolean isPotentiallySaturated() {
+        return true;
+    }
+
     public double[] pollCurrentRawEvent() {
         IBinder currentService;
         synchronized (lock) {

@@ -70,7 +70,6 @@ public final class ButtonMap {
         }
     }
 
-    /** The Slippi defaults — same as the original hardcoded mapKeyToGcBit table. */
     public static ButtonMap defaults() {
         ButtonMap m = new ButtonMap();
         m.bindings.put(KeyEvent.KEYCODE_BUTTON_A,      GC_BTN_A);
@@ -78,11 +77,9 @@ public final class ButtonMap {
         m.bindings.put(KeyEvent.KEYCODE_BUTTON_X,      GC_BTN_X);
         m.bindings.put(KeyEvent.KEYCODE_BUTTON_Y,      GC_BTN_Y);
         m.bindings.put(KeyEvent.KEYCODE_BUTTON_START,  GC_BTN_START);
-        m.bindings.put(KeyEvent.KEYCODE_BUTTON_THUMBL, GC_TRIG_Z);
-        m.bindings.put(KeyEvent.KEYCODE_BUTTON_THUMBR, GC_TRIG_Z);
         m.bindings.put(KeyEvent.KEYCODE_BUTTON_L1,     GC_TRIG_L);
         m.bindings.put(KeyEvent.KEYCODE_BUTTON_L2,     GC_TRIG_L);
-        m.bindings.put(KeyEvent.KEYCODE_BUTTON_R1,     GC_TRIG_R);
+        m.bindings.put(KeyEvent.KEYCODE_BUTTON_R1,     GC_TRIG_Z);
         m.bindings.put(KeyEvent.KEYCODE_BUTTON_R2,     GC_TRIG_R);
         m.bindings.put(KeyEvent.KEYCODE_DPAD_UP,       GC_BTN_UP);
         m.bindings.put(KeyEvent.KEYCODE_DPAD_DOWN,     GC_BTN_DOWN);

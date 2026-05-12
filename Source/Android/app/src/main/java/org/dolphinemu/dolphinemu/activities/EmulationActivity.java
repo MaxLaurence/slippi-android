@@ -159,6 +159,19 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         if (rawStickInput != null) {
             rawStickInput.start();
         }
+        // When the raw provider is known to still saturate at the firmware
+        // level (e.g. Ayn/Odin's currentRawEvent on the Thor clips at ~25%
+        // of nominal range), uncalibrated sticks can't reach Melee's tilt
+        // thresholds. Swap in compensating defaults so first-launch users
+        // get usable sticks; the wizard still produces a precise capture.
+        if (rawStickInput != null && rawStickInput.isPotentiallySaturated()) {
+            if (!profile.hasCalibration(ControllerProfile.DEVICE_BUILTIN, ControllerProfile.Stick.MAIN)) {
+                mainStickCal = StickCalibration.compensatingMain();
+            }
+            if (!profile.hasCalibration(ControllerProfile.DEVICE_BUILTIN, ControllerProfile.Stick.C)) {
+                cStickCal = StickCalibration.compensatingC();
+            }
+        }
         if (!hasRawStickSource()) {
             mainStickCal = mainStickCal.withOuterScaleEnabled(false);
             cStickCal = cStickCal.withOuterScaleEnabled(false);
@@ -519,9 +532,6 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     }
 
     private int mapKeyToGcBit(int keyCode) {
-        // Per-device user remap, loaded once at onCreate. The map's
-        // factory defaults match the previous hardcoded table exactly,
-        // so an un-customized install behaves identically.
         return buttonMap.gcBitForKey(keyCode);
     }
 
