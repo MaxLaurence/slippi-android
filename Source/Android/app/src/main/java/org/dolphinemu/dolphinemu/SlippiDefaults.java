@@ -83,7 +83,7 @@ public final class SlippiDefaults {
             + "Fullscreen = True\n"
             + "RenderToMain = False\n"
             + "[Core]\n"
-            + "GFXBackend = OGL\n"
+            + "GFXBackend = Vulkan\n"
             + "HLE_BS2 = True\n"
             // Match desktop Slippi's TimingVariance — 40 (the upstream
             // Dolphin default) lets the emulator drift up to 40ms before

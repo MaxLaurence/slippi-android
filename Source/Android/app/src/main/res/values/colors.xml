@@ -16,4 +16,16 @@
 
     <!-- Legacy aliases (in case any leftover references). -->
     <color name="accent">@color/slippi_green</color>
+
+    <!-- GameCube button glyph colors. Used as the small color chips on
+         the remap rows so each row reads as the actual physical button
+         it represents. Match the GameCube controller's silkscreen. -->
+    <color name="gc_a_green">#FF02ABA8</color>
+    <color name="gc_b_red">#FFD0473D</color>
+    <color name="gc_x_grey">#FFD2D2D2</color>
+    <color name="gc_y_grey">#FFD2D2D2</color>
+    <color name="gc_z_purple">#FF8351E5</color>
+    <color name="gc_trigger">#FF8FA0A8</color>
+    <color name="gc_start_red">#FFD0473D</color>
+    <color name="gc_dpad">#FF6B7A75</color>
 </resources>

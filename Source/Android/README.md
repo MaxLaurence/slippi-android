@@ -37,6 +37,10 @@ export PATH=$HOME/.cargo/bin:/opt/homebrew/bin:$PATH
 # Iteration build:
 ./Source/Android/gradlew -p Source/Android :app:assembleDebug
 
+# Force the onscreen GameCube touch controls even when a built-in or
+# physical controller is detected:
+./Source/Android/gradlew -p Source/Android :app:assembleDebug -PforceTouchControls=true
+
 # Distributable build (signed):
 ./Source/Android/gradlew -p Source/Android :app:assembleRelease
 ```
@@ -48,6 +52,22 @@ Output APKs:
 
 A clean build is ~8 minutes (Rust crates + boost dominate). Incremental
 C++ rebuilds are ~10s; Java/AGP-only changes are sub-second.
+
+## Slippi sign-in
+
+The launcher signs users in by embedding `https://slippi.gg/online/enable`
+inside a `WebView` (`SlippiLoginActivity`). The user logs in on that
+page as they normally would in any browser; when they tap the
+**Download** button the `WebView.DownloadListener` intercepts the
+request, replays it with the session cookies, and writes the response
+to `<app-files>/dolphin/Slippi/user.json`. From the user's perspective
+it's a single in-app sign-in step.
+
+This is the flow the Slippi team has asked third-party clients to
+use, so we ship no Firebase API key in the binary.
+
+A manual `user.json` import is still available behind a small link on
+the launcher's account card for users who already have one on disk.
 
 ## Release signing
 
@@ -124,7 +144,10 @@ into `<files>/dolphin/Config/`:
 - JIT memory allocation under Android's W^X — `MemoryUtil.cpp` still
   uses `PROT_READ|PROT_WRITE|PROT_EXEC` mmap. Works on app-private
   anonymous maps through Android 14; future versions may restrict.
-- No on-screen touch overlay — only physical / Bluetooth pads work.
+- On-screen touch overlay has not had device QA yet. Use the launcher
+  **Touch controls** link to edit layout, or build with
+  `-PforceTouchControls=true` to force it visible on handhelds with
+  built-in controls.
 - First boot of a new game compiles a few hundred shaders (~5–10s on
   Adreno 740) before the first frame.
 - Audio backend hasn't been latency-tuned.

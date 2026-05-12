@@ -1166,7 +1166,16 @@ void NetPlayClient::SendNetPad(int pad_nb)
                         break;
                     case SIDEVICE_GC_CONTROLLER:
                     default:
-                        status = Pad::GetStatus(i);
+                        // Android: if the launcher pushed a calibrated
+                        // override for this port, use it as the local
+                        // input source. Otherwise fall back to the
+                        // ControllerEmu pipeline. Without this, online
+                        // matches send raw uncalibrated bytes over the
+                        // wire (the SI_DeviceGCController override
+                        // alone isn't enough because netplay captures
+                        // local inputs here, before SI sees them).
+                        if (!SI_PadOverride::Get(i, &status))
+                            status = Pad::GetStatus(i);
                         break;
                     }
                 }
@@ -1196,7 +1205,8 @@ void NetPlayClient::SendNetPad(int pad_nb)
                         break;
                     case SIDEVICE_GC_CONTROLLER:
                     default:
-                        status = Pad::GetStatus(local_pad);
+                        if (!SI_PadOverride::Get(local_pad, &status))
+                            status = Pad::GetStatus(local_pad);
                         break;
                     }
                 }

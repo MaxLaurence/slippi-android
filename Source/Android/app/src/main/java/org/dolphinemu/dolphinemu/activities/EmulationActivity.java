@@ -11,6 +11,7 @@ import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
+import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
@@ -18,8 +19,19 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 
+import org.dolphinemu.dolphinemu.BuildConfig;
 import org.dolphinemu.dolphinemu.NativeLibrary;
 import org.dolphinemu.dolphinemu.R;
+import org.dolphinemu.dolphinemu.controller.ButtonMap;
+import org.dolphinemu.dolphinemu.controller.ControllerProfile;
+import org.dolphinemu.dolphinemu.controller.GameCubePadState;
+import org.dolphinemu.dolphinemu.controller.StickCalibration;
+import org.dolphinemu.dolphinemu.controller.TouchOverlayLayoutStore;
+import org.dolphinemu.dolphinemu.utils.PhysicalControllerDetector;
+import org.dolphinemu.dolphinemu.utils.RawStickInputProvider;
+import org.dolphinemu.dolphinemu.utils.RawStickInputProviders;
+import org.dolphinemu.dolphinemu.utils.RawStickState;
+import org.dolphinemu.dolphinemu.views.TouchControlOverlayView;
 
 /**
  * Hosts the SurfaceView that the C++ renderer draws into and pumps the
@@ -28,8 +40,91 @@ import org.dolphinemu.dolphinemu.R;
 public class EmulationActivity extends AppCompatActivity implements SurfaceHolder.Callback {
     public static final String EXTRA_ISO_PATH = "iso_path";
     private static final String TAG = "SlippiEmu";
+    private static final boolean INPUT_DIAGNOSTICS = false;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
+
+    // Loaded once at activity create from ControllerProfile. Identity by
+    // default until the user runs the calibration wizard from the
+    // launcher, so existing un-calibrated controllers behave identically
+    // to the previous build (modulo the deadzone change baked into
+    // StickCalibration.IDENTITY).
+    private StickCalibration mainStickCal = StickCalibration.IDENTITY;
+    private StickCalibration cStickCal    = StickCalibration.IDENTITY;
+    private final StickCalibration.Out stickOut = new StickCalibration.Out();
+    private final GameCubePadState padState = new GameCubePadState(0);
+    // Loaded once at onCreate; remap takes effect when the user
+    // exits the match and returns to the launcher.
+    private ButtonMap buttonMap = ButtonMap.defaults();
+    private RawStickInputProvider rawStickInput;
+    private TouchControlOverlayView touchOverlay;
+    private boolean touchOverlayVisible;
+    private final Runnable rawInputPoll = new Runnable() {
+        @Override
+        public void run() {
+            if (!shouldPollRawStickSource()) return;
+
+            if (feedRawStickState()) {
+                pushPad();
+                ui.postDelayed(this, 8);
+                return;
+            }
+
+            if (rawStickInput != null && rawStickInput.keepPollingWhenUnavailable()) {
+                ui.postDelayed(this, 8);
+                return;
+            }
+
+            mainStickCal = mainStickCal.withOuterScaleEnabled(false);
+            cStickCal = cStickCal.withOuterScaleEnabled(false);
+            if (rawStickInput != null) {
+                rawStickInput.stop();
+                rawStickInput = null;
+            }
+            Log.w(TAG, "raw gamepad axes disappeared; falling back to MotionEvent sticks");
+        }
+    };
+    private final Runnable controllerDetectorPoll = new Runnable() {
+        @Override
+        public void run() {
+            updateTouchOverlayVisibility();
+            ui.postDelayed(this, 1000);
+        }
+    };
+    private final TouchControlOverlayView.Listener touchOverlayListener =
+            new TouchControlOverlayView.Listener() {
+                @Override
+                public void onOverlayButton(int gcBit, boolean pressed) {
+                    padState.setButton(gcBit, pressed);
+                    pushPad();
+                }
+
+                @Override
+                public void onOverlayStick(String stickId, float x, float y) {
+                    if (TouchOverlayLayoutStore.MAIN_STICK.equals(stickId)) {
+                        padState.setMainStick(x, y);
+                    } else if (TouchOverlayLayoutStore.C_STICK.equals(stickId)) {
+                        padState.setCStick(x, y);
+                    }
+                    pushPad();
+                }
+
+                @Override
+                public void onOverlayDpad(boolean up, boolean down, boolean left, boolean right) {
+                    padState.setDirectionalButtons(up, down, left, right);
+                    pushPad();
+                }
+
+                @Override
+                public void onOverlayEditModeChanged(boolean editing) {
+                    if (editing) {
+                        padState.reset();
+                        pushPad();
+                    } else {
+                        applyImmersive();
+                    }
+                }
+            };
     private Thread emuThread;
     private volatile boolean emuStarted;
     private SurfaceView surfaceView;
@@ -42,6 +137,8 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
         setContentView(R.layout.activity_emulation);
         surfaceView = findViewById(R.id.emulation_surface);
+        touchOverlay = findViewById(R.id.touch_overlay);
+        touchOverlay.setListener(touchOverlayListener);
         surfaceView.getHolder().addCallback(this);
         // We dispatch key/motion events at the Activity level, but the system
         // only sends them to the foreground window — make sure the surface
@@ -50,8 +147,38 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         surfaceView.setFocusableInTouchMode(true);
         surfaceView.requestFocus();
 
+        // Pull the latest on-device stick calibration. (GC adapter
+        // calibration is pushed into the C++ side from MainActivity
+        // before launch, so we don't need to do anything here for that
+        // path.)
+        ControllerProfile profile = new ControllerProfile(this);
+        mainStickCal = profile.getStick(ControllerProfile.DEVICE_BUILTIN, ControllerProfile.Stick.MAIN);
+        cStickCal    = profile.getStick(ControllerProfile.DEVICE_BUILTIN, ControllerProfile.Stick.C);
+        buttonMap    = profile.getButtonMap(ControllerProfile.DEVICE_BUILTIN);
+        rawStickInput = RawStickInputProviders.create(this);
+        if (rawStickInput != null) {
+            rawStickInput.start();
+        }
+        if (!hasRawStickSource()) {
+            mainStickCal = mainStickCal.withOuterScaleEnabled(false);
+            cStickCal = cStickCal.withOuterScaleEnabled(false);
+        }
+        Log.i(TAG, "loaded mainStick cal: dz=" + mainStickCal.deadzone
+                + " sens=" + mainStickCal.sensitivity
+                + " cap=" + mainStickCal.outputCap
+                + " centerX=" + mainStickCal.centerX
+                + " scaleX+=" + mainStickCal.scaleXPos
+                + " scaleX-=" + mainStickCal.scaleXNeg
+                + " rawScale=" + mainStickCal.useOuterScale
+                + " rawReader=" + hasRawStickSource()
+                + " rawSource=" + rawSourceLabel()
+                + (profile.hasCalibration(ControllerProfile.DEVICE_BUILTIN, ControllerProfile.Stick.MAIN)
+                        ? " (saved)" : " (defaults — wizard never saved)"));
+        Log.i(TAG, "touch controls force flag=" + BuildConfig.FORCE_TOUCH_CONTROLS);
+
         NativeLibrary.setEmulationActivity(this);
         applyImmersive();
+        updateTouchOverlayVisibility();
 
         String iso = getIntent().getStringExtra(EXTRA_ISO_PATH);
         if (iso == null) {
@@ -63,21 +190,64 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     }
 
     @Override
+    public void onBackPressed() {
+        // Tear emulation down BEFORE super finishes the activity. The
+        // emu thread holds the SurfaceView, the JNI mutexes, and the
+        // GL/Vulkan context — if we let the activity destroy without
+        // first joining the thread, subsequent JNI calls from the
+        // launcher (e.g. opening CalibrationActivity or
+        // ButtonMapActivity, both of which call into GCAdapter::* via
+        // JNI) can hang behind native state that's still half-running.
+        shutdownEmuThreadSync();
+        super.onBackPressed();
+    }
+
+    @Override
     protected void onDestroy() {
+        ui.removeCallbacks(rawInputPoll);
+        ui.removeCallbacks(controllerDetectorPoll);
         super.onDestroy();
         if (hintSession != null) {
             try { hintSession.close(); } catch (Throwable ignored) {}
             hintSession = null;
         }
-        if (emuStarted) {
-            try {
-                NativeLibrary.StopEmulation();
-            } catch (Throwable t) {
-                Log.w(TAG, "stop emulation: " + t);
-            }
+        try {
+            NativeLibrary.ClearPadOverride(0);
+        } catch (Throwable ignored) {}
+        if (rawStickInput != null) {
+            rawStickInput.stop();
         }
+        // Idempotent: harmless if onBackPressed already stopped us.
+        shutdownEmuThreadSync();
         if (NativeLibrary.sEmulationActivity == this) {
             NativeLibrary.setEmulationActivity(null);
+        }
+    }
+
+    /**
+     * Stop the emulator and wait (with a timeout) for the native thread
+     * to actually exit before returning. Idempotent — calling it twice
+     * after the thread is gone is a no-op.
+     */
+    private void shutdownEmuThreadSync() {
+        if (!emuStarted) return;
+        emuStarted = false;
+        try {
+            NativeLibrary.StopEmulation();
+        } catch (Throwable t) {
+            Log.w(TAG, "stop emulation: " + t);
+        }
+        Thread t = emuThread;
+        emuThread = null;
+        if (t != null && t.isAlive()) {
+            try {
+                t.join(3000);  // 3 s ceiling so we don't ANR if the JIT is stuck
+                if (t.isAlive()) {
+                    Log.w(TAG, "emu thread didn't exit within 3s — leaked");
+                }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 
@@ -88,10 +258,15 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         if (emuStarted) {
             try { NativeLibrary.UnPauseEmulation(); } catch (Throwable ignored) {}
         }
+        updateTouchOverlayVisibility();
+        ui.post(controllerDetectorPoll);
+        if (shouldPollRawStickSource()) ui.post(rawInputPoll);
     }
 
     @Override
     protected void onPause() {
+        ui.removeCallbacks(rawInputPoll);
+        ui.removeCallbacks(controllerDetectorPoll);
         super.onPause();
         if (emuStarted) {
             try { NativeLibrary.PauseEmulation(); } catch (Throwable ignored) {}
@@ -180,26 +355,26 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
      * handles both.
      */
 
+    private void pushPad() {
+        padState.pushToNative();
+    }
+
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         int action = event.getAction();
         int keyCode = event.getKeyCode();
-        int gcButton = mapKeyToGcButton(keyCode);
-        // Log once per real (non-repeat) event so we can see in logcat whether
-        // events are reaching us at all and what the keycodes look like.
-        if (event.getRepeatCount() == 0) {
+        int bit = mapKeyToGcBit(keyCode);
+        if (INPUT_DIAGNOSTICS && event.getRepeatCount() == 0) {
             android.util.Log.i(TAG, "dispatchKeyEvent kc=" + keyCode
                     + " src=0x" + Integer.toHexString(event.getSource())
-                    + " action=" + action + " gc=" + gcButton);
+                    + " action=" + action + " bit=0x" + Integer.toHexString(bit));
         }
-        if (gcButton < 0) return super.dispatchKeyEvent(event);
+        if (bit == 0) return super.dispatchKeyEvent(event);
         if (action != KeyEvent.ACTION_DOWN && action != KeyEvent.ACTION_UP) {
             return super.dispatchKeyEvent(event);
         }
-        int state = action == KeyEvent.ACTION_DOWN
-                ? NativeLibrary.ButtonState.PRESSED
-                : NativeLibrary.ButtonState.RELEASED;
-        NativeLibrary.onGamePadEvent(NativeLibrary.TouchScreenDevice, gcButton, state);
+        padState.setButton(bit, action == KeyEvent.ACTION_DOWN);
+        pushPad();
         return true;
     }
 
@@ -209,78 +384,145 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
                 && (ev.getSource() & android.view.InputDevice.SOURCE_GAMEPAD) == 0) {
             return super.dispatchGenericMotionEvent(ev);
         }
-        // Main stick (left analog): both directions of each axis get the same
-        // raw value. The ButtonManager touchscreen binds have _neg=-1 on
-        // LEFT/UP and +1 on RIGHT/DOWN, so the negative half gets clamped to 0
-        // by GCPadEmu and only the active direction surfaces.
-        feedStick(ev, MotionEvent.AXIS_X,
-                NativeLibrary.ButtonType.STICK_MAIN_LEFT,
-                NativeLibrary.ButtonType.STICK_MAIN_RIGHT);
-        feedStick(ev, MotionEvent.AXIS_Y,
-                NativeLibrary.ButtonType.STICK_MAIN_UP,
-                NativeLibrary.ButtonType.STICK_MAIN_DOWN);
-        // C-stick (right analog).
-        feedStick(ev, MotionEvent.AXIS_Z,
-                NativeLibrary.ButtonType.STICK_C_LEFT,
-                NativeLibrary.ButtonType.STICK_C_RIGHT);
-        feedStick(ev, MotionEvent.AXIS_RZ,
-                NativeLibrary.ButtonType.STICK_C_UP,
-                NativeLibrary.ButtonType.STICK_C_DOWN);
-        // Analog triggers (Melee uses analog L for tech / wavedash buffer).
+        if (!shouldPollRawStickSource()) {
+            // Main + C stick: pair-wise calibration then convert to GC byte
+            // space (center 128, swing ±127). GC Y is inverted relative to
+            // Android (up = negative Y on Android, positive Y on GC).
+            feedStickPairToBytes(ev, MotionEvent.AXIS_X, MotionEvent.AXIS_Y, mainStickCal,
+                    /*invertY*/ true,
+                    /*main*/ true);
+            feedStickPairToBytes(ev, MotionEvent.AXIS_Z, MotionEvent.AXIS_RZ, cStickCal,
+                    /*invertY*/ true,
+                    /*main*/ false);
+        }
+
+        // Analog triggers (Melee uses these for shield drop / tech).
         float lt = ev.getAxisValue(MotionEvent.AXIS_LTRIGGER);
         float rt = ev.getAxisValue(MotionEvent.AXIS_RTRIGGER);
         if (lt == 0f) lt = ev.getAxisValue(MotionEvent.AXIS_BRAKE);
         if (rt == 0f) rt = ev.getAxisValue(MotionEvent.AXIS_GAS);
-        NativeLibrary.onGamePadMoveEvent(NativeLibrary.TouchScreenDevice,
-                NativeLibrary.ButtonType.TRIGGER_L, lt);
-        NativeLibrary.onGamePadMoveEvent(NativeLibrary.TouchScreenDevice,
-                NativeLibrary.ButtonType.TRIGGER_R, rt);
-        // D-pad on some pads comes through as HAT_X/HAT_Y axes instead of
-        // KEYCODE_DPAD_*. Synthesize the discrete buttons here.
+        padState.setAnalogTriggerL(lt);
+        padState.setAnalogTriggerR(rt);
+
+        // D-pad delivered as HAT_X/HAT_Y axes on most pads.
         float hx = ev.getAxisValue(MotionEvent.AXIS_HAT_X);
         float hy = ev.getAxisValue(MotionEvent.AXIS_HAT_Y);
-        NativeLibrary.onGamePadEvent(NativeLibrary.TouchScreenDevice,
-                NativeLibrary.ButtonType.BUTTON_LEFT,
-                hx < -0.5f ? NativeLibrary.ButtonState.PRESSED : NativeLibrary.ButtonState.RELEASED);
-        NativeLibrary.onGamePadEvent(NativeLibrary.TouchScreenDevice,
-                NativeLibrary.ButtonType.BUTTON_RIGHT,
-                hx >  0.5f ? NativeLibrary.ButtonState.PRESSED : NativeLibrary.ButtonState.RELEASED);
-        NativeLibrary.onGamePadEvent(NativeLibrary.TouchScreenDevice,
-                NativeLibrary.ButtonType.BUTTON_UP,
-                hy < -0.5f ? NativeLibrary.ButtonState.PRESSED : NativeLibrary.ButtonState.RELEASED);
-        NativeLibrary.onGamePadEvent(NativeLibrary.TouchScreenDevice,
-                NativeLibrary.ButtonType.BUTTON_DOWN,
-                hy >  0.5f ? NativeLibrary.ButtonState.PRESSED : NativeLibrary.ButtonState.RELEASED);
+        padState.setHat(hx, hy);
+
+        pushPad();
         return true;
     }
 
-    private void feedStick(MotionEvent ev, int androidAxis, int gcAxisLowHalf, int gcAxisHighHalf) {
-        float v = ev.getAxisValue(androidAxis);
-        // Apply a small deadzone for noisy sticks.
-        if (Math.abs(v) < 0.05f) v = 0f;
-        NativeLibrary.onGamePadMoveEvent(NativeLibrary.TouchScreenDevice, gcAxisLowHalf, v);
-        NativeLibrary.onGamePadMoveEvent(NativeLibrary.TouchScreenDevice, gcAxisHighHalf, v);
+    private long lastFeedLog = 0;
+    private void feedStickPairToBytes(MotionEvent ev, int androidAxisX, int androidAxisY,
+                                      StickCalibration cal, boolean invertY, boolean main) {
+        feedStickPairToBytes(ev.getAxisValue(androidAxisX), ev.getAxisValue(androidAxisY),
+                cal, invertY, main);
     }
 
-    private int mapKeyToGcButton(int keyCode) {
-        switch (keyCode) {
-            case KeyEvent.KEYCODE_BUTTON_A:      return NativeLibrary.ButtonType.BUTTON_A;
-            case KeyEvent.KEYCODE_BUTTON_B:      return NativeLibrary.ButtonType.BUTTON_B;
-            case KeyEvent.KEYCODE_BUTTON_X:      return NativeLibrary.ButtonType.BUTTON_X;
-            case KeyEvent.KEYCODE_BUTTON_Y:      return NativeLibrary.ButtonType.BUTTON_Y;
-            case KeyEvent.KEYCODE_BUTTON_START:  return NativeLibrary.ButtonType.BUTTON_START;
-            case KeyEvent.KEYCODE_BUTTON_THUMBL: return NativeLibrary.ButtonType.BUTTON_Z;
-            case KeyEvent.KEYCODE_BUTTON_THUMBR: return NativeLibrary.ButtonType.BUTTON_Z;
-            case KeyEvent.KEYCODE_BUTTON_L1:
-            case KeyEvent.KEYCODE_BUTTON_L2:     return NativeLibrary.ButtonType.TRIGGER_L;
-            case KeyEvent.KEYCODE_BUTTON_R1:
-            case KeyEvent.KEYCODE_BUTTON_R2:     return NativeLibrary.ButtonType.TRIGGER_R;
-            case KeyEvent.KEYCODE_DPAD_UP:       return NativeLibrary.ButtonType.BUTTON_UP;
-            case KeyEvent.KEYCODE_DPAD_DOWN:     return NativeLibrary.ButtonType.BUTTON_DOWN;
-            case KeyEvent.KEYCODE_DPAD_LEFT:     return NativeLibrary.ButtonType.BUTTON_LEFT;
-            case KeyEvent.KEYCODE_DPAD_RIGHT:    return NativeLibrary.ButtonType.BUTTON_RIGHT;
-            default: return -1;
+    private void feedStickPairToBytes(float rawX, float rawY,
+                                      StickCalibration cal, boolean invertY, boolean main) {
+        cal.apply(rawX, rawY, stickOut);
+        float fx = stickOut.x;
+        // Melee's float-stick convention has stickY positive = up; Android
+        // AXIS_Y is positive = down. invertY captures that.
+        float fy = invertY ? -stickOut.y : stickOut.y;
+        // Byte encoding stays around for the SI override path (kept as a
+        // fallback in case the direct-memory write isn't applied on some
+        // frames — better to have stale-but-calibrated bytes than raw).
+        int byteX = stickByteFromUnit(fx);
+        int byteY = stickByteFromUnit(fy);
+        if (main) {
+            padState.setMainStick(fx, fy);
+        } else {
+            padState.setCStick(fx, fy);
         }
+        if (INPUT_DIAGNOSTICS) {
+            long now = android.os.SystemClock.uptimeMillis();
+            if (now - lastFeedLog > 200 && (Math.abs(rawX) > 0.05f || Math.abs(rawY) > 0.05f)) {
+                lastFeedLog = now;
+                android.util.Log.i(TAG, "feedPad " + (main ? "main" : "C")
+                        + " raw=(" + String.format("%+.2f", rawX) + ", " + String.format("%+.2f", rawY)
+                        + ") cal=(" + String.format("%+.2f", stickOut.x) + ", " + String.format("%+.2f", stickOut.y)
+                        + ") byte=(" + byteX + ", " + byteY + ")"
+                        + " melee=(" + String.format("%+.2f", fx) + ", " + String.format("%+.2f", fy) + ")");
+            }
+        }
+    }
+
+    private boolean feedRawStickState() {
+        if (rawStickInput == null) {
+            return false;
+        }
+
+        RawStickState state = rawStickInput.snapshot();
+        if (state == null) {
+            return false;
+        }
+        boolean fed = false;
+        Float mainX = state.valueForAxis(MotionEvent.AXIS_X);
+        Float mainY = state.valueForAxis(MotionEvent.AXIS_Y);
+        if (mainX != null && mainY != null) {
+            feedStickPairToBytes(mainX, mainY, mainStickCal, true, true);
+            fed = true;
+        }
+
+        Float cX = state.valueForAxis(MotionEvent.AXIS_Z);
+        Float cY = state.valueForAxis(MotionEvent.AXIS_RZ);
+        if (cX != null && cY != null) {
+            feedStickPairToBytes(cX, cY, cStickCal, true, false);
+            fed = true;
+        }
+
+        return fed;
+    }
+
+    private boolean hasRawStickSource() {
+        return rawStickInput != null;
+    }
+
+    private boolean shouldPollRawStickSource() {
+        return hasRawStickSource() && !BuildConfig.FORCE_TOUCH_CONTROLS;
+    }
+
+    private void updateTouchOverlayVisibility() {
+        if (touchOverlay == null) return;
+        boolean show = BuildConfig.FORCE_TOUCH_CONTROLS
+                || !PhysicalControllerDetector.hasUsableP1Controller(rawStickInput);
+        if (show == touchOverlayVisible) return;
+
+        touchOverlayVisible = show;
+        touchOverlay.setControlsEnabled(show);
+        touchOverlay.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (show) {
+            ui.removeCallbacks(rawInputPoll);
+            padState.reset();
+            pushPad();
+        } else if (shouldPollRawStickSource()) {
+            ui.post(rawInputPoll);
+        }
+        Log.i(TAG, "touch controls " + (show ? "shown" : "hidden")
+                + " force=" + BuildConfig.FORCE_TOUCH_CONTROLS
+                + " rawSource=" + hasRawStickSource());
+    }
+
+    private String rawSourceLabel() {
+        if (rawStickInput != null) return rawStickInput.label();
+        return "Android MotionEvent fallback";
+    }
+
+    private static int stickByteFromUnit(float v) {
+        int b = Math.round(v * 127f + 128f);
+        if (b < 0) return 0;
+        if (b > 255) return 255;
+        return b;
+    }
+
+    private int mapKeyToGcBit(int keyCode) {
+        // Per-device user remap, loaded once at onCreate. The map's
+        // factory defaults match the previous hardcoded table exactly,
+        // so an un-customized install behaves identically.
+        return buttonMap.gcBitForKey(keyCode);
     }
 
     public void showToast(String msg) {

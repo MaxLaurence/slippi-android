@@ -2,6 +2,12 @@ plugins {
     id 'com.android.application'
 }
 
+// No build-time secrets. The sign-in flow runs entirely inside a
+// WebView pointed at slippi.gg/online/enable (see
+// SlippiLoginActivity) so we don't carry any Firebase / Slippi
+// credentials in the binary.
+def forceTouchControls = project.findProperty('forceTouchControls')?.toString()?.toBoolean() ?: false
+
 android {
     namespace 'org.dolphinemu.dolphinemu'
     compileSdk 34
@@ -13,6 +19,7 @@ android {
         targetSdk 34
         versionCode 1
         versionName '3.6.0-android'
+        buildConfigField 'boolean', 'FORCE_TOUCH_CONTROLS', forceTouchControls ? 'true' : 'false'
 
         externalNativeBuild {
             cmake {
@@ -160,4 +167,9 @@ dependencies {
     implementation 'androidx.preference:preference:1.2.1'
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    implementation 'androidx.recyclerview:recyclerview:1.3.2'
+    // For EncryptedSharedPreferences (refresh-token storage). 1.1.0-alpha06
+    // is the latest published as of 2026-01; the stable 1.0.0 line still
+    // works but uses the deprecated KeyGenParameterSpec helper.
+    implementation 'androidx.security:security-crypto:1.1.0-alpha06'
 }

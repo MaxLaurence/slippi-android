@@ -3,6 +3,8 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <jni.h>
 #include <mutex>
 #ifdef ANDROID
@@ -50,6 +52,99 @@ static std::atomic<int> s_controller_payload_size{0};
 static std::mutex s_write_mutex;
 static u8 s_controller_write_payload[5];
 static std::atomic<int> s_controller_write_payload_size{0};
+
+// Per-port stick calibration. Two sticks (main, C) per port. Defaults
+// are identity: center at the GC byte midpoint (128) and unit scale,
+// no deadzone. The Android launcher pushes real values via
+// SetStickCalibration() after the calibration wizard runs. We use
+// std::atomic here because Input() is called on the emulator thread
+// while the JNI setter runs on a launcher / Java-side thread.
+struct StickCal
+{
+  std::atomic<float> center_x{128.0f};
+  std::atomic<float> center_y{128.0f};
+  std::atomic<float> scale_x_pos{1.0f};
+  std::atomic<float> scale_x_neg{1.0f};
+  std::atomic<float> scale_y_pos{1.0f};
+  std::atomic<float> scale_y_neg{1.0f};
+  // Bigger default deadzone than upstream: real Melee thresholds
+  // (dash 0.36, jump 0.66) get crossed accidentally otherwise.
+  std::atomic<float> deadzone{0.12f};
+  // Power-curve exponent (>=1 flattens low end). Adreno-era HID pads
+  // ramp the analog stick aggressively at small physical deflection,
+  // so a 1.5 default is closer to a real GC stick's feel.
+  std::atomic<float> sensitivity{1.5f};
+};
+static StickCal s_stick_cal[MAX_SI_CHANNELS][2];
+
+// Per-port button remap. For each of the 16 GC button bits, we store
+// the OUTPUT bitmask to emit when that input bit is set. Identity by
+// default (so an un-customized port behaves exactly as before). The
+// Android launcher writes per-port maps via SetButtonRemap() after the
+// user runs the remap wizard. customized=false short-circuits the
+// remap pass in Input() so the cost of identity ports is zero.
+struct BtnRemap
+{
+  std::atomic<uint16_t> out[16];
+  std::atomic<bool> customized{false};
+};
+static BtnRemap s_btn_remap[MAX_SI_CHANNELS];
+
+static uint16_t ApplyButtonRemap(int chan, uint16_t in_buttons)
+{
+  if (!s_btn_remap[chan].customized.load()) return in_buttons;
+  uint16_t out = 0;
+  for (int i = 0; i < 16; i++)
+  {
+    if ((in_buttons >> i) & 1u)
+    {
+      uint16_t mapped = s_btn_remap[chan].out[i].load();
+      // 0 → "use identity for this bit" (the input was never customized
+      // through this slot, or the user wiped it back to default).
+      out |= mapped ? mapped : static_cast<uint16_t>(1u << i);
+    }
+  }
+  return out;
+}
+
+// Apply a per-stick calibration to the raw GC bytes. Operates in
+// normalized [-1, +1] space (matching the Java-side StickCalibration
+// math), then re-encodes back to the byte range Melee expects.
+static void ApplyStickCalibration(int chan, int stick_idx, u8& bx, u8& by)
+{
+  const StickCal& c = s_stick_cal[chan][stick_idx];
+  // Re-center, then divide by 127 to land in [-1, +1].
+  float dx = (static_cast<float>(bx) - c.center_x.load()) / 127.0f;
+  float dy = (static_cast<float>(by) - c.center_y.load()) / 127.0f;
+  dx *= (dx >= 0.0f) ? c.scale_x_pos.load() : c.scale_x_neg.load();
+  dy *= (dy >= 0.0f) ? c.scale_y_pos.load() : c.scale_y_neg.load();
+  float mag = std::sqrt(dx * dx + dy * dy);
+  float dz = c.deadzone.load();
+  if (mag < dz)
+  {
+    dx = 0.0f;
+    dy = 0.0f;
+  }
+  else
+  {
+    // Re-map (dz..1) -> (0..1) so crossing the deadzone edge doesn't
+    // produce a magnitude jump. Then apply the response-curve exponent
+    // to flatten the low end of the active range.
+    float scaled = (mag - dz) / (1.0f - dz);
+    if (scaled > 1.0f) scaled = 1.0f;
+    float sens = c.sensitivity.load();
+    if (sens > 1.0f) scaled = std::pow(scaled, sens);
+    dx = dx / mag * scaled;
+    dy = dy / mag * scaled;
+  }
+  // Re-encode to the GC byte range. Center at 128, ±127 swing.
+  int outx = static_cast<int>(std::lroundf(dx * 127.0f + 128.0f));
+  int outy = static_cast<int>(std::lroundf(dy * 127.0f + 128.0f));
+  if (outx < 0) outx = 0; else if (outx > 255) outx = 255;
+  if (outy < 0) outy = 0; else if (outy > 255) outy = 255;
+  bx = static_cast<u8>(outx);
+  by = static_cast<u8>(outy);
+}
 
 // Adapter running thread
 static std::thread s_read_adapter_thread;
@@ -385,6 +480,16 @@ GCPadStatus Input(int chan, std::chrono::high_resolution_clock::time_point* tp)
       pad.substickY = controller_payload_copy[1 + (9 * chan) + 6];
       pad.triggerLeft = controller_payload_copy[1 + (9 * chan) + 7];
       pad.triggerRight = controller_payload_copy[1 + (9 * chan) + 8];
+      // Apply per-port stick calibration. Defaults are identity, so
+      // un-calibrated controllers behave exactly as before.
+      ApplyStickCalibration(chan, /*main*/ 0, pad.stickX, pad.stickY);
+      ApplyStickCalibration(chan, /*c   */ 1, pad.substickX, pad.substickY);
+      // Apply per-port button remap. PAD_GET_ORIGIN is preserved
+      // verbatim because Melee's bootup origin-poll uses it as a
+      // signal, not a real button.
+      const uint16_t preserve = pad.button & PAD_GET_ORIGIN;
+      pad.button = ApplyButtonRemap(chan, static_cast<uint16_t>(pad.button & ~PAD_GET_ORIGIN))
+                   | preserve;
     }
     else
     {
@@ -450,6 +555,106 @@ void ResetRumble()
 
 void SetAdapterCallback(std::function<void(void)> func)
 {
+}
+
+void SetStickCalibration(int chan, int stick_idx,
+                         float center_x_byte, float center_y_byte,
+                         float scale_x_pos, float scale_x_neg,
+                         float scale_y_pos, float scale_y_neg,
+                         float deadzone_normalized,
+                         float sensitivity_exponent)
+{
+  if (chan < 0 || chan >= MAX_SI_CHANNELS) return;
+  if (stick_idx < 0 || stick_idx >= 2) return;
+  StickCal& c = s_stick_cal[chan][stick_idx];
+  c.center_x.store(center_x_byte);
+  c.center_y.store(center_y_byte);
+  c.scale_x_pos.store(scale_x_pos);
+  c.scale_x_neg.store(scale_x_neg);
+  c.scale_y_pos.store(scale_y_pos);
+  c.scale_y_neg.store(scale_y_neg);
+  c.deadzone.store(deadzone_normalized);
+  c.sensitivity.store(sensitivity_exponent);
+}
+
+bool GetLatestRawStick(int chan, int stick_idx, u8* out_x, u8* out_y)
+{
+  if (chan < 0 || chan >= MAX_SI_CHANNELS) return false;
+  if (stick_idx < 0 || stick_idx >= 2) return false;
+  if (!out_x || !out_y) return false;
+  u8 payload_local[37];
+  int payload_size_local;
+  {
+    std::lock_guard<std::mutex> lk(s_read_mutex);
+    if (s_controller_payload_size.load() != sizeof(s_controller_payload)) return false;
+    std::memcpy(payload_local, s_controller_payload, sizeof(payload_local));
+    payload_size_local = s_controller_payload_size.load();
+  }
+  (void)payload_size_local;
+  // Same offsets as Input(): byte 1 + 9*chan + {3,4} for main stick X/Y,
+  // +{5,6} for C-stick X/Y. byte 0 is a status byte.
+  int base = 1 + 9 * chan + (stick_idx == 0 ? 3 : 5);
+  *out_x = payload_local[base + 0];
+  *out_y = payload_local[base + 1];
+  return true;
+}
+
+void SetButtonRemap(int chan, uint16_t source_bit, uint16_t target_bit)
+{
+  if (chan < 0 || chan >= MAX_SI_CHANNELS) return;
+  // source_bit must be a single bit (one of the PAD_BUTTON_* / PAD_TRIGGER_*
+  // bitmask constants). Find its index, then store the target mask at
+  // that slot. target_bit may be any combination (including 0 to mute
+  // that source bit entirely).
+  int idx = -1;
+  for (int i = 0; i < 16; i++)
+    if (source_bit == static_cast<uint16_t>(1u << i)) { idx = i; break; }
+  if (idx < 0) return;
+  // First customization on this port: pre-populate the table with
+  // identity values so un-touched bits keep their normal behavior.
+  if (!s_btn_remap[chan].customized.load())
+  {
+    for (int i = 0; i < 16; i++)
+      s_btn_remap[chan].out[i].store(static_cast<uint16_t>(1u << i));
+  }
+  s_btn_remap[chan].out[idx].store(target_bit);
+  s_btn_remap[chan].customized.store(true);
+}
+
+void ClearButtonRemap(int chan)
+{
+  if (chan < 0 || chan >= MAX_SI_CHANNELS) return;
+  s_btn_remap[chan].customized.store(false);
+}
+
+uint16_t GetLatestRawButtons(int chan)
+{
+  if (chan < 0 || chan >= MAX_SI_CHANNELS) return 0;
+  u8 payload_local[37];
+  {
+    std::lock_guard<std::mutex> lk(s_read_mutex);
+    if (s_controller_payload_size.load() != sizeof(s_controller_payload)) return 0;
+    std::memcpy(payload_local, s_controller_payload, sizeof(payload_local));
+  }
+  // byte 0 is a status byte; each channel occupies bytes 1+9*chan .. +8.
+  // controller type lives in the upper nibble of byte 1+9*chan.
+  if (((payload_local[1 + 9 * chan] >> 4) & 0xF) == 0) return 0;
+  u8 b1 = payload_local[1 + 9 * chan + 1];
+  u8 b2 = payload_local[1 + 9 * chan + 2];
+  uint16_t buttons = 0;
+  if (b1 & (1 << 0)) buttons |= PAD_BUTTON_A;
+  if (b1 & (1 << 1)) buttons |= PAD_BUTTON_B;
+  if (b1 & (1 << 2)) buttons |= PAD_BUTTON_X;
+  if (b1 & (1 << 3)) buttons |= PAD_BUTTON_Y;
+  if (b1 & (1 << 4)) buttons |= PAD_BUTTON_LEFT;
+  if (b1 & (1 << 5)) buttons |= PAD_BUTTON_RIGHT;
+  if (b1 & (1 << 6)) buttons |= PAD_BUTTON_DOWN;
+  if (b1 & (1 << 7)) buttons |= PAD_BUTTON_UP;
+  if (b2 & (1 << 0)) buttons |= PAD_BUTTON_START;
+  if (b2 & (1 << 1)) buttons |= PAD_TRIGGER_Z;
+  if (b2 & (1 << 2)) buttons |= PAD_TRIGGER_R;
+  if (b2 & (1 << 3)) buttons |= PAD_TRIGGER_L;
+  return buttons;
 }
 
 }  // end of namespace GCAdapter

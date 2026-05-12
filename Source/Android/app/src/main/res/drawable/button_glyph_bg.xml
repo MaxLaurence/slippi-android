@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Background drawable for the GC button glyph chip in the remap list.
+     Tinted in code per row to match the GameCube's silkscreen colors. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="@color/slippi_green"/>
+    <size android:width="40dp" android:height="40dp"/>
+</shape>

@@ -3,6 +3,14 @@
 // Refer to the license.txt file included.
 
 #include "Core/HW/SI_Device.h"
+
+#include <atomic>
+#include <chrono>
+
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
+
 #include "Common/ChunkFile.h"
 #include "Common/CommonTypes.h"
 #include "Common/Logging/Log.h"
@@ -15,6 +23,120 @@
 #include "Core/Movie.h"
 #include "Core/NetPlayProto.h"
 #include "InputCommon/GCPadStatus.h"
+
+// Per-port GCPadStatus override. Used by the Android launcher to push
+// already-calibrated controller bytes down without going through
+// Dolphin's ControllerEmu / ButtonManager pipeline (whose half-axis +
+// radius math doubles inputs in the touchscreen-device case).
+//
+// Set from the JNI thread, read from the emulator thread — every
+// field is stored in a separate std::atomic so the reads / writes
+// don't need a mutex on the hot input path.
+namespace
+{
+struct PadOverride
+{
+	std::atomic<bool> active{false};
+	std::atomic<uint16_t> button{0};
+	std::atomic<uint8_t>  stickX{128}, stickY{128};
+	std::atomic<uint8_t>  substickX{128}, substickY{128};
+	std::atomic<uint8_t>  triggerLeft{0}, triggerRight{0};
+	std::atomic<uint8_t>  analogA{0}, analogB{0};
+};
+static PadOverride s_pad_overrides[4];
+}  // namespace
+
+namespace SI_PadOverride
+{
+// Throttled diagnostics (the hot input path can't afford an INFO log
+// every frame). One log per ~500 ms is enough to confirm the path is
+// alive and what bytes are flowing.
+static std::atomic<uint64_t> s_last_set_log{0};
+static std::atomic<uint64_t> s_last_get_log{0};
+static uint64_t NowMs()
+{
+	return static_cast<uint64_t>(
+	    std::chrono::duration_cast<std::chrono::milliseconds>(
+	        std::chrono::steady_clock::now().time_since_epoch())
+	        .count());
+}
+
+static std::atomic<int> s_set_count{0};
+
+void Set(int port, uint16_t button,
+         uint8_t stickX, uint8_t stickY,
+         uint8_t substickX, uint8_t substickY,
+         uint8_t triggerLeft, uint8_t triggerRight,
+         uint8_t analogA, uint8_t analogB)
+{
+	if (port < 0 || port >= 4) return;
+	auto& o = s_pad_overrides[port];
+	o.button.store(button);
+	o.stickX.store(stickX);
+	o.stickY.store(stickY);
+	o.substickX.store(substickX);
+	o.substickY.store(substickY);
+	o.triggerLeft.store(triggerLeft);
+	o.triggerRight.store(triggerRight);
+	o.analogA.store(analogA);
+	o.analogB.store(analogB);
+	o.active.store(true);
+
+	int count = s_set_count.fetch_add(1) + 1;
+	if (count == 1 || count % 200 == 0)
+	{
+#ifdef __ANDROID__
+		__android_log_print(ANDROID_LOG_INFO, "SlippiPadOverride",
+		    "Set #%d port=%d stick=(%u,%u) addr=%p verify_after=(%u,%u)",
+		    count, port, stickX, stickY, (void*)&s_pad_overrides[0],
+		    (unsigned)o.stickX.load(), (unsigned)o.stickY.load());
+#endif
+	}
+}
+
+void Clear(int port)
+{
+	if (port < 0 || port >= 4) return;
+	s_pad_overrides[port].active.store(false);
+#ifdef __ANDROID__
+	__android_log_print(ANDROID_LOG_INFO, "SlippiPadOverride", "Clear port=%d", port);
+#else
+	INFO_LOG(SERIALINTERFACE, "PadOverride.Clear port=%d", port);
+#endif
+}
+
+static std::atomic<int> s_get_count{0};
+
+bool Get(int port, GCPadStatus* out)
+{
+	if (port < 0 || port >= 4 || !out) return false;
+	auto& o = s_pad_overrides[port];
+	bool active = o.active.load();
+
+	int count = s_get_count.fetch_add(1) + 1;
+	if (count == 1 || count % 60 == 0)
+	{
+#ifdef __ANDROID__
+		__android_log_print(ANDROID_LOG_INFO, "SlippiPadOverride",
+		    "Get #%d port=%d active=%d addr=%p raw=(%u,%u)",
+		    count, port, active ? 1 : 0, (void*)&s_pad_overrides[0],
+		    (unsigned)o.stickX.load(), (unsigned)o.stickY.load());
+#endif
+	}
+
+	if (!active) return false;
+	out->button       = o.button.load();
+	out->stickX       = o.stickX.load();
+	out->stickY       = o.stickY.load();
+	out->substickX    = o.substickX.load();
+	out->substickY    = o.substickY.load();
+	out->triggerLeft  = o.triggerLeft.load();
+	out->triggerRight = o.triggerRight.load();
+	out->analogA      = o.analogA.load();
+	out->analogB      = o.analogB.load();
+	return true;
+}
+}  // namespace SI_PadOverride
 
 // --- standard GameCube controller ---
 CSIDevice_GCController::CSIDevice_GCController(SIDevices device, int _iDeviceNumber)
@@ -141,15 +263,41 @@ void CSIDevice_GCController::HandleMoviePadStatus(GCPadStatus* PadStatus)
 GCPadStatus CSIDevice_GCController::GetPadStatus()
 {
 	GCPadStatus pad_status = {};
+	bool from_override = false;
 
-	// For netplay, the local controllers are polled in GetNetPads(), and
-	// the remote controllers receive their status there as well
-	if (!NetPlay::IsNetPlayRunning())
+	if (SI_PadOverride::Get(m_iDeviceNumber, &pad_status))
 	{
-		pad_status = Pad::GetStatus(m_iDeviceNumber);
+		from_override = true;
+		HandleMoviePadStatus(&pad_status);
+	}
+	else
+	{
+		if (!NetPlay::IsNetPlayRunning())
+		{
+			pad_status = Pad::GetStatus(m_iDeviceNumber);
+		}
+		HandleMoviePadStatus(&pad_status);
 	}
 
-	HandleMoviePadStatus(&pad_status);
+
+#ifdef __ANDROID__
+	// Sample the FINAL bytes being returned to the emulator at ~1Hz.
+	// If override=1 but stick=(128,128) here, an upstream caller
+	// captured the value BEFORE we got the override (rollback / movie).
+	// If override=0, something cleared the active flag.
+	static std::atomic<int> s_out_count{0};
+	int oc = s_out_count.fetch_add(1) + 1;
+	if (oc % 120 == 0 || oc == 1)
+	{
+		__android_log_print(ANDROID_LOG_INFO, "PadStatusOut",
+		    "port=%d override=%d stick=(%u,%u) sub=(%u,%u) btn=0x%04x",
+		    m_iDeviceNumber, from_override ? 1 : 0,
+		    (unsigned)pad_status.stickX, (unsigned)pad_status.stickY,
+		    (unsigned)pad_status.substickX, (unsigned)pad_status.substickY,
+		    (unsigned)pad_status.button);
+	}
+#endif
+
 	return pad_status;
 }
 

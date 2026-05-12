@@ -50,6 +50,91 @@ public final class NativeLibrary {
     public static native boolean onGamePadEvent(String device, int button, int action);
     public static native void onGamePadMoveEvent(String device, int axis, float value);
 
+    /**
+     * Push per-port stick calibration into GCAdapter_Android. stickIdx 0 = main, 1 = C.
+     * centerX/Y are in raw GC byte space (0..255, midpoint 128). Scales are
+     * multipliers in normalized [-1..+1] space; deadzone is normalized [0..1).
+     * Safe to call before emulation starts; the C++ side stores values
+     * atomically and uses them on the next Input() poll.
+     */
+    public static native void SetGCAdapterStickCalibration(
+            int port, int stickIdx,
+            float centerX, float centerY,
+            float scaleXPos, float scaleXNeg,
+            float scaleYPos, float scaleYNeg,
+            float deadzone, float sensitivity);
+
+    /**
+     * Returns the latest raw stick bytes from a given GC adapter port,
+     * BYPASSING calibration. Used by the calibration wizard to capture
+     * the controller's actual range. stickIdx 0 = main, 1 = C.
+     * Returns null if the adapter isn't connected on that port.
+     * Each element is in 0..255 (128 is center).
+     */
+    public static native int[] GetRawAdapterStick(int port, int stickIdx);
+
+    /**
+     * Configure per-port button remap for the GC adapter. sourceBit is
+     * one of the PAD_BUTTON_* / PAD_TRIGGER_* bitmask constants (the
+     * bit the adapter would normally emit when the user presses a
+     * specific physical button on a controller plugged into this port);
+     * targetBit is the bitmask we emit to the game in its place. The
+     * map is per-port so each adapter slot (i.e. each player in a
+     * 4-player game) can have its own bindings.
+     */
+    public static native void SetGCAdapterButtonMap(int port, int sourceBit, int targetBit);
+
+    /** Restore the given adapter port to identity (no remap). */
+    public static native void ClearGCAdapterButtonMap(int port);
+
+    /**
+     * Latest pressed-buttons bitmask on the given adapter port BEFORE
+     * the remap. Returns 0 if no controller is connected. Used by the
+     * remap wizard to detect which physical button the user just
+     * pressed on an adapter controller.
+     */
+    public static native int GetGCAdapterButtonsRaw(int port);
+
+    /** Returns whether the native GC adapter reader currently sees a pad on this port. */
+    public static native boolean IsGCAdapterPortConnected(int port);
+
+    /**
+     * Polls the built-in controller through Linux evdev when the app can read
+     * /dev/input directly. Returns normalized raw axes:
+     *   [mainX, mainY, cStickX, cStickY]
+     * or null when no readable raw gamepad device is available. This bypasses
+     * Android's MotionEvent joystick normalization, which can saturate at
+     * ±1.0 before the stick reaches its physical gate.
+     */
+    public static native float[] PollRawGamepadAxes();
+
+    /**
+     * Push an already-calibrated GC controller state into the SI
+     * pipeline. Bypasses ControllerEmu entirely — values land directly
+     * in SI_DeviceGCController::GetPadStatus. Use this whenever the
+     * launcher applies its own calibration before the bytes reach the
+     * emulator (i.e. the on-device pad path). All byte fields are in
+     * GC controller byte space: sticks 0..255 (128=center), triggers
+     * 0..255, button is a PAD_BUTTON_* / PAD_TRIGGER_* bitmask.
+     */
+    public static native void SetPadOverride(
+            int port, int button,
+            int stickX, int stickY, int substickX, int substickY,
+            int triggerL, int triggerR, int analogA, int analogB);
+
+    public static native void ClearPadOverride(int port);
+
+    /**
+     * Write calibrated stick floats DIRECTLY into Melee's per-port
+     * HSDPad struct in PPC memory, bypassing the entire SI / Movie /
+     * ControllerEmu pipeline. Each value is in -1..+1 (Melee's native
+     * float-stick format — center is 0, max magnitude 1).
+     * No-op when Core isn't running. Call once per input event.
+     */
+    public static native void SetMeleePadFloats(
+            int port, float stickX, float stickY,
+            float substickX, float substickY);
+
     public static native String GetConfig(String configFile, String section, String key, String defaultValue);
     public static native void SetConfig(String configFile, String section, String key, String value);
 

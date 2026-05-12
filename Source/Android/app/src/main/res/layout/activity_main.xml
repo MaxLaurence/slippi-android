@@ -126,30 +126,137 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="@string/user_json_section"
+                android:text="@string/account_section"
                 android:textColor="@color/text_secondary"
                 android:textSize="11sp"
                 android:textAllCaps="true"
                 android:letterSpacing="0.1"/>
 
-            <TextView
-                android:id="@+id/user_json_status"
+            <!-- Resume / loading state. Visible while we refresh tokens
+                 in the background on cold start. -->
+            <LinearLayout
+                android:id="@+id/auth_loading"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:text="@string/user_json_label_empty"
-                android:textColor="@color/text_primary"
-                android:textSize="14sp"
-                android:maxLines="2"
-                android:ellipsize="middle"/>
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="8dp"
+                android:visibility="gone">
+                <ProgressBar
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:indeterminateTint="@color/slippi_green"/>
+                <TextView
+                    android:id="@+id/auth_loading_label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:text="@string/auth_resuming"/>
+            </LinearLayout>
 
-            <Button
-                android:id="@+id/pick_user_json"
-                style="@style/Widget.Material3.Button.TonalButton"
+            <!-- Logged-out state. Single "Sign in via slippi.gg"
+                 button opens SlippiLoginActivity (an embedded WebView
+                 that handles the auth + serves the user.json). Manual
+                 import is still offered for power users who already
+                 have a user.json on disk. -->
+            <LinearLayout
+                android:id="@+id/auth_form"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:text="@string/pick_user_json"/>
+                android:orientation="vertical"
+                android:layout_marginTop="6dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp"
+                    android:lineSpacingExtra="2dp"
+                    android:text="@string/auth_explainer"/>
+
+                <Button
+                    android:id="@+id/auth_sign_in"
+                    style="@style/Widget.Material3.Button"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="10dp"
+                    app:backgroundTint="@color/slippi_green"
+                    android:textColor="#FF0B100E"
+                    android:textStyle="bold"
+                    android:text="@string/auth_sign_in"/>
+
+                <TextView
+                    android:id="@+id/auth_error"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:textColor="#FFEF6464"
+                    android:textSize="12sp"
+                    android:visibility="gone"/>
+
+                <TextView
+                    android:id="@+id/auth_import_link"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:textColor="@color/slippi_green"
+                    android:textSize="12sp"
+                    android:text="@string/auth_import_link"/>
+
+                <!-- Kept around so existing findViewById calls don't
+                     NPE; not part of the new flow. -->
+                <EditText
+                    android:id="@+id/auth_email"
+                    android:layout_width="0dp"
+                    android:layout_height="0dp"
+                    android:visibility="gone"/>
+                <EditText
+                    android:id="@+id/auth_password"
+                    android:layout_width="0dp"
+                    android:layout_height="0dp"
+                    android:visibility="gone"/>
+            </LinearLayout>
+
+            <!-- Logged-in state: who you are + sign-out. -->
+            <LinearLayout
+                android:id="@+id/auth_signed_in"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginTop="6dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/auth_display_name"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/text_primary"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:maxLines="1"
+                    android:ellipsize="end"/>
+
+                <TextView
+                    android:id="@+id/auth_connect_code"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp"
+                    android:fontFamily="monospace"/>
+
+                <Button
+                    android:id="@+id/auth_sign_out"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/auth_sign_out"
+                    android:textColor="@color/text_secondary"
+                    android:paddingHorizontal="0dp"/>
+            </LinearLayout>
         </LinearLayout>
     </com.google.android.material.card.MaterialCardView>
 
@@ -202,6 +309,40 @@
         app:layout_constraintTop_toTopOf="@id/backend_toggle"
         app:layout_constraintBottom_toBottomOf="@id/backend_toggle"
         app:layout_constraintStart_toEndOf="@id/backend_toggle"/>
+
+    <TextView
+        android:id="@+id/calibrate_link"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textColor="@color/slippi_green"
+        android:textSize="13sp"
+        android:text="@string/calibrate_sticks_link"
+        android:padding="6dp"
+        app:layout_constraintTop_toTopOf="@id/backend_toggle"
+        app:layout_constraintBottom_toBottomOf="@id/backend_toggle"
+        app:layout_constraintEnd_toEndOf="parent"/>
+
+    <TextView
+        android:id="@+id/remap_link"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textColor="@color/slippi_green"
+        android:textSize="13sp"
+        android:text="@string/remap_buttons_link"
+        android:padding="6dp"
+        app:layout_constraintTop_toBottomOf="@id/calibrate_link"
+        app:layout_constraintEnd_toEndOf="parent"/>
+
+    <TextView
+        android:id="@+id/touch_overlay_link"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textColor="@color/slippi_green"
+        android:textSize="13sp"
+        android:text="@string/touch_controls_link"
+        android:padding="6dp"
+        app:layout_constraintTop_toBottomOf="@id/remap_link"
+        app:layout_constraintEnd_toEndOf="parent"/>
 
     <!-- Big play button -->
     <Button

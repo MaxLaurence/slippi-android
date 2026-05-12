@@ -1,0 +1,8 @@
+# Build-time properties (CMake / Android SDK / NDK paths normally live
+# here too).
+#
+# Slippi login no longer requires a Firebase API key — the app embeds
+# slippi.gg/online/enable in a WebView and captures the user.json
+# download (see Source/Android/app/src/main/java/.../SlippiLoginActivity.java).
+# Leave this file empty unless gradle / Android Studio asks you to set
+# `sdk.dir=...`.

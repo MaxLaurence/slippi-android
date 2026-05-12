@@ -4,9 +4,26 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "Core/HW/GCPad.h"
 #include "Core/HW/SI_Device.h"
 #include "InputCommon/GCPadStatus.h"
+
+// Android: per-port GCPadStatus override. The Android launcher uses
+// this to push already-calibrated controller bytes straight into
+// SI_DeviceGCController::GetPadStatus, bypassing ControllerEmu's
+// half-axis math. Implementation lives in SI_DeviceGCController.cpp.
+namespace SI_PadOverride
+{
+void Set(int port, uint16_t button,
+         uint8_t stickX, uint8_t stickY,
+         uint8_t substickX, uint8_t substickY,
+         uint8_t triggerLeft, uint8_t triggerRight,
+         uint8_t analogA, uint8_t analogB);
+void Clear(int port);
+bool Get(int port, GCPadStatus* out);
+}  // namespace SI_PadOverride
 
 class CSIDevice_GCController : public ISIDevice
 {

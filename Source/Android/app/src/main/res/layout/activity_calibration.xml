@@ -1,0 +1,225 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Calibration wizard, single-screen / no-scroll layout. The wizard
+  preserves the original phase logic (REST / ROLL / CONFIRM) under
+  the hood for the adapter capture path, but the UI shows everything
+  the user needs at once: live stick visualization on the left, two
+  sliders + a compact preview on the right, action row at the bottom.
+-->
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/dark_bg"
+    android:padding="16dp">
+
+    <!-- Header strip: title + stick toggle + cancel/save. -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+            <TextView
+                android:id="@+id/cal_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/text_primary"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                tools:text="Calibrate sticks"/>
+            <TextView
+                android:id="@+id/cal_instructions"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp"
+                tools:text="This device's controls"/>
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/cal_cancel"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@color/text_secondary"
+            android:text="Cancel"/>
+
+        <Button
+            android:id="@+id/cal_next"
+            style="@style/Widget.Material3.Button"
+            android:layout_width="wrap_content"
+            android:layout_height="44dp"
+            android:layout_marginStart="6dp"
+            android:paddingHorizontal="22dp"
+            app:backgroundTint="@color/slippi_green"
+            android:textColor="#FF0B100E"
+            android:textStyle="bold"
+            android:text="Save"/>
+    </LinearLayout>
+
+    <!-- Main-vs-C stick toggle. The wizard captures one stick at a time;
+         the user can switch freely without going back through phases. -->
+    <com.google.android.material.button.MaterialButtonToggleGroup
+        android:id="@+id/cal_stick_toggle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        app:singleSelection="true"
+        app:selectionRequired="true">
+
+        <Button
+            android:id="@+id/cal_stick_main"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Main stick"/>
+        <Button
+            android:id="@+id/cal_stick_c"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="C-stick"/>
+    </com.google.android.material.button.MaterialButtonToggleGroup>
+
+    <!-- Body: visualization on the left, controls on the right. -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="12dp"
+        android:orientation="horizontal">
+
+        <FrameLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1">
+
+            <org.dolphinemu.dolphinemu.views.StickPreviewView
+                android:id="@+id/cal_preview_view"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"/>
+
+            <!-- Legend bottom-left. -->
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="bottom|start"
+                android:orientation="vertical"
+                android:padding="4dp">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/slippi_green"
+                    android:textSize="11sp"
+                    android:text="● what the game sees"/>
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="11sp"
+                    android:text="● raw stick"/>
+            </LinearLayout>
+        </FrameLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1.4"
+            android:layout_marginStart="12dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/cal_deadzone_label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/text_secondary"
+                android:textSize="11sp"
+                android:textAllCaps="true"
+                android:letterSpacing="0.1"
+                tools:text="Deadzone · 2%"/>
+
+            <com.google.android.material.slider.Slider
+                android:id="@+id/cal_deadzone_slider"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:valueFrom="0.0"
+                android:valueTo="0.5"
+                android:stepSize="0.01"
+                android:value="0.02"
+                app:trackColorActive="@color/slippi_green"
+                app:thumbColor="@color/slippi_green"/>
+
+            <TextView
+                android:id="@+id/cal_sensitivity_label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:textColor="@color/text_secondary"
+                android:textSize="11sp"
+                android:textAllCaps="true"
+                android:letterSpacing="0.1"
+                tools:text="Stick curve · 1.5 (gentle low end)"/>
+
+            <com.google.android.material.slider.Slider
+                android:id="@+id/cal_sensitivity_slider"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:valueFrom="1.0"
+                android:valueTo="10.0"
+                android:stepSize="0.1"
+                android:value="1.5"
+                app:trackColorActive="@color/slippi_green"
+                app:thumbColor="@color/slippi_green"/>
+
+            <!-- Hidden — kept for ID stability so existing
+                 findViewById calls don't NPE. Output cap is always 1.0 now. -->
+            <TextView
+                android:id="@+id/cal_output_cap_label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:visibility="gone"/>
+            <com.google.android.material.slider.Slider
+                android:id="@+id/cal_output_cap_slider"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:valueFrom="0.30"
+                android:valueTo="1.00"
+                android:stepSize="0.01"
+                android:value="1.00"
+                android:visibility="gone"/>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"/>
+
+            <TextView
+                android:id="@+id/cal_preview"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textColor="@color/text_secondary"
+                android:textSize="11sp"
+                tools:text="raw=(+0.50,-0.20) |0.54|  cal=(+0.30,-0.12) |0.32|"/>
+
+            <TextView
+                android:id="@+id/cal_reset_defaults"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:padding="4dp"
+                android:textColor="@color/slippi_green"
+                android:textSize="13sp"
+                android:text="↺ Reset to factory defaults"/>
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>
