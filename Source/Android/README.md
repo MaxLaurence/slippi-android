@@ -58,13 +58,11 @@ C++ rebuilds are ~10s; Java/AGP-only changes are sub-second.
 The launcher signs users in by embedding `https://slippi.gg/online/enable`
 inside a `WebView` (`SlippiLoginActivity`). The user logs in on that
 page as they normally would in any browser; when they tap the
-**Download** button the `WebView.DownloadListener` intercepts the
-request, replays it with the session cookies, and writes the response
-to `<app-files>/dolphin/Slippi/user.json`. From the user's perspective
-it's a single in-app sign-in step.
-
-This is the flow the Slippi team has asked third-party clients to
-use, so we ship no Firebase API key in the binary.
+**Download** button the launcher intercepts the request — including
+`blob:` URLs, via a JS bridge that captures the `Blob` payload — and
+writes the response to `<app-files>/dolphin/Slippi/user.json`. From
+the user's perspective it's a single in-app sign-in step, with no
+external credentials in the binary.
 
 A manual `user.json` import is still available behind a small link on
 the launcher's account card for users who already have one on disk.
@@ -113,66 +111,115 @@ $ADB devices                   # confirm
 
 ## First-run flow (in the launcher)
 
-1. **Pick Melee ISO** — `ACTION_OPEN_DOCUMENT`. The picked file is copied
-   into app-private storage so the C++ side gets a real `fopen`-able
-   path.
-2. **Import user.json** — copy from a desktop Slippi launcher install.
-   Lands at `<files>/dolphin/Slippi/user.json`, which is where the Rust
-   EXI device looks for it.
+1. **Pick Melee ISO** — `ACTION_OPEN_DOCUMENT`. The picked file is
+   copied into app-private storage so the C++ side gets a real
+   `fopen`-able path.
+2. **Sign in via slippi.gg** — opens `SlippiLoginActivity`, an
+   in-app `WebView` pointed at `https://slippi.gg/online/enable`.
+   The user logs in there; on tapping **Download**, our blob
+   interceptor captures the response and writes it to
+   `<files>/dolphin/Slippi/user.json` directly. (Manual file-picker
+   import is still available as a link.)
 3. **Pick backend** — Vulkan (default) or OpenGL ES.
-4. **Play** — launches `EmulationActivity`, which gives a `SurfaceView`
-   to the chosen backend and starts the emu thread.
+4. (Optional) **Calibrate sticks** + **Remap buttons** — both have
+   their own activities reached from the launcher. Defaults are
+   tuned to work without ever running the wizards.
+5. **Play** — launches `EmulationActivity`, which gives a
+   `SurfaceView` to the chosen backend and starts the emu thread.
 
 ## Defaults written on first launch
 
-`SlippiDefaults.java` (DEFAULTS_VERSION=3, auto-rewrites on bump) writes
-opinionated `Dolphin.ini` / `GFX.ini` / `WiimoteNew.ini` / `Logger.ini`
-into `<files>/dolphin/Config/`:
+`SlippiDefaults.java` (auto-rewrites on bump of `DEFAULTS_VERSION`)
+writes opinionated `Dolphin.ini` / `GFX.ini` / `WiimoteNew.ini` /
+`Logger.ini` into `<files>/dolphin/Config/`:
 
-- `GFXBackend=Vulkan` (overridden by launcher pick)
-- `BackendMultithreading=False` — lower input latency on Adreno
-- `EnableGPUTextureDecoding=True` — Adreno R/B-channel + CMPR fix
-- `SlotA=255`, `SerialPort1=255` — disable to keep Slippi EXI on SlotB
-- `SIDevice0=6` (standard pad) — flipped to `12` (GC adapter) at
-  runtime when an adapter is detected.
+- `GFXBackend=Vulkan` — Vulkan is now the default; launcher toggle
+  flips to OGL if needed.
+- `BackendMultithreading=False` — lower input latency on Adreno.
+- `EnableGPUTextureDecoding=True` — Adreno R/B-channel + CMPR fix.
+- `SlotA=255`, `SerialPort1=255` — disable to keep Slippi EXI on SlotB.
+- `SIDevice0..3` — flipped to `12` (GC adapter) at runtime when an
+  adapter is detected, so all four ports route through the WUP-028
+  for local 4-player matches.
 - `SlippiJukeboxEnabled=False` — `cpal` SIGABRTs on Android.
 - `TimingVariance=8` — slightly looser frame pacing for the Thor's
   scheduler.
+
+Calibration defaults (per-stick, applied even with no saved profile):
+- Main stick: deadzone 2%, curve 1.5
+- C-stick: deadzone 10%, curve 2.0
+
+## Input pipeline (where the code lives)
+
+- **Built-in / Bluetooth pad**: Android `MotionEvent` →
+  `EmulationActivity.dispatchGenericMotionEvent` →
+  `StickCalibration.apply` → `NativeLibrary.SetPadOverride` →
+  `SI_PadOverride::Get` (called from
+  `SI_DeviceGCController::GetPadStatus` and
+  `NetPlayClient::GetNetPads`). Bypasses Dolphin's
+  ControllerEmu/AnalogStick deadzone math.
+- **Built-in pad with kernel-readable evdev**: a raw-input provider
+  reads `/dev/input/event*` directly (when permission allows), so we
+  see kernel int16 values instead of Android's already-normalized
+  MotionEvent floats — useful when the device firmware saturates
+  early.
+- **GC adapter (WUP-028)**: USB → `Java_GCAdapter.java` (async
+  `UsbRequest` pipeline) → `GCAdapter_Android.cpp::Input` →
+  `ApplyStickCalibration` + `ApplyButtonRemap` (per-port atomic
+  tables) → emulator.
+
+## Calibration + remap UI
+
+- `CalibrationActivity` — single-screen wizard with a live
+  `StickPreviewView` (raw + calibrated dots, captured-range box,
+  octagonal gate). Per-stick edit state with a "touched" flag so a
+  single Save commits both sticks when both have been adjusted.
+- `ButtonMapActivity` — list-style remapper with color-coded GC
+  glyphs. Listen-mode dialog intercepts keys via OnKeyListener
+  (built-in pad) or polls `GCAdapter::GetLatestRawButtons` (adapter).
+  Saves per-device; multi-bind is supported.
+- Both wizards are reachable per-controller-port (built-in, adapter
+  port 1-4) so each player in a 4-controller local match can tune
+  their own controls independently.
 
 ## Known untested / probably-broken bits
 
 - JIT memory allocation under Android's W^X — `MemoryUtil.cpp` still
   uses `PROT_READ|PROT_WRITE|PROT_EXEC` mmap. Works on app-private
   anonymous maps through Android 14; future versions may restrict.
-- On-screen touch overlay has not had device QA yet. Use the launcher
-  **Touch controls** link to edit layout, or build with
-  `-PforceTouchControls=true` to force it visible on handhelds with
-  built-in controls.
-- First boot of a new game compiles a few hundred shaders (~5–10s on
+- On-screen touch overlay has not had device QA yet. Use the
+  launcher **Touch controls** link to edit layout, or build with
+  `-PforceTouchControls=true` to force it visible on handhelds that
+  also have built-in controls.
+- First boot of a new game compiles ~hundreds of shaders (~5–10s on
   Adreno 740) before the first frame.
 - Audio backend hasn't been latency-tuned.
-- Linux build hosts: the gradle config hard-codes `aarch64-apple-darwin`
-  in the rustup path resolution. Edit `Source/Android/app/build.gradle`
-  line ~32 if you're on Linux.
+- Linux build hosts: the gradle config hard-codes
+  `aarch64-apple-darwin` in the rustup path resolution. Edit
+  `Source/Android/app/build.gradle` around line ~32 if you're on
+  Linux.
 
 ## What changed vs upstream Slippi/Ishiiruka
 
 See `git log android-port` for the full series. Highlights:
 
 - `Source/Android/` — completely rewritten: AGP 8.3.2, AndroidX,
-  Kotlin-free Java launcher (MainActivity + EmulationActivity + a
-  one-screen Material 3 setup card flow).
-- `CMakeLists.txt` — Slippi Rust extensions imported once at the top so
-  the Android JNI build can link them (previously only DolphinWX did).
+  Kotlin-free Java launcher with one-screen Material 3 cards
+  (`MainActivity`, `EmulationActivity`, `SlippiLoginActivity`,
+  `CalibrationActivity`, `ButtonMapActivity`, `TouchOverlayActivity`).
+- `CMakeLists.txt` — Slippi Rust extensions imported once at the top
+  so the Android JNI build can link them (previously only DolphinWX
+  did).
 - `Source/Core/VideoCommon/PostProcessing.cpp` — Adreno GLSL ES
   parser-quirk workarounds (function-vs-macro for parameterless
   helpers, hoisted bicubic forward-decl, float literals).
-- `Source/Core/VideoCommon/TextureDecoder_Generic.cpp` — added; gates
-  the SSE-only decoder paths so ARM64 builds aren't missing a TU.
+- `Source/Core/VideoCommon/TextureDecoder_Generic.cpp` — added;
+  gates the SSE-only decoder paths so ARM64 builds aren't missing a
+  TU.
 - `Source/Core/VideoBackends/Vulkan/VulkanContext.cpp` — gate BC/DXT
   texture format support on `features.textureCompressionBC` (fixes
   CMPR colored squares on Adreno).
-- `Source/Core/VideoBackends/Vulkan/SwapChain.cpp` — drop swapchain
+- `Source/Core/VideoBackends/Vulkan/SwapChain.cpp` — drop swap chain
   depth to `minImageCount` for IMMEDIATE mode latency.
 - `Source/Core/Common/StringUtil.cpp` — Android iconv can't open
   CP1252 / SJIS converters; `MinimalSJISToUTF8` and
@@ -181,18 +228,25 @@ See `git log android-port` for the full series. Highlights:
 - `Source/Core/Common/FileUtil.cpp` — `GetSysDirectory()` on Android
   returns `<files>/Sys/` instead of the hardcoded
   `/sdcard/dolphin-emu/`.
-- `Source/Core/InputCommon/GCAdapter_Android.cpp` — async-`UsbRequest`
-  read pipeline, big-core `sched_setaffinity`, fixed memcpy buffer
-  bound that was overflowing the 37-byte payload.
+- `Source/Core/HW/SI_DeviceGCController.cpp` +
+  `Source/Core/NetPlayClient.cpp` — per-port `SI_PadOverride` lets
+  the Android launcher push already-calibrated GC pad bytes
+  straight into the SI layer, bypassing ControllerEmu's half-axis
+  arithmetic (which doubled inputs in the touchscreen-device case).
+- `Source/Core/InputCommon/GCAdapter_Android.cpp` — async
+  `UsbRequest` read pipeline, big-core `sched_setaffinity`, fixed
+  memcpy buffer bound that was overflowing the 37-byte payload,
+  per-port atomic stick calibration + button remap.
 - `Source/Android/app/src/main/java/.../utils/Java_GCAdapter.java` —
   pre-queued `UsbRequest`s, hot-plug intent filter, faster polling.
-- `Source/Android/jni/MainAndroid.cpp` — `PinEmuThreadToPerformanceCores()`
-  + JNI hook for `PerformanceHintManager` session.
+- `Source/Android/jni/MainAndroid.cpp` —
+  `PinEmuThreadToPerformanceCores()`, JNI for
+  `PerformanceHintManager`, raw evdev reader for the built-in pad.
 - `Source/Core/PowerPC/JitArm64/*.cpp`, `Arm64Emitter.cpp` — emitter
   patches from `connoranastasio/Ishiiruka-rocknix` to make JitArm64
   build under modern Clang.
-- `Externals/libpng/CMakeLists.txt` — `PNG_ARM_NEON_OPT=0` (no arm/*.c
-  sources in this vendored copy of libpng).
+- `Externals/libpng/CMakeLists.txt` — `PNG_ARM_NEON_OPT=0` (no
+  arm/*.c sources in this vendored copy of libpng).
 - `Externals/SlippiRustExtensions` (submodule) — Android logger that
   installs a panic hook routing `__android_log_write` to the
   `SlippiRust` tag.
