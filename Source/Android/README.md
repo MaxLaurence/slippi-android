@@ -126,6 +126,10 @@ $ADB devices                   # confirm
    tuned to work without ever running the wizards.
 5. **Play** — launches `EmulationActivity`, which gives a
    `SurfaceView` to the chosen backend and starts the emu thread.
+6. **Replays** — `▶ REPLAYS` opens `ReplayListActivity`. Netplay
+   matches auto-save to `<files>/dolphin/Slippi/Replays/`; the same
+   folder is the importer destination and the browser's source of
+   truth. See **Replay playback** below.
 
 ## Defaults written on first launch
 
@@ -144,6 +148,13 @@ writes opinionated `Dolphin.ini` / `GFX.ini` / `WiimoteNew.ini` /
 - `SlippiJukeboxEnabled=False` — `cpal` SIGABRTs on Android.
 - `TimingVariance=8` — slightly looser frame pacing for the Thor's
   scheduler.
+- `SlippiSaveReplays=True` + `SlippiReplayDir=<files>/dolphin/Slippi/Replays`
+  + `SlippiReplayMonthFolders=False` — auto-save netplay `.slp` files
+  into the directory the in-app browser scans. `MonthFolders=False`
+  keeps the dir flat so listing is one `File.listFiles` call. The
+  `SlippiReplayDir` value is the only Dolphin.ini key that's not
+  canned — it gets the absolute path substituted at write time in
+  `SlippiDefaults.writeIfMissing(File, Context)`.
 
 Calibration defaults (per-stick, applied even with no saved profile):
 - Main stick: deadzone 2%, curve 1.5
@@ -168,6 +179,109 @@ Calibration defaults (per-stick, applied even with no saved profile):
   raw GameCube stick bytes + `ApplyButtonRemap` (per-port atomic
   button table) → emulator. App-level stick calibration is not applied
   to GC adapter controllers.
+
+## Replay playback
+
+PC Slippi drives replay playback through a JSON config polled by
+`SlippiReplayComm`, whose path lives in `SConfig::m_strSlippiInput`.
+The C++ machinery (`Source/Core/Core/Slippi/SlippiPlayback.{h,cpp}` +
+`SlippiReplayComm.{h,cpp}` + `SlippiGameFileLoader.{h,cpp}` +
+`SlippiLib`) is reused as-is — we only added the Android wiring.
+
+**Where it lives** (`Source/Android/app/src/main/java/.../replay/`):
+
+- `ReplayConfig` — knows the on-device paths (`Slippi/playback.json`,
+  `Slippi/Replays/`) and writes the playback JSON. Per-launch
+  `commandId` is the `isNewReplay()` discriminator — without it,
+  replaying the same `.slp` twice would be a no-op.
+- `ReplayMetadata` — pure-Java `.slp` header parser using
+  `RandomAccessFile`. Reads the first ~600 bytes (UBJSON preamble +
+  `EVENT_GAME_INIT` 0x36, 320 bytes per `SlippiLib/SlippiGame.h`
+  `asmEvents` map → stage id, per-port `characterId/characterColor/
+  playerType/displayName/connectCode`) and the tail metadata block
+  (`startAt` ISO 8601, `lastFrame`). Cached by `(file, mtime, size)`.
+- `ReplayStore` — owns the replay directory: `list()`, `delete`,
+  `deleteOlderThan`, `deleteAll`, `totalSize`, `count`. All
+  filesystem mutation goes through here so the activity has no
+  scattered `File.delete` calls.
+- `GeckoOverride` — swaps the netplay codeset for the playback
+  codeset at launch. Slippi's gecko codes differ between live and
+  replay modes (playback needs the frame-walk + savestate codes that
+  netplay specifically *omits*); on PC this is handled by the
+  separate Playback Dolphin binary, but we share one binary so the
+  swap is done in Java before `Run()`.
+
+**Activities:**
+
+- `ReplayListActivity` — `RecyclerView` of rows from `ReplayStore`.
+  Top-bar overflow has `Import .slp`, `Delete older than 7/30 days`,
+  `Delete all` (all gated behind Material confirm dialogs).
+  Per-row 3-dot menu has `Play`, `Delete`, `Share`. Long-press
+  enters multi-select ActionMode. The `Share` action returns a
+  `content://` URI through the FileProvider declared in
+  `AndroidManifest.xml` (rooted at `<files>/dolphin/Slippi/Replays/`,
+  paths file in `res/xml/file_provider_paths.xml`).
+- `EmulationActivity` accepts `EXTRA_REPLAY_PATH`. When present, it
+  writes `playback.json` via `ReplayConfig.writeNormal`, calls
+  `NativeLibrary.SetSlippiInputPath(...)` with the absolute JSON
+  path, and toggles the `ReplayHudView` visible. When absent it
+  writes an empty JSON to neutralize any stale file from the prior
+  session — belt-and-suspenders against the polling loop
+  re-triggering playback in live mode.
+
+**HUD** (`ReplayHudView`, layout `view_replay_hud.xml`):
+Play/pause, ±5s jump, scrubbable `SeekBar` from `GAME_FIRST_FRAME`
+(-123) to `latestFrame`, FFW toggle, "current / latest" readout.
+30Hz polling of `NativeLibrary.GetReplayCurrentFrame` /
+`GetReplayLatestFrame`. Shows "Loading…" while
+`currentPlaybackFrame == INT_MIN` — that's the gap between
+`Run()` and `g_playbackStatus->startThreads()`, which only fires
+after Melee's Slippi mod issues `CMD_PREPARE_REPLAY` (a few
+seconds in). `TouchControlOverlayView` is force-hidden in replay
+mode — no virtual pad needed when you're just watching.
+
+**JNI surface** (`Source/Android/jni/MainAndroid.cpp`):
+
+- `SetSlippiInputPath(jstring)` / `ClearSlippiInputPath()` — assign
+  `SConfig::m_strSlippiInput` under `s_host_identity_lock`. This is
+  the *only* trigger needed; the C++ side polls the file thereafter.
+- `GetReplayLatestFrame()` / `GetReplayCurrentFrame()` — read
+  `g_playbackStatus->{latestFrame, currentPlaybackFrame}`. Return
+  `INT_MIN` when `g_playbackStatus` is null (i.e. pre-BootCore).
+- `SetReplayTargetFrame(jint)` — write `g_playbackStatus->targetFrameNum`;
+  the seek thread polls it (~8ms) and resets after acting.
+- `SetReplayJump(jboolean forward)` — sets `shouldJumpForward` or
+  `shouldJumpBack`; same fire-and-forget contract.
+- `SetReplaySpeedMode(jint)` — 0 = normal, 1 = hard FFW. Wraps
+  `setHardFFW()`, which snapshots `SConfig::m_OCEnable/m_OCFactor`
+  and toggles them to `(true, 4.0f)`. `EmulationActivity.onDestroy`
+  force-clears speed mode 0 in replay mode so a force-kill mid-FFW
+  doesn't persist OC settings to disk.
+
+**C++ side delta** (deliberately minimal):
+
+- `SlippiPlayback.cpp` constructor: the `#ifdef IS_PLAYBACK` gating
+  `generateDenylist()` + `generateLegacyCodelist()` is now
+  `#if defined(IS_PLAYBACK) || defined(ANDROID)`. Android compiles
+  the netplay binary (no `IS_PLAYBACK`) but enters playback at
+  runtime, so it needs the pre-3.0 codelist data too. Adds a tiny
+  cold-init cost (~50–200ms) when `CEXISlippi` is first
+  constructed; trivial vs the savestate thread spin-up that follows.
+
+**Pitfalls (real ones we hit):**
+
+- `g_playbackStatus` is constructed in `CEXISlippi::CEXISlippi()` and
+  destroyed in `~CEXISlippi`. So between two replay sessions the
+  state resets, but JNI getters must null-check — calling them
+  before BootCore returns nonsense otherwise.
+- `m_strSlippiInput` is in-memory only (not INI-backed), so we
+  re-set it every `EmulationActivity.onCreate` rather than assume
+  process state.
+- `commandId` must change per launch. `ReplayConfig.writeNormal`
+  uses `System.currentTimeMillis()` — sufficient at the human
+  re-tap rate.
+- The seek thread's pause/resume can cause brief OpenSLES audio
+  underruns. Documented; tolerable on Thor.
 
 ## Raw stick input providers
 

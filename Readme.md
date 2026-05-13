@@ -11,7 +11,10 @@ recent aarch64 Android devices with Adreno or comparable GPUs.
 > controls. Sign-in is handled by the official slippi.gg flow embedded
 > in the launcher; the calibration wizard lets you tune stick deadzone
 > and response curve per-stick and per-controller-port; on-device
-> button remap is in. Vulkan is the default graphics backend.
+> button remap is in. Vulkan is the default graphics backend. Full
+> Slippi replay support too — netplay matches auto-save to the device,
+> and an in-app browser lets you watch them with a touch-friendly
+> seek / pause / fast-forward HUD.
 >
 > This is a personal / hobbyist port — no warranty, no auto-update
 > channel; treat it as such.
@@ -47,7 +50,10 @@ For the official desktop launcher, go to https://slippi.gg.
      the wizard.
    - (Optional) **🎮 Remap buttons** — per-device and per-adapter-port
      button mapping with a color-coded GC layout.
-   - Tap **PLAY**.
+   - Tap **PLAY** for a live match, or **▶ REPLAYS** to browse + watch
+     saved `.slp` files (importer + bulk-delete + share are in the
+     browser). Netplay matches auto-save into the browser; the toggle
+     is on the launcher next to the sign-in card.
 
 ## What works
 
@@ -69,6 +75,14 @@ For the official desktop launcher, go to https://slippi.gg.
   player in a 4-controller local match can tune their own stick).
 - Raw evdev stick read on supported devices (bypasses
   MotionEvent saturation when the Android driver clips early).
+- **Replay browser + playback** — every netplay match auto-saves to
+  `<app-files>/dolphin/Slippi/Replays/` (toggle on the launcher).
+  In-app browser parses each `.slp` for stage, characters, duration,
+  date and shows them in a sortable list. Tap a row to watch; the HUD
+  gives you play / pause, ±5s jump, scrubbable seek bar, and a
+  fast-forward toggle. Bulk delete (older than 7 / 30 days, or all),
+  per-row delete, and Android-share-sheet export for sending `.slp`
+  files to other apps.
 - Vulkan swap chain depth tuned for low latency on Adreno; emulator
   thread pinned to performance cores; `PerformanceHintManager`
   session hints the SoC scheduler to 60Hz cadence.
@@ -82,7 +96,6 @@ For the official desktop launcher, go to https://slippi.gg.
 - Slippi Jukebox (in-game music) is force-disabled because the Rust
   `cpal` Android backend SIGABRTs on init; in-engine music still
   plays.
-- Replay viewer / playback UI is not wired through the launcher.
 - First boot of a new game compiles ~hundreds of shaders (~5–10s on
   Adreno 740) before the first frame.
 - macOS hosts assumed for builds; Linux works with a one-line tweak
