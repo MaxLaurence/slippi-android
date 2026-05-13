@@ -1,14 +1,21 @@
 package org.dolphinemu.dolphinemu.activities;
 
+import android.app.GameManager;
 import android.content.pm.ActivityInfo;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.PerformanceHintManager;
+import android.os.Process;
+import android.os.SystemClock;
+import android.provider.Settings;
 import android.util.Log;
+import android.view.Display;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
@@ -36,7 +43,13 @@ import org.dolphinemu.dolphinemu.utils.RawStickState;
 import org.dolphinemu.dolphinemu.views.ReplayHudView;
 import org.dolphinemu.dolphinemu.views.TouchControlOverlayView;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileReader;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.Locale;
+import java.util.Set;
 
 /**
  * Hosts the SurfaceView that the C++ renderer draws into and pumps the
@@ -49,8 +62,29 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     public static final String EXTRA_REPLAY_PATH = "replay_path";
     private static final String TAG = "SlippiEmu";
     private static final boolean INPUT_DIAGNOSTICS = false;
+    private static final boolean LATENCY_TRACE = BuildConfig.DEBUG;
+    private static final long RAW_INPUT_FALLBACK_POLL_MS = 4L;
+    private static final int RAW_INPUT_WAIT_MS = 16;
+    private static final long INPUT_LATENCY_LOG_INTERVAL_MS = 2000L;
+    private static final String SETTING_PEAK_REFRESH_RATE = "peak_refresh_rate";
+    private static final String SETTING_MIN_REFRESH_RATE = "min_refresh_rate";
+    private static final String[] PERF_HINT_THREAD_NAMES = {
+            "CPU thread",
+            "CPU-GPU thread",
+            "Video thread",
+            "AudioTrack",
+            "NetPlay Client",
+            "GC Adapter Read Thread",
+            "GC Adapter Write Thread",
+            "SlippiRawInput"
+    };
 
     private final Handler ui = new Handler(Looper.getMainLooper());
+    private HandlerThread rawInputThread;
+    private Handler rawInputHandler;
+    private volatile boolean rawInputPolling;
+    private volatile int rawInputThreadTid = -1;
+    private long lastInputLatencyLogMs;
 
     // Loaded once at activity create from ControllerProfile. Identity by
     // default until the user runs the calibration wizard from the
@@ -70,22 +104,30 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     private boolean touchOverlayVisible;
     private boolean useGcAdapter;
     private boolean isReplayMode;
+    private String previousPeakRefreshRate;
+    private String previousMinRefreshRate;
+    private boolean refreshRateSettingsSaved;
+    private boolean refreshRateSettingsOverridden;
     private final Runnable rawInputPoll = new Runnable() {
         @Override
         public void run() {
-            if (!shouldPollRawStickSource()) return;
+            if (!rawInputPolling || !shouldPollRawStickSource()) return;
 
-            if (feedRawStickState()) {
+            RawStickState state = rawStickInput != null && rawStickInput.supportsBlockingWait()
+                    ? rawStickInput.waitForSnapshot(RAW_INPUT_WAIT_MS)
+                    : (rawStickInput == null ? null : rawStickInput.snapshot());
+            if (feedRawStickState(state)) {
                 pushPad();
-                ui.postDelayed(this, 8);
+                postRawInputPoll();
                 return;
             }
 
             if (rawStickInput != null && rawStickInput.keepPollingWhenUnavailable()) {
-                ui.postDelayed(this, 8);
+                postRawInputPoll();
                 return;
             }
 
+            rawInputPolling = false;
             mainStickCal = mainStickCal.withOuterScaleEnabled(false);
             cStickCal = cStickCal.withOuterScaleEnabled(false);
             if (rawStickInput != null) {
@@ -93,6 +135,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
                 rawStickInput = null;
             }
             Log.w(TAG, "raw gamepad axes disappeared; falling back to MotionEvent sticks");
+            ui.post(() -> updateTouchOverlayVisibility());
         }
     };
     private final Runnable controllerDetectorPoll = new Runnable() {
@@ -253,7 +296,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
 
     @Override
     protected void onDestroy() {
-        ui.removeCallbacks(rawInputPoll);
+        shutdownRawInputThread();
         ui.removeCallbacks(controllerDetectorPoll);
         if (replayHud != null) replayHud.stopPolling();
         if (isReplayMode) {
@@ -273,7 +316,9 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         } catch (Throwable ignored) {}
         if (rawStickInput != null) {
             rawStickInput.stop();
+            rawStickInput = null;
         }
+        restoreSystemRefreshRateSettings();
         // Idempotent: harmless if onBackPressed already stopped us.
         shutdownEmuThreadSync();
         if (NativeLibrary.sEmulationActivity == this) {
@@ -317,7 +362,8 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         }
         updateTouchOverlayVisibility();
         ui.post(controllerDetectorPoll);
-        if (shouldPollRawStickSource()) ui.post(rawInputPoll);
+        logGameMode();
+        if (shouldPollRawStickSource()) startRawInputPolling();
         if (isReplayMode && replayHud != null) {
             replayHud.setVisibility(View.VISIBLE);
             replayHud.startPolling();
@@ -326,7 +372,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
 
     @Override
     protected void onPause() {
-        ui.removeCallbacks(rawInputPoll);
+        stopRawInputPolling();
         ui.removeCallbacks(controllerDetectorPoll);
         if (replayHud != null) replayHud.stopPolling();
         super.onPause();
@@ -337,19 +383,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
 
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
-        // On Android 11+ tell the system compositor that this surface is a
-        // 60Hz game. With FRAME_RATE_COMPATIBILITY_FIXED_SOURCE the
-        // SurfaceFlinger can pick a display mode that matches without
-        // resampling, which cuts a frame of latency on devices that idle at
-        // 120Hz and would otherwise jitter our 60fps output. The
-        // CHANGE_FRAME_RATE_ALWAYS strategy avoids the 2-second seamless
-        // transition delay so Melee starts at 60Hz right away.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                holder.getSurface().setFrameRate(60f,
-                        android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
-            } catch (IllegalStateException ignored) {}
-        }
+        applyLowLatencySurfaceConfig(holder);
         NativeLibrary.SurfaceChanged(holder.getSurface());
         if (!emuStarted) {
             emuStarted = true;
@@ -360,15 +394,10 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     }
 
     /**
-     * Register an Android PerformanceHintManager session (API 31+) keyed on
-     * the emulation thread's Linux TID, with a 16.6 ms target work duration.
-     * This tells the kernel scheduler "this thread has a hard 60fps deadline"
-     * — without it, the SoC's energy-aware scheduler will sometimes downclock
-     * the big core mid-frame, which surfaces as exactly the "feels like an
-     * extra frame or two of latency" the user reported.
-     *
-     * The emulation thread doesn't call gettid() until it starts running, so
-     * we poll the native getter on the main thread for up to a second.
+     * Register PerformanceHintManager against the native worker threads that
+     * actually carry frame deadlines. The Java Run() entry thread goes idle
+     * after BootCore starts CPU/video/audio workers, so creating the session
+     * too early wastes the hint on the wrong TID.
      */
     private void registerPerfHintWhenReady() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return;
@@ -378,19 +407,196 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         ui.post(new Runnable() {
             int attempts = 0;
             @Override public void run() {
-                int tid = NativeLibrary.GetEmuThreadTid();
-                if (tid <= 0) {
-                    if (++attempts < 100) ui.postDelayed(this, 10);
+                int[] tids = discoverPerfHintThreadTids(/*allowFallback*/ false);
+                if (!hasHotPerfThread()) {
+                    if (++attempts < 250) {
+                        ui.postDelayed(this, 10);
+                        return;
+                    }
+                    tids = discoverPerfHintThreadTids(/*allowFallback*/ true);
+                }
+                if (tids.length == 0) {
                     return;
                 }
                 try {
-                    hintSession = mgr.createHintSession(new int[]{tid}, 16_666_666L);
-                    Log.i(TAG, "PerformanceHintSession created for tid=" + tid);
+                    hintSession = mgr.createHintSession(tids, 16_666_666L);
+                    updatePerfHintThreads();
+                    Log.i(TAG, "PerformanceHintSession created for tids=" + tidsToString(tids));
                 } catch (Throwable t) {
                     Log.w(TAG, "PerformanceHintSession failed: " + t);
                 }
             }
         });
+    }
+
+    private synchronized void updatePerfHintThreads() {
+        if (hintSession == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            return;
+        }
+        int[] tids = discoverPerfHintThreadTids(/*allowFallback*/ true);
+        if (tids.length == 0) {
+            return;
+        }
+        try {
+            hintSession.setThreads(tids);
+            Log.i(TAG, "PerformanceHintSession threads=" + tidsToString(tids));
+        } catch (Throwable t) {
+            Log.w(TAG, "PerformanceHintSession setThreads failed: " + t);
+        }
+    }
+
+    private void applyLowLatencySurfaceConfig(SurfaceHolder holder) {
+        // Melee is a fixed 60Hz workload. Ask SurfaceFlinger to move the
+        // display immediately instead of waiting for a seamless transition.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    holder.getSurface().setFrameRate(60f,
+                            Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
+                            Surface.CHANGE_FRAME_RATE_ALWAYS);
+                } else {
+                    holder.getSurface().setFrameRate(60f,
+                            Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
+                }
+            } catch (IllegalStateException ignored) {
+            }
+        }
+        preferLowLatencyDisplayMode();
+    }
+
+    private void preferLowLatencyDisplayMode() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return;
+        }
+
+        Display display = getWindowManager().getDefaultDisplay();
+        if (display == null) {
+            return;
+        }
+
+        Display.Mode best = null;
+        for (Display.Mode mode : display.getSupportedModes()) {
+            float refresh = mode.getRefreshRate();
+            float multiple = refresh / 60f;
+            float nearestMultiple = Math.round(multiple);
+            if (nearestMultiple < 1f || Math.abs(multiple - nearestMultiple) > 0.02f) {
+                continue;
+            }
+            if (best == null
+                    || refresh > best.getRefreshRate()
+                    || (refresh == best.getRefreshRate()
+                    && mode.getPhysicalWidth() * mode.getPhysicalHeight()
+                    > best.getPhysicalWidth() * best.getPhysicalHeight())) {
+                best = mode;
+            }
+        }
+        if (best == null) {
+            return;
+        }
+
+        WindowManager.LayoutParams attrs = getWindow().getAttributes();
+        if (attrs.preferredDisplayModeId == best.getModeId()) {
+            temporarilyLiftSystemRefreshRateCap(best.getRefreshRate());
+            return;
+        }
+        attrs.preferredDisplayModeId = best.getModeId();
+        getWindow().setAttributes(attrs);
+        Log.i(TAG, "preferred low-latency display mode id=" + best.getModeId()
+                + " refresh=" + best.getRefreshRate()
+                + " size=" + best.getPhysicalWidth() + "x" + best.getPhysicalHeight());
+        temporarilyLiftSystemRefreshRateCap(best.getRefreshRate());
+    }
+
+    private void temporarilyLiftSystemRefreshRateCap(float targetRefreshRate) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || targetRefreshRate < 61f) {
+            return;
+        }
+
+        String currentPeak = Settings.System.getString(getContentResolver(), SETTING_PEAK_REFRESH_RATE);
+        String currentMin = Settings.System.getString(getContentResolver(), SETTING_MIN_REFRESH_RATE);
+        if (!Settings.System.canWrite(this)) {
+            Log.w(TAG, "WRITE_SETTINGS not granted; system refresh caps remain peak="
+                    + currentPeak + " min=" + currentMin
+                    + " while app requested " + targetRefreshRate + "Hz");
+            return;
+        }
+
+        if (!refreshRateSettingsSaved) {
+            previousPeakRefreshRate = currentPeak;
+            previousMinRefreshRate = currentMin;
+            refreshRateSettingsSaved = true;
+        }
+
+        boolean peakAllowed = settingRefreshAtLeast(currentPeak, targetRefreshRate);
+        boolean minAllowed = settingRefreshAtLeast(currentMin, targetRefreshRate);
+        boolean wrote = false;
+        if (!peakAllowed) {
+            wrote |= putSystemRefreshRateSetting(SETTING_PEAK_REFRESH_RATE,
+                    formatRefreshRate(targetRefreshRate));
+        }
+        if (!minAllowed) {
+            wrote |= putSystemRefreshRateSetting(SETTING_MIN_REFRESH_RATE,
+                    formatRefreshRate(targetRefreshRate));
+        }
+        if (wrote) {
+            refreshRateSettingsOverridden = true;
+            Log.i(TAG, "temporarily lifted system refresh caps to " + targetRefreshRate
+                    + "Hz (previous peak=" + previousPeakRefreshRate
+                    + " min=" + previousMinRefreshRate + ")");
+        } else if (!peakAllowed || !minAllowed) {
+            Log.w(TAG, "system refresh caps still block " + targetRefreshRate
+                    + "Hz (peak=" + currentPeak + " min=" + currentMin + ")");
+        } else {
+            Log.i(TAG, "system refresh caps already allow " + targetRefreshRate
+                    + "Hz (peak=" + currentPeak + " min=" + currentMin + ")");
+        }
+    }
+
+    private boolean settingRefreshAtLeast(String value, float targetRefreshRate) {
+        try {
+            return value != null && Float.parseFloat(value) >= targetRefreshRate - 0.5f;
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
+    }
+
+    private String formatRefreshRate(float refreshRate) {
+        return String.format(Locale.US, "%.1f", refreshRate);
+    }
+
+    private boolean putSystemRefreshRateSetting(String key, String value) {
+        try {
+            return Settings.System.putString(getContentResolver(), key, value);
+        } catch (Throwable t) {
+            Log.w(TAG, "system refresh cap write blocked for " + key + "=" + value
+                    + ": " + t);
+            return false;
+        }
+    }
+
+    private void restoreSystemRefreshRateSettings() {
+        if (!refreshRateSettingsOverridden || !Settings.System.canWrite(this)) {
+            return;
+        }
+        putSystemRefreshRateSetting(SETTING_PEAK_REFRESH_RATE, previousPeakRefreshRate);
+        putSystemRefreshRateSetting(SETTING_MIN_REFRESH_RATE, previousMinRefreshRate);
+        Log.i(TAG, "restored system refresh caps peak=" + previousPeakRefreshRate
+                + " min=" + previousMinRefreshRate);
+        refreshRateSettingsOverridden = false;
+    }
+
+    private void logGameMode() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            return;
+        }
+        try {
+            GameManager manager = getSystemService(GameManager.class);
+            if (manager != null) {
+                Log.i(TAG, "Android game mode=" + manager.getGameMode());
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "GameMode query failed: " + t);
+        }
     }
 
     @Override
@@ -417,7 +623,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
      * handles both.
      */
 
-    private void pushPad() {
+    private synchronized void pushPad() {
         padState.pushToNative();
     }
 
@@ -426,6 +632,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         if (useGcAdapter) {
             return super.dispatchKeyEvent(event);
         }
+        traceInputEvent("key", event.getEventTime(), 0);
         int action = event.getAction();
         int keyCode = event.getKeyCode();
         int bit = mapKeyToGcBit(keyCode);
@@ -452,6 +659,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         if (useGcAdapter) {
             return super.dispatchGenericMotionEvent(ev);
         }
+        traceInputEvent("motion", ev.getEventTime(), ev.getHistorySize());
         if (!shouldPollRawStickSource()) {
             // Main + C stick: pair-wise calibration then convert to GC byte
             // space (center 128, swing ±127). GC Y is inverted relative to
@@ -482,13 +690,13 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     }
 
     private long lastFeedLog = 0;
-    private void feedStickPairToBytes(MotionEvent ev, int androidAxisX, int androidAxisY,
+    private synchronized void feedStickPairToBytes(MotionEvent ev, int androidAxisX, int androidAxisY,
                                       StickCalibration cal, boolean invertY, boolean main) {
         feedStickPairToBytes(ev.getAxisValue(androidAxisX), ev.getAxisValue(androidAxisY),
                 cal, invertY, main);
     }
 
-    private void feedStickPairToBytes(float rawX, float rawY,
+    private synchronized void feedStickPairToBytes(float rawX, float rawY,
                                       StickCalibration cal, boolean invertY, boolean main) {
         cal.apply(rawX, rawY, stickOut);
         float fx = stickOut.x;
@@ -518,15 +726,11 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         }
     }
 
-    private boolean feedRawStickState() {
-        if (rawStickInput == null) {
-            return false;
-        }
-
-        RawStickState state = rawStickInput.snapshot();
+    private synchronized boolean feedRawStickState(RawStickState state) {
         if (state == null) {
             return false;
         }
+
         boolean fed = false;
         Float mainX = state.valueForAxis(MotionEvent.AXIS_X);
         Float mainY = state.valueForAxis(MotionEvent.AXIS_Y);
@@ -553,6 +757,174 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         return !useGcAdapter && hasRawStickSource() && !BuildConfig.FORCE_TOUCH_CONTROLS;
     }
 
+    private void startRawInputPolling() {
+        if (!shouldPollRawStickSource()) {
+            return;
+        }
+        ensureRawInputThread();
+        Handler handler = rawInputHandler;
+        if (handler == null) {
+            return;
+        }
+        rawInputPolling = true;
+        handler.removeCallbacks(rawInputPoll);
+        handler.post(rawInputPoll);
+        updatePerfHintThreads();
+    }
+
+    private void stopRawInputPolling() {
+        rawInputPolling = false;
+        Handler handler = rawInputHandler;
+        if (handler != null) {
+            handler.removeCallbacks(rawInputPoll);
+        }
+        updatePerfHintThreads();
+    }
+
+    private void shutdownRawInputThread() {
+        stopRawInputPolling();
+        HandlerThread thread = rawInputThread;
+        rawInputThread = null;
+        rawInputHandler = null;
+        rawInputThreadTid = -1;
+        if (thread != null) {
+            thread.quitSafely();
+            try {
+                thread.join(500);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    private void ensureRawInputThread() {
+        if (rawInputThread != null && rawInputThread.isAlive()) {
+            return;
+        }
+        rawInputThread = new HandlerThread("SlippiRawInput",
+                Process.THREAD_PRIORITY_URGENT_DISPLAY);
+        rawInputThread.start();
+        rawInputHandler = new Handler(rawInputThread.getLooper());
+        rawInputHandler.post(() -> {
+            rawInputThreadTid = Process.myTid();
+            try {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY);
+            } catch (Throwable t) {
+                Log.w(TAG, "raw input priority failed: " + t);
+            }
+            Log.i(TAG, "raw input thread tid=" + rawInputThreadTid
+                    + " blocking=" + (rawStickInput != null && rawStickInput.supportsBlockingWait())
+                    + " waitMs=" + RAW_INPUT_WAIT_MS
+                    + " fallbackPollMs=" + RAW_INPUT_FALLBACK_POLL_MS);
+            updatePerfHintThreads();
+        });
+    }
+
+    private void postRawInputPoll() {
+        Handler handler = rawInputHandler;
+        if (handler != null && rawInputPolling) {
+            if (rawStickInput != null && rawStickInput.supportsBlockingWait()) {
+                handler.post(rawInputPoll);
+            } else {
+                handler.postDelayed(rawInputPoll, RAW_INPUT_FALLBACK_POLL_MS);
+            }
+        }
+    }
+
+    private int[] discoverPerfHintThreadTids(boolean allowFallback) {
+        Set<Integer> tids = new LinkedHashSet<>();
+        File taskDir = new File("/proc/self/task");
+        File[] taskFiles = taskDir.listFiles();
+        if (taskFiles != null) {
+            for (File task : taskFiles) {
+                int tid;
+                try {
+                    tid = Integer.parseInt(task.getName());
+                } catch (NumberFormatException ignored) {
+                    continue;
+                }
+                String comm = readThreadComm(task);
+                if (comm == null) {
+                    continue;
+                }
+                for (String wanted : PERF_HINT_THREAD_NAMES) {
+                    if (wanted.equals(comm)) {
+                        tids.add(tid);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (rawInputThreadTid > 0 && shouldPollRawStickSource()) {
+            tids.add(rawInputThreadTid);
+        }
+        if (allowFallback) {
+            int emuTid = NativeLibrary.GetEmuThreadTid();
+            if (emuTid > 0) {
+                tids.add(emuTid);
+            }
+        }
+
+        ArrayList<Integer> list = new ArrayList<>(tids);
+        int[] result = new int[list.size()];
+        for (int i = 0; i < list.size(); i++) {
+            result[i] = list.get(i);
+        }
+        return result;
+    }
+
+    private boolean hasHotPerfThread() {
+        File[] taskFiles = new File("/proc/self/task").listFiles();
+        if (taskFiles == null) {
+            return false;
+        }
+        for (File task : taskFiles) {
+            String comm = readThreadComm(task);
+            if ("CPU thread".equals(comm) || "CPU-GPU thread".equals(comm)
+                    || "Video thread".equals(comm)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String readThreadComm(File taskDir) {
+        File comm = new File(taskDir, "comm");
+        try (BufferedReader reader = new BufferedReader(new FileReader(comm))) {
+            return reader.readLine();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String tidsToString(int[] tids) {
+        StringBuilder builder = new StringBuilder();
+        builder.append('[');
+        for (int i = 0; i < tids.length; i++) {
+            if (i > 0) builder.append(',');
+            builder.append(tids[i]);
+        }
+        builder.append(']');
+        return builder.toString();
+    }
+
+    private void traceInputEvent(String source, long eventTimeMs, int historySize) {
+        if (!LATENCY_TRACE) {
+            return;
+        }
+        long now = SystemClock.uptimeMillis();
+        if (now - lastInputLatencyLogMs < INPUT_LATENCY_LOG_INTERVAL_MS) {
+            return;
+        }
+        lastInputLatencyLogMs = now;
+        Log.i(TAG, "inputTrace source=" + source
+                + " eventAgeMs=" + Math.max(0L, now - eventTimeMs)
+                + " history=" + historySize
+                + " rawPolling=" + rawInputPolling
+                + " rawSource=" + rawSourceLabel());
+    }
+
     private void updateTouchOverlayVisibility() {
         if (touchOverlay == null) return;
         // Replay mode has no input; show the playback HUD instead of the
@@ -573,11 +945,11 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         touchOverlay.setControlsEnabled(show);
         touchOverlay.setVisibility(show ? View.VISIBLE : View.GONE);
         if (show) {
-            ui.removeCallbacks(rawInputPoll);
+            stopRawInputPolling();
             padState.reset();
             pushPad();
         } else if (shouldPollRawStickSource()) {
-            ui.post(rawInputPoll);
+            startRawInputPolling();
         }
         Log.i(TAG, "touch controls " + (show ? "shown" : "hidden")
                 + " force=" + BuildConfig.FORCE_TOUCH_CONTROLS

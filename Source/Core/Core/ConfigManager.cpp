@@ -353,6 +353,7 @@ void SConfig::SaveDSPSettings(IniFile &ini)
 	dsp->Set("DumpAudioSilent", m_DumpAudioSilent);
 	dsp->Set("DumpUCode", m_DumpUCode);
 	dsp->Set("Backend", sBackend);
+	dsp->Set("AndroidAudioBufferBursts", iAndroidAudioBufferBursts);
 	dsp->Set("Volume", m_Volume);
 	dsp->Set("CaptureLog", m_DSPCaptureLog);
 }
@@ -731,10 +732,11 @@ void SConfig::LoadDSPSettings(IniFile &ini)
 #elif defined _WIN32
 	dsp->Get("Backend", &sBackend, BACKEND_CUBEB);
 #elif defined ANDROID
-	dsp->Get("Backend", &sBackend, BACKEND_OPENSLES);
+	dsp->Get("Backend", &sBackend, BACKEND_OBOE);
 #else
 	dsp->Get("Backend", &sBackend, BACKEND_NULLSOUND);
 #endif
+	dsp->Get("AndroidAudioBufferBursts", &iAndroidAudioBufferBursts, 4);
 	dsp->Get("Volume", &m_Volume, 25);
 	dsp->Get("CaptureLog", &m_DSPCaptureLog, false);
 
@@ -860,6 +862,7 @@ void SConfig::LoadDefaults()
 	bTimeStretching = false;
 	bRSHACK = false;
 	iLatency = 14;
+	iAndroidAudioBufferBursts = 4;
 
 	iPosX = INT_MIN;
 	iPosY = INT_MIN;

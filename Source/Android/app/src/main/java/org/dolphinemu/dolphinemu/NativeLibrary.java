@@ -106,6 +106,13 @@ public final class NativeLibrary {
     public static native float[] PollRawGamepadAxes();
 
     /**
+     * Blocks in native evdev until a raw-axis event is available or the
+     * timeout expires, then returns the latest normalized axes. This lets the
+     * input thread sleep in poll(2) instead of waking every millisecond.
+     */
+    public static native float[] WaitRawGamepadAxes(int timeoutMs);
+
+    /**
      * Push an already-calibrated GC controller state into the SI
      * pipeline. Bypasses ControllerEmu entirely — values land directly
      * in SI_DeviceGCController::GetPadStatus. Use this whenever the

@@ -31,7 +31,7 @@ public final class GameCubePadState {
         this.port = port;
     }
 
-    public void reset() {
+    public synchronized void reset() {
         buttons = 0;
         stickX = 128;
         stickY = 128;
@@ -49,7 +49,7 @@ public final class GameCubePadState {
         meleeCY = 0f;
     }
 
-    public void setButton(int gcBit, boolean pressed) {
+    public synchronized void setButton(int gcBit, boolean pressed) {
         if (gcBit == 0) return;
         if (pressed) {
             buttons |= gcBit;
@@ -59,28 +59,28 @@ public final class GameCubePadState {
         syncTriggerBytes();
     }
 
-    public void setDirectionalButtons(boolean up, boolean down, boolean left, boolean right) {
+    public synchronized void setDirectionalButtons(boolean up, boolean down, boolean left, boolean right) {
         setButton(ButtonMap.GC_BTN_UP, up);
         setButton(ButtonMap.GC_BTN_DOWN, down);
         setButton(ButtonMap.GC_BTN_LEFT, left);
         setButton(ButtonMap.GC_BTN_RIGHT, right);
     }
 
-    public void setHat(float x, float y) {
+    public synchronized void setHat(float x, float y) {
         setDirectionalButtons(y < -0.5f, y > 0.5f, x < -0.5f, x > 0.5f);
     }
 
-    public void setAnalogTriggerL(float value) {
+    public synchronized void setAnalogTriggerL(float value) {
         analogTriggerL = clampByteFromUnit(value);
         syncTriggerBytes();
     }
 
-    public void setAnalogTriggerR(float value) {
+    public synchronized void setAnalogTriggerR(float value) {
         analogTriggerR = clampByteFromUnit(value);
         syncTriggerBytes();
     }
 
-    public void setMainStick(float x, float y) {
+    public synchronized void setMainStick(float x, float y) {
         float cx = clampUnit(x);
         float cy = clampUnit(y);
         stickX = stickByteFromUnit(cx);
@@ -89,7 +89,7 @@ public final class GameCubePadState {
         meleeMainY = cy;
     }
 
-    public void setCStick(float x, float y) {
+    public synchronized void setCStick(float x, float y) {
         float cx = clampUnit(x);
         float cy = clampUnit(y);
         substickX = stickByteFromUnit(cx);
@@ -98,15 +98,15 @@ public final class GameCubePadState {
         meleeCY = cy;
     }
 
-    public void setMainStickCentered() {
+    public synchronized void setMainStickCentered() {
         setMainStick(0f, 0f);
     }
 
-    public void setCStickCentered() {
+    public synchronized void setCStickCentered() {
         setCStick(0f, 0f);
     }
 
-    public void pushToNative() {
+    public synchronized void pushToNative() {
         NativeLibrary.SetPadOverride(port, buttons,
                 stickX, stickY, substickX, substickY,
                 triggerL, triggerR, analogA, analogB);

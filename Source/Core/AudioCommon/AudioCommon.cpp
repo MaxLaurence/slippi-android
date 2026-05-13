@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include "AudioCommon/AudioCommon.h"
+#include "AudioCommon/AAudioStream.h"
 #include "AudioCommon/AOSoundStream.h"
 #include "AudioCommon/AlsaSoundStream.h"
 #include "AudioCommon/CoreAudioSoundStream.h"
@@ -10,6 +11,7 @@
 #include "AudioCommon/DSoundStream.h"
 #include "AudioCommon/Mixer.h"
 #include "AudioCommon/NullSoundStream.h"
+#include "AudioCommon/OboeStream.h"
 #include "AudioCommon/OpenALStream.h"
 #include "AudioCommon/OpenSLESStream.h"
 #include "AudioCommon/PulseAudioStream.h"
@@ -66,6 +68,10 @@ void InitSoundStream(void *hWnd)
 		g_sound_stream = std::make_unique<CoreAudioSound>();
 	else if (backend == BACKEND_PULSEAUDIO && PulseAudio::isValid())
 		g_sound_stream = std::make_unique<PulseAudio>();
+	else if (backend == BACKEND_OBOE && OboeSoundStream::isValid())
+		g_sound_stream = std::make_unique<OboeSoundStream>();
+	else if (backend == BACKEND_AAUDIO && AAudioSoundStream::isValid())
+		g_sound_stream = std::make_unique<AAudioSoundStream>();
 	else if (backend == BACKEND_OPENSLES && OpenSLESStream::isValid())
 		g_sound_stream = std::make_unique<OpenSLESStream>();
 
@@ -79,10 +85,24 @@ void InitSoundStream(void *hWnd)
 
 	if (!g_sound_stream->Start())
 	{
-		ERROR_LOG(AUDIO, "Could not start backend %s, using %s instead", backend.c_str(), BACKEND_NULLSOUND);
+		ERROR_LOG(AUDIO, "Could not start backend %s", backend.c_str());
+		g_sound_stream.reset();
 
-		g_sound_stream = std::make_unique<NullSound>();
-		g_sound_stream->Start();
+		if (backend != BACKEND_OPENSLES && OpenSLESStream::isValid())
+		{
+			ERROR_LOG(AUDIO, "Trying fallback backend %s", BACKEND_OPENSLES);
+			g_sound_stream = std::make_unique<OpenSLESStream>();
+			if (!g_sound_stream->Start())
+				g_sound_stream.reset();
+		}
+
+		if (!g_sound_stream)
+		{
+			ERROR_LOG(AUDIO, "Using %s instead", BACKEND_NULLSOUND);
+
+			g_sound_stream = std::make_unique<NullSound>();
+			g_sound_stream->Start();
+		}
 	}
 
 	if (SConfig::GetInstance().m_DumpAudio && !s_audio_dump_start)
@@ -131,6 +151,10 @@ std::vector<std::string> GetSoundBackends()
 		backends.push_back(BACKEND_PULSEAUDIO);
 	if (OpenALStream::isValid())
 		backends.push_back(BACKEND_OPENAL);
+	if (OboeSoundStream::isValid())
+		backends.push_back(BACKEND_OBOE);
+	if (AAudioSoundStream::isValid())
+		backends.push_back(BACKEND_AAUDIO);
 	if (OpenSLESStream::isValid())
 		backends.push_back(BACKEND_OPENSLES);
 	if (WASAPIStream::isValid())

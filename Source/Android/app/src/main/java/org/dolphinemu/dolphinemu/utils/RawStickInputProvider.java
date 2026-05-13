@@ -17,6 +17,14 @@ public interface RawStickInputProvider {
 
     RawStickState snapshot();
 
+    default RawStickState waitForSnapshot(int timeoutMs) {
+        return snapshot();
+    }
+
+    default boolean supportsBlockingWait() {
+        return false;
+    }
+
     boolean keepPollingWhenUnavailable();
 
     /**

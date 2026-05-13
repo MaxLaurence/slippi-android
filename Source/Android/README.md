@@ -133,9 +133,9 @@ $ADB devices                   # confirm
 
 ## Defaults written on first launch
 
-`SlippiDefaults.java` (auto-rewrites on bump of `DEFAULTS_VERSION`)
-writes opinionated `Dolphin.ini` / `GFX.ini` / `WiimoteNew.ini` /
-`Logger.ini` into `<files>/dolphin/Config/`:
+`SlippiDefaults.java` (auto-rewrites on bump of `DEFAULTS_VERSION`,
+currently `7`) writes opinionated `Dolphin.ini` / `GFX.ini` /
+`WiimoteNew.ini` / `Logger.ini` into `<files>/dolphin/Config/`:
 
 - `GFXBackend=Vulkan` — Vulkan is now the default; launcher toggle
   flips to OGL if needed.
@@ -146,8 +146,18 @@ writes opinionated `Dolphin.ini` / `GFX.ini` / `WiimoteNew.ini` /
   adapter is detected, so all four ports route through the WUP-028
   for local 4-player matches.
 - `SlippiJukeboxEnabled=False` — `cpal` SIGABRTs on Android.
+- `SlippiOnlineDelay=2` — explicit; matches PC netplay default.
 - `TimingVariance=8` — slightly looser frame pacing for the Thor's
   scheduler.
+- `DSP.Backend=Oboe` + `AndroidAudioBufferBursts=4` — see **Audio
+  backends** below. Launcher's audio status link lets users override
+  to AAudio / OpenSLES or a different burst count.
+- `EFBScale=3` (SCALE_1X, was `2`/SCALE_AUTO_INTEGRAL) +
+  `InternalResolution=1` — keeps EFB and main resolution at native
+  on high-density Android displays. Auto-integral was silently
+  raising GPU cost on the Thor.
+- `ShowFPS=False`, `ShowNetPlayPing=False` — cleaner display by
+  default.
 - `SlippiSaveReplays=True` + `SlippiReplayDir=<files>/dolphin/Slippi/Replays`
   + `SlippiReplayMonthFolders=False` — auto-save netplay `.slp` files
   into the directory the in-app browser scans. `MonthFolders=False`
@@ -179,6 +189,77 @@ Calibration defaults (per-stick, applied even with no saved profile):
   raw GameCube stick bytes + `ApplyButtonRemap` (per-port atomic
   button table) → emulator. App-level stick calibration is not applied
   to GC adapter controllers.
+
+## Audio backends
+
+Three backends are wired through `Source/Core/AudioCommon/`:
+
+- `Oboe` (default) — `OboeStream.{h,cpp}`. Native Oboe library
+  selecting the LowLatency performance mode + Exclusive sharing when
+  available. Configurable burst count.
+- `AAudio` — `AAudioStream.{h,cpp}`. Direct AAudio. Bypasses the
+  Oboe shim; useful as an A/B against Oboe on devices where Oboe's
+  fallback heuristics pick the wrong path.
+- `OpenSLES` — `OpenSLESStream.cpp`. Kept as a fallback for OEMs
+  where Oboe/AAudio underrun. Reworked alongside the new backends to
+  share the burst-count plumbing.
+
+INI keys (all live in `[DSP]`):
+- `Backend = Oboe | AAudio | OpenSLES`
+- `AndroidAudioBufferBursts = 2 | 4 | 8` — number of audio bursts
+  queued. Lower = lower latency, higher = fewer underruns. The
+  launcher exposes six named presets backing these two settings.
+
+The launcher status link "Audio: <backend> / <bursts> bursts" tells
+the user what's active. Tapping it opens an `AlertDialog` with the
+preset list (`AudioPreset[]` in `MainActivity`). Selection writes both
+INI keys via `NativeLibrary.SetConfig` and updates the link in place.
+
+If `Start()` on the configured backend fails, `AudioCommon.cpp` now
+tries OpenSLES as a fallback before falling back to `NullSound` —
+previous behavior was to drop straight to silence.
+
+## Latency tuning (everything that's not audio)
+
+The latency story across the build, top-down:
+
+- **Vulkan swap chain** (`Source/Core/VideoBackends/Vulkan/SwapChain.cpp`):
+  on Android, when vsync is off, prefer `VK_PRESENT_MODE_MAILBOX_KHR`
+  over `VK_PRESENT_MODE_IMMEDIATE_KHR`. Reason: Android's BLAST
+  buffering can keep older queued frames in flight under IMMEDIATE;
+  MAILBOX forces SurfaceFlinger/HWC to scan out the latest completed
+  frame. When MAILBOX is selected, `image_count = minImageCount`
+  (matching the IMMEDIATE path) instead of `+1`.
+- **Refresh-rate caps** (`EmulationActivity`): on `onCreate`, the
+  activity reads the system `peak_refresh_rate` / `min_refresh_rate`
+  via `Settings.System.getString`, stashes them, and writes higher
+  values (so battery-saver caps don't pin the display at 60Hz when
+  the panel can do 120Hz). Restored in `onDestroy`. Requires
+  `WRITE_SETTINGS` granted manually on sideloaded builds — silently
+  noop if not granted.
+- **PerformanceHintManager** (`EmulationActivity.discoverPerfHintThreadTids`):
+  creates a multi-thread hint session at 60Hz cadence, targeting the
+  TIDs of the named native worker threads (emu, GPU, audio). Auto-
+  discovers them by walking `/proc/<pid>/task` and matching against
+  a known name list, with a fallback path that just uses the emu TID
+  if discovery fails. Updates on resume via
+  `hintSession.setThreads(...)` (UPSIDE_DOWN_CAKE+).
+- **NetPlay client thread** (`NetPlayClient.cpp::ThreadFunc`): named
+  `NetPlay Client` for `top`/profiler readability and given
+  `setpriority(PRIO_PROCESS, 0, -8)` on Android — nudges the
+  scheduler to favor it under load. Also adds a poll-stabilizer
+  loop in `SendNetPad` so the local pad sample lands on a
+  predictable cadence relative to the netplay tick.
+- **Raw input blocking wait** (`RawStickInputProvider` +
+  `NativeEvdevStickInputProvider` + JNI `WaitRawGamepadAxes`): the
+  interface now exposes a `default RawStickState waitForSnapshot(int
+  timeoutMs)` and `default boolean supportsBlockingWait()`. Native
+  evdev opts in: the JNI side does a `poll(2)` (capped at 100ms)
+  on the evdev fd before reading samples. Old behavior was busy
+  polling at 8ms intervals — the new path wakes immediately when
+  the kernel posts an `EV_ABS` event and sleeps otherwise. See
+  **Raw stick input providers** below for the rest of the
+  contract.
 
 ## Replay playback
 
@@ -293,7 +374,10 @@ device family expose its own unsaturated samples.
 
 **Where it lives:**
 `Source/Android/app/src/main/java/org/dolphinemu/dolphinemu/utils/`
-- `RawStickInputProvider` — interface (6 methods, ~20 lines).
+- `RawStickInputProvider` — interface. Six required methods plus
+  two `default` opt-in hooks for low-latency polling
+  (`supportsBlockingWait()` / `waitForSnapshot(int timeoutMs)`); see
+  **Latency tuning** above.
 - `RawStickInputProviders` — selection registry. First provider
   whose `isAvailable()` returns `true` wins.
 - `RawStickState` — uniform snapshot: per-stick X/Y in Android axis

@@ -18,6 +18,7 @@
 #include <memory>
 #include <atomic>
 #include <mutex>
+#include <poll.h>
 #include <sched.h>
 #include <string>
 #include <sys/ioctl.h>
@@ -80,6 +81,9 @@ jmethodID g_jni_method_alert;
 jmethodID g_jni_method_end;
 
 #define DOLPHIN_TAG "DolphinEmuNative"
+
+static constexpr bool kInputLatencyDiagnostics = false;
+static constexpr bool kMeleePadProbeEnabled = false;
 
 namespace
 {
@@ -247,18 +251,33 @@ float NormalizeRawAxis(const RawAxis& axis)
   return normalized;
 }
 
+bool DrainRawGamepadEventsLocked(bool* saw_event);
+void FillRawGamepadAxesLocked(float out[4]);
+
 bool PollRawGamepadAxes(float out[4])
 {
   std::lock_guard<std::mutex> lock(s_raw_gamepad_mutex);
   if (!EnsureRawGamepadLocked())
     return false;
 
+  bool saw_event = false;
+  if (!DrainRawGamepadEventsLocked(&saw_event))
+    return false;
+
+  FillRawGamepadAxesLocked(out);
+  return true;
+}
+
+bool DrainRawGamepadEventsLocked(bool* saw_event)
+{
   struct input_event event = {};
   while (true)
   {
     ssize_t bytes = read(s_raw_gamepad.fd, &event, sizeof(event));
     if (bytes == static_cast<ssize_t>(sizeof(event)))
     {
+      if (saw_event)
+        *saw_event = true;
       if (event.type == EV_ABS)
       {
         for (RawAxis& axis : s_raw_gamepad.axes)
@@ -285,8 +304,56 @@ bool PollRawGamepadAxes(float out[4])
     return false;
   }
 
+  return true;
+}
+
+void FillRawGamepadAxesLocked(float out[4])
+{
   for (int i = 0; i < 4; i++)
     out[i] = NormalizeRawAxis(s_raw_gamepad.axes[i]);
+}
+
+bool WaitRawGamepadAxes(int timeout_ms, float out[4])
+{
+  std::lock_guard<std::mutex> lock(s_raw_gamepad_mutex);
+  if (!EnsureRawGamepadLocked())
+    return false;
+
+  if (timeout_ms < 0)
+    timeout_ms = 0;
+  else if (timeout_ms > 100)
+    timeout_ms = 100;
+
+  pollfd pfd = {};
+  pfd.fd = s_raw_gamepad.fd;
+  pfd.events = POLLIN | POLLERR | POLLHUP | POLLNVAL;
+  int poll_result = poll(&pfd, 1, timeout_ms);
+  if (poll_result < 0 && errno != EINTR)
+  {
+    __android_log_print(ANDROID_LOG_WARN, "SlippiRawInput",
+        "raw gamepad poll failed for %s: %s",
+        s_raw_gamepad.path.c_str(), strerror(errno));
+    close(s_raw_gamepad.fd);
+    s_raw_gamepad.fd = -1;
+    s_raw_gamepad.next_scan_ms = 0;
+    return false;
+  }
+  if (poll_result > 0 && (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)))
+  {
+    __android_log_print(ANDROID_LOG_WARN, "SlippiRawInput",
+        "lost raw gamepad %s: poll revents=0x%x",
+        s_raw_gamepad.path.c_str(), pfd.revents);
+    close(s_raw_gamepad.fd);
+    s_raw_gamepad.fd = -1;
+    s_raw_gamepad.next_scan_ms = 0;
+    return false;
+  }
+
+  bool saw_event = false;
+  if (poll_result > 0 && !DrainRawGamepadEventsLocked(&saw_event))
+    return false;
+
+  FillRawGamepadAxesLocked(out);
   return true;
 }
 }  // namespace
@@ -656,6 +723,8 @@ JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_onGamePadMov
     JNIEnv* env, jobject obj, jstring jDevice, jint Axis, jfloat Value);
 JNIEXPORT jfloatArray JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_PollRawGamepadAxes(
     JNIEnv* env, jobject obj);
+JNIEXPORT jfloatArray JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_WaitRawGamepadAxes(
+    JNIEnv* env, jobject obj, jint timeout_ms);
 JNIEXPORT jintArray JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetBanner(JNIEnv* env,
                                                                                    jobject obj,
                                                                                    jstring jFile);
@@ -833,6 +902,21 @@ JNIEXPORT jfloatArray JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_PollR
   return arr;
 }
 
+JNIEXPORT jfloatArray JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_WaitRawGamepadAxes(
+    JNIEnv* env, jobject obj, jint timeout_ms)
+{
+  float axes[4];
+  if (!WaitRawGamepadAxes(static_cast<int>(timeout_ms), axes))
+    return nullptr;
+
+  jfloatArray arr = env->NewFloatArray(4);
+  if (!arr)
+    return nullptr;
+
+  env->SetFloatArrayRegion(arr, 0, 4, axes);
+  return arr;
+}
+
 JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetPadOverride(
     JNIEnv* env, jobject obj, jint port, jint button,
     jint stickX, jint stickY, jint substickX, jint substickY,
@@ -841,7 +925,8 @@ JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetPadOverri
   // Diagnostic: log only when the sticks aren't centered (so we don't
   // flood, but we DO see what's coming through the JNI when the user
   // is actually moving).
-  if (stickX != 128 || stickY != 128 || substickX != 128 || substickY != 128 || button != 0)
+  if (kInputLatencyDiagnostics &&
+      (stickX != 128 || stickY != 128 || substickX != 128 || substickY != 128 || button != 0))
   {
     __android_log_print(ANDROID_LOG_INFO, "SlippiJNI",
         "SetPadOverride port=%d btn=0x%04x stick=(%d,%d) substick=(%d,%d) trig=(%d,%d)",
@@ -884,6 +969,7 @@ JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetMeleePadF
 {
   if (port < 0 || port >= 4) return;
   if (!Core::IsRunning()) return;
+  if (!kMeleePadProbeEnabled) return;
 
   // DIAGNOSTIC: writes DISABLED. We are searching for where Melee
   // actually keeps the post-conversion stick value. Read several

@@ -48,19 +48,7 @@ static PadOverride s_pad_overrides[4];
 
 namespace SI_PadOverride
 {
-// Throttled diagnostics (the hot input path can't afford an INFO log
-// every frame). One log per ~500 ms is enough to confirm the path is
-// alive and what bytes are flowing.
-static std::atomic<uint64_t> s_last_set_log{0};
-static std::atomic<uint64_t> s_last_get_log{0};
-static uint64_t NowMs()
-{
-	return static_cast<uint64_t>(
-	    std::chrono::duration_cast<std::chrono::milliseconds>(
-	        std::chrono::steady_clock::now().time_since_epoch())
-	        .count());
-}
-
+static constexpr bool kPadOverrideDiagnostics = false;
 static std::atomic<int> s_set_count{0};
 
 void Set(int port, uint16_t button,
@@ -82,15 +70,18 @@ void Set(int port, uint16_t button,
 	o.analogB.store(analogB);
 	o.active.store(true);
 
-	int count = s_set_count.fetch_add(1) + 1;
-	if (count == 1 || count % 200 == 0)
+	if (kPadOverrideDiagnostics)
 	{
+		int count = s_set_count.fetch_add(1) + 1;
+		if (count == 1 || count % 200 == 0)
+		{
 #ifdef __ANDROID__
-		__android_log_print(ANDROID_LOG_INFO, "SlippiPadOverride",
-		    "Set #%d port=%d stick=(%u,%u) addr=%p verify_after=(%u,%u)",
-		    count, port, stickX, stickY, (void*)&s_pad_overrides[0],
-		    (unsigned)o.stickX.load(), (unsigned)o.stickY.load());
+			__android_log_print(ANDROID_LOG_INFO, "SlippiPadOverride",
+			    "Set #%d port=%d stick=(%u,%u) addr=%p verify_after=(%u,%u)",
+			    count, port, stickX, stickY, (void*)&s_pad_overrides[0],
+			    (unsigned)o.stickX.load(), (unsigned)o.stickY.load());
 #endif
+		}
 	}
 }
 
@@ -98,11 +89,14 @@ void Clear(int port)
 {
 	if (port < 0 || port >= 4) return;
 	s_pad_overrides[port].active.store(false);
+	if (kPadOverrideDiagnostics)
+	{
 #ifdef __ANDROID__
-	__android_log_print(ANDROID_LOG_INFO, "SlippiPadOverride", "Clear port=%d", port);
+		__android_log_print(ANDROID_LOG_INFO, "SlippiPadOverride", "Clear port=%d", port);
 #else
-	INFO_LOG(SERIALINTERFACE, "PadOverride.Clear port=%d", port);
+		INFO_LOG(SERIALINTERFACE, "PadOverride.Clear port=%d", port);
 #endif
+	}
 }
 
 static std::atomic<int> s_get_count{0};
@@ -113,15 +107,18 @@ bool Get(int port, GCPadStatus* out)
 	auto& o = s_pad_overrides[port];
 	bool active = o.active.load();
 
-	int count = s_get_count.fetch_add(1) + 1;
-	if (count == 1 || count % 60 == 0)
+	if (kPadOverrideDiagnostics)
 	{
+		int count = s_get_count.fetch_add(1) + 1;
+		if (count == 1 || count % 60 == 0)
+		{
 #ifdef __ANDROID__
-		__android_log_print(ANDROID_LOG_INFO, "SlippiPadOverride",
-		    "Get #%d port=%d active=%d addr=%p raw=(%u,%u)",
-		    count, port, active ? 1 : 0, (void*)&s_pad_overrides[0],
-		    (unsigned)o.stickX.load(), (unsigned)o.stickY.load());
+			__android_log_print(ANDROID_LOG_INFO, "SlippiPadOverride",
+			    "Get #%d port=%d active=%d addr=%p raw=(%u,%u)",
+			    count, port, active ? 1 : 0, (void*)&s_pad_overrides[0],
+			    (unsigned)o.stickX.load(), (unsigned)o.stickY.load());
 #endif
+		}
 	}
 
 	if (!active) return false;

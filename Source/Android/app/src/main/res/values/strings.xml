@@ -22,6 +22,16 @@
     <string name="graphics_label">Graphics backend</string>
     <string name="backend_vulkan">Vulkan</string>
     <string name="backend_ogl">OpenGL</string>
+    <string name="audio_status_default">Audio: Oboe / 4 bursts</string>
+    <string name="audio_status_format">Audio: %1$s / %2$d bursts</string>
+    <string name="audio_pick_preset">Audio preset</string>
+    <string name="audio_preset_oboe_low">Oboe - Low latency (2 bursts)</string>
+    <string name="audio_preset_oboe_balanced">Oboe - Balanced (4 bursts)</string>
+    <string name="audio_preset_oboe_stable">Oboe - Stable (8 bursts)</string>
+    <string name="audio_preset_opensles_balanced">OpenSLES - Balanced (4 bursts)</string>
+    <string name="audio_preset_opensles_stable">OpenSLES - Stable (8 bursts)</string>
+    <string name="audio_preset_aaudio_balanced">AAudio - Balanced (4 bursts)</string>
+    <string name="audio_preset_custom">Custom audio preset</string>
     <string name="adapter_none">No GC adapter detected</string>
     <string name="adapter_connected">GC adapter ✓</string>
     <string name="calibrate_sticks_link">⚙ Calibrate sticks</string>

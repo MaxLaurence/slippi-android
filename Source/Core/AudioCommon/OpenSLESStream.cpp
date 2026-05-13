@@ -5,13 +5,18 @@
 #ifdef ANDROID
 #include <assert.h>
 
+#include <algorithm>
+#include <vector>
+
 #include <SLES/OpenSLES.h>
 #include <SLES/OpenSLES_Android.h>
+#include <SLES/OpenSLES_AndroidConfiguration.h>
 
 #include "AudioCommon/OpenSLESStream.h"
 #include "Common/Assert.h"
 #include "Common/CommonTypes.h"
 #include "Common/Logging/Log.h"
+#include "Core/ConfigManager.h"
 
 // engine interfaces
 static SLObjectItf engineObject;
@@ -25,31 +30,38 @@ static SLAndroidSimpleBufferQueueItf bqPlayerBufferQueue;
 static SLMuteSoloItf bqPlayerMuteSolo;
 static SLVolumeItf bqPlayerVolume;
 static CMixer *g_mixer;
-#define BUFFER_SIZE 512
-#define BUFFER_SIZE_IN_SAMPLES (BUFFER_SIZE / 2)
 
 // Double buffering.
-static short buffer[2][BUFFER_SIZE];
-static int curBuffer = 0;
+static constexpr int BASE_BUFFER_FRAMES = 192;
+static constexpr int MIN_BUFFER_BURSTS = 1;
+static constexpr int MAX_BUFFER_BURSTS = 12;
+static u32 g_buffer_frames = BASE_BUFFER_FRAMES * 4;
+static std::vector<short> buffer[2];
+static int nextBuffer = 0;
+
+static int ConfiguredBufferBursts()
+{
+	return std::min(std::max(SConfig::GetInstance().iAndroidAudioBufferBursts, MIN_BUFFER_BURSTS),
+	                MAX_BUFFER_BURSTS);
+}
 
 static void bqPlayerCallback(SLAndroidSimpleBufferQueueItf bq, void *context)
 {
 	assert(bq == bqPlayerBufferQueue);
 	assert(nullptr == context);
 
-	short *nextBuffer = buffer[curBuffer];
-	int nextSize = sizeof(buffer[0]);
+	short *fillBuffer = buffer[nextBuffer].data();
+	g_mixer->Mix(reinterpret_cast<short *>(fillBuffer), g_buffer_frames);
 
-	SLresult result = (*bqPlayerBufferQueue)->Enqueue(bqPlayerBufferQueue, nextBuffer, nextSize);
+	SLresult result = (*bqPlayerBufferQueue)->Enqueue(
+	    bqPlayerBufferQueue, fillBuffer, buffer[nextBuffer].size() * sizeof(short));
 
 	// Comment from sample code:
 	// the most likely other result is SL_RESULT_BUFFER_INSUFFICIENT,
 	// which for this code example would indicate a programming error
 	_assert_msg_(AUDIO, SL_RESULT_SUCCESS == result, "Couldn't enqueue audio stream.");
 
-	curBuffer ^= 1; // Switch buffer
-	// Render to the fresh buffer
-	g_mixer->Mix(reinterpret_cast<short *>(buffer[curBuffer]), BUFFER_SIZE_IN_SAMPLES);
+	nextBuffer ^= 1;
 }
 
 bool OpenSLESStream::Start()
@@ -85,10 +97,28 @@ bool OpenSLESStream::Start()
 	SLDataSink audioSnk = {&loc_outmix, nullptr};
 
 	// create audio player
+#ifdef SL_ANDROID_KEY_PERFORMANCE_MODE
+	const SLInterfaceID ids[3] = {SL_IID_BUFFERQUEUE, SL_IID_VOLUME, SL_IID_ANDROIDCONFIGURATION};
+	const SLboolean req[3] = {SL_BOOLEAN_TRUE, SL_BOOLEAN_FALSE, SL_BOOLEAN_FALSE};
+	result = (*engineEngine)->CreateAudioPlayer(engineEngine, &bqPlayerObject, &audioSrc, &audioSnk, 3, ids, req);
+#else
 	const SLInterfaceID ids[2] = {SL_IID_BUFFERQUEUE, SL_IID_VOLUME};
-	const SLboolean req[2] = {SL_BOOLEAN_TRUE, SL_BOOLEAN_TRUE};
+	const SLboolean req[2] = {SL_BOOLEAN_TRUE, SL_BOOLEAN_FALSE};
 	result = (*engineEngine)->CreateAudioPlayer(engineEngine, &bqPlayerObject, &audioSrc, &audioSnk, 2, ids, req);
+#endif
 	assert(SL_RESULT_SUCCESS == result);
+
+#ifdef SL_ANDROID_KEY_PERFORMANCE_MODE
+	SLAndroidConfigurationItf playerConfig = nullptr;
+	result = (*bqPlayerObject)->GetInterface(bqPlayerObject, SL_IID_ANDROIDCONFIGURATION,
+	                                         &playerConfig);
+	if (result == SL_RESULT_SUCCESS && playerConfig)
+	{
+		SLuint32 performanceMode = SL_ANDROID_PERFORMANCE_LATENCY;
+		(*playerConfig)->SetConfiguration(playerConfig, SL_ANDROID_KEY_PERFORMANCE_MODE,
+		                                  &performanceMode, sizeof(performanceMode));
+	}
+#endif
 
 	result = (*bqPlayerObject)->Realize(bqPlayerObject, SL_BOOLEAN_FALSE);
 	assert(SL_RESULT_SUCCESS == result);
@@ -102,11 +132,24 @@ bool OpenSLESStream::Start()
 	result = (*bqPlayerPlay)->SetPlayState(bqPlayerPlay, SL_PLAYSTATE_PLAYING);
 	assert(SL_RESULT_SUCCESS == result);
 
-	// Render and enqueue a first buffer.
-	curBuffer ^= 1;
+	int configured_bursts = ConfiguredBufferBursts();
+	g_buffer_frames = BASE_BUFFER_FRAMES * configured_bursts;
+	buffer[0].assign(g_buffer_frames * 2, 0);
+	buffer[1].assign(g_buffer_frames * 2, 0);
 	g_mixer = m_mixer.get();
+	g_mixer->Mix(reinterpret_cast<short *>(buffer[0].data()), g_buffer_frames);
+	g_mixer->Mix(reinterpret_cast<short *>(buffer[1].data()), g_buffer_frames);
+	nextBuffer = 0;
 
-	result = (*bqPlayerBufferQueue)->Enqueue(bqPlayerBufferQueue, buffer[0], sizeof(buffer[0]));
+	INFO_LOG(AUDIO, "OpenSLES bufferBursts=%d bufferFrames=%u", configured_bursts,
+	         g_buffer_frames);
+
+	result = (*bqPlayerBufferQueue)->Enqueue(bqPlayerBufferQueue, buffer[0].data(),
+	                                         buffer[0].size() * sizeof(short));
+	if (SL_RESULT_SUCCESS != result)
+		return false;
+	result = (*bqPlayerBufferQueue)->Enqueue(bqPlayerBufferQueue, buffer[1].data(),
+	                                         buffer[1].size() * sizeof(short));
 	if (SL_RESULT_SUCCESS != result)
 		return false;
 

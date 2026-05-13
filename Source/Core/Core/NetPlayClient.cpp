@@ -8,12 +8,16 @@
 #include <mbedtls/md5.h>
 #include <memory>
 #include <thread>
+#ifdef __ANDROID__
+#include <sys/resource.h>
+#endif
 #include "Common/Common.h"
 #include "Common/CommonPaths.h"
 #include "Common/CommonTypes.h"
 #include "Common/ENetUtil.h"
 #include "Common/MD5.h"
 #include "Common/MsgHandler.h"
+#include "Common/Thread.h"
 #include "Common/Timer.h"
 #include "Core/Core.h"
 #include "Core/ConfigManager.h"
@@ -685,6 +689,11 @@ void NetPlayClient::SendAsync(std::unique_ptr<sf::Packet> packet)
 // called from ---NETPLAY--- thread
 void NetPlayClient::ThreadFunc()
 {
+	Common::SetCurrentThreadName("NetPlay Client");
+#ifdef __ANDROID__
+	setpriority(PRIO_PROCESS, 0, -8);
+#endif
+
     bool qos_success = false;
 #ifdef _WIN32
 	QOS_VERSION ver = { 1, 0 };
@@ -1136,10 +1145,43 @@ void NetPlayClient::SendSpectatorSetting(bool spectator) {
 // called from ---CPU--- thread
 void NetPlayClient::SendNetPad(int pad_nb)
 {
-	GCPadStatus status = {0};
-	status.stickX = status.stickY =
-	status.substickX = status.substickY =
-	/* these are all the same */ GCPadStatus::MAIN_STICK_CENTER_X;
+	auto read_local_status = [](int local_pad, bool use_poll_stabilizer) {
+		GCPadStatus status = {0};
+		status.stickX = status.stickY =
+		status.substickX = status.substickY =
+		/* these are all the same */ GCPadStatus::MAIN_STICK_CENTER_X;
+
+		if(OSD::Chat::toggled)
+			return status;
+
+		switch (SConfig::GetInstance().m_SIDevice[local_pad])
+		{
+		case SIDEVICE_WIIU_ADAPTER:
+			if (use_poll_stabilizer)
+			{
+				auto now = std::chrono::high_resolution_clock::now();
+				stabilizers[local_pad].feedPollTiming(now);
+				std::chrono::high_resolution_clock::time_point pollTiming =
+					stabilizers[local_pad].computeNextPollTiming();
+				return GCAdapter::Input(local_pad, &pollTiming);
+			}
+			return GCAdapter::Input(local_pad);
+		case SIDEVICE_GC_CONTROLLER:
+		default:
+			// Android: if the launcher pushed a calibrated override for this
+			// port, sample it as late as possible. Netplay captures local input
+			// here before the SI device sees it, so re-reading inside the buffer
+			// fill loop avoids reusing a stale Java/USB sample.
+			if (!SI_PadOverride::Get(local_pad, &status))
+				status = Pad::GetStatus(local_pad);
+			return status;
+		}
+	};
+
+	auto target_buffer_size = [this](int in_game_pad) {
+		return BufferSizeForPort(in_game_pad) /
+		       (SConfig::GetInstance().iPollingMethod == POLLING_ONSIREAD ? buffer_accuracy : 1);
+	};
 
 	// this is the old behavior
 	// just a small lag decrease
@@ -1149,39 +1191,11 @@ void NetPlayClient::SendNetPad(int pad_nb)
 		{
 			int ingame_pad = LocalPadToInGamePad(i);
 
-			if(m_pad_buffer[ingame_pad].Size() <= BufferSizeForPort(ingame_pad) / (SConfig::GetInstance().iPollingMethod == POLLING_ONSIREAD ? buffer_accuracy : 1))
+			if(m_pad_buffer[ingame_pad].Size() <= target_buffer_size(ingame_pad))
 			{
-                if(!OSD::Chat::toggled)
-                {
-                    switch (SConfig::GetInstance().m_SIDevice[i])
-                    {
-                    case SIDEVICE_WIIU_ADAPTER:
-						{
-							auto now = std::chrono::high_resolution_clock::now();
-							stabilizers[i].feedPollTiming(now);
-							std::chrono::high_resolution_clock::time_point pollTiming =
-								stabilizers[i].computeNextPollTiming();
-							status = GCAdapter::Input(i, &pollTiming);
-						}
-                        break;
-                    case SIDEVICE_GC_CONTROLLER:
-                    default:
-                        // Android: if the launcher pushed a calibrated
-                        // override for this port, use it as the local
-                        // input source. Otherwise fall back to the
-                        // ControllerEmu pipeline. Without this, online
-                        // matches send raw uncalibrated bytes over the
-                        // wire (the SI_DeviceGCController override
-                        // alone isn't enough because netplay captures
-                        // local inputs here, before SI sees them).
-                        if (!SI_PadOverride::Get(i, &status))
-                            status = Pad::GetStatus(i);
-                        break;
-                    }
-                }
-
-				while (m_pad_buffer[ingame_pad].Size() <= BufferSizeForPort(ingame_pad) / (SConfig::GetInstance().iPollingMethod == POLLING_ONSIREAD ? buffer_accuracy : 1))
+				while (m_pad_buffer[ingame_pad].Size() <= target_buffer_size(ingame_pad))
 				{
+					GCPadStatus status = read_local_status(i, true);
 					m_pad_buffer[ingame_pad].Push(status);
 					SendPadState(ingame_pad, status);
 				}
@@ -1194,25 +1208,11 @@ void NetPlayClient::SendNetPad(int pad_nb)
 		int local_pad = InGamePadToLocalPad(pad_nb);
 		if(local_pad != 4)
 		{
-			if(m_pad_buffer[pad_nb].Size() <= BufferSizeForPort(pad_nb) / (SConfig::GetInstance().iPollingMethod == POLLING_ONSIREAD ? buffer_accuracy : 1))
+			if(m_pad_buffer[pad_nb].Size() <= target_buffer_size(pad_nb))
 			{
-                if(!OSD::Chat::toggled)
-                {
-                    switch (SConfig::GetInstance().m_SIDevice[local_pad])
-                    {
-                    case SIDEVICE_WIIU_ADAPTER:
-                        status = GCAdapter::Input(local_pad);
-                        break;
-                    case SIDEVICE_GC_CONTROLLER:
-                    default:
-                        if (!SI_PadOverride::Get(local_pad, &status))
-                            status = Pad::GetStatus(local_pad);
-                        break;
-                    }
-                }
-
-				while (m_pad_buffer[pad_nb].Size() <= BufferSizeForPort(pad_nb) / (SConfig::GetInstance().iPollingMethod == POLLING_ONSIREAD ? buffer_accuracy : 1))
+				while (m_pad_buffer[pad_nb].Size() <= target_buffer_size(pad_nb))
 				{
+					GCPadStatus status = read_local_status(local_pad, false);
 					m_pad_buffer[pad_nb].Push(status);
 					SendPadState(pad_nb, status);
 				}

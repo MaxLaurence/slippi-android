@@ -14,7 +14,9 @@ recent aarch64 Android devices with Adreno or comparable GPUs.
 > button remap is in. Vulkan is the default graphics backend. Full
 > Slippi replay support too — netplay matches auto-save to the device,
 > and an in-app browser lets you watch them with a touch-friendly
-> seek / pause / fast-forward HUD.
+> seek / pause / fast-forward HUD. Low-latency audio (Oboe / AAudio
+> with selectable buffer presets) and a refresh-rate-cap-lift during
+> emulation round out the latency story.
 >
 > This is a personal / hobbyist port — no warranty, no auto-update
 > channel; treat it as such.
@@ -83,9 +85,21 @@ For the official desktop launcher, go to https://slippi.gg.
   fast-forward toggle. Bulk delete (older than 7 / 30 days, or all),
   per-row delete, and Android-share-sheet export for sending `.slp`
   files to other apps.
-- Vulkan swap chain depth tuned for low latency on Adreno; emulator
-  thread pinned to performance cores; `PerformanceHintManager`
-  session hints the SoC scheduler to 60Hz cadence.
+- **Low-latency audio** — Oboe (default), AAudio, and OpenSLES
+  backends with a launcher-side preset picker (Low / Balanced /
+  Stable burst counts). Tap the green "Audio: …" status text on the
+  launcher to switch presets without restarting.
+- **Lifted refresh-rate caps** — the launcher temporarily raises
+  the system's `peak_refresh_rate` / `min_refresh_rate` settings
+  while emulation is running (so battery-saver caps don't pin you
+  to 60Hz mid-match) and restores them on exit. Requires
+  `WRITE_SETTINGS` granted manually on sideloaded builds.
+- Vulkan swap chain prefers `MAILBOX` over `IMMEDIATE` on Android
+  (avoids the BLAST compositor's deferred-frame queueing) at
+  `minImageCount`; emulator thread pinned to performance cores;
+  multi-threaded `PerformanceHintManager` session targets the
+  emu + GPU + audio TIDs (auto-discovered) at 60Hz cadence;
+  netplay client thread runs at -8 priority.
 
 ## What doesn't work / known limitations
 

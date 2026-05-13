@@ -36,6 +36,16 @@ public final class NativeEvdevStickInputProvider implements RawStickInputProvide
     }
 
     @Override
+    public RawStickState waitForSnapshot(int timeoutMs) {
+        return RawStickState.fromAxes(NativeLibrary.WaitRawGamepadAxes(timeoutMs));
+    }
+
+    @Override
+    public boolean supportsBlockingWait() {
+        return true;
+    }
+
+    @Override
     public boolean keepPollingWhenUnavailable() {
         return false;
     }

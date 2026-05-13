@@ -55,11 +55,34 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAG = "MainActivity";
     private static final String PREF_KEY_ISO_URI = "iso_uri";
     private static final String PREF_KEY_BACKEND = "backend";
+    private static final String PREF_KEY_AUDIO_BACKEND = "audio_backend";
+    private static final String PREF_KEY_AUDIO_BUFFER_BURSTS = "audio_buffer_bursts";
     private static final String BACKEND_VULKAN = "Vulkan";
     private static final String BACKEND_OGL = "OGL";
+    private static final String AUDIO_BACKEND_OBOE = "Oboe";
+    private static final String AUDIO_BACKEND_AAUDIO = "AAudio";
+    private static final String AUDIO_BACKEND_OPENSLES = "OpenSLES";
+    private static final int AUDIO_BURSTS_LOW = 2;
+    private static final int AUDIO_BURSTS_BALANCED = 4;
+    private static final int AUDIO_BURSTS_STABLE = 8;
+    private static final AudioPreset[] AUDIO_PRESETS = {
+            new AudioPreset(AUDIO_BACKEND_OBOE, AUDIO_BURSTS_LOW,
+                    R.string.audio_preset_oboe_low),
+            new AudioPreset(AUDIO_BACKEND_OBOE, AUDIO_BURSTS_BALANCED,
+                    R.string.audio_preset_oboe_balanced),
+            new AudioPreset(AUDIO_BACKEND_OBOE, AUDIO_BURSTS_STABLE,
+                    R.string.audio_preset_oboe_stable),
+            new AudioPreset(AUDIO_BACKEND_OPENSLES, AUDIO_BURSTS_BALANCED,
+                    R.string.audio_preset_opensles_balanced),
+            new AudioPreset(AUDIO_BACKEND_OPENSLES, AUDIO_BURSTS_STABLE,
+                    R.string.audio_preset_opensles_stable),
+            new AudioPreset(AUDIO_BACKEND_AAUDIO, AUDIO_BURSTS_BALANCED,
+                    R.string.audio_preset_aaudio_balanced),
+    };
 
     private TextView isoStatus;
     private TextView adapterStatus;
+    private TextView audioSettingsLink;
     private MaterialButtonToggleGroup backendToggle;
 
     // Auth UI: three sibling containers, exactly one visible at a time.
@@ -121,6 +144,7 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
         isoStatus = findViewById(R.id.iso_status);
         adapterStatus = findViewById(R.id.adapter_status);
+        audioSettingsLink = findViewById(R.id.audio_settings_link);
         backendToggle = findViewById(R.id.backend_toggle);
 
         authLoading = findViewById(R.id.auth_loading);
@@ -160,6 +184,7 @@ public class MainActivity extends AppCompatActivity {
                 pickUserJson.launch(new String[]{"application/json", "*/*"}));
         findViewById(R.id.calibrate_link).setOnClickListener(v -> showCalibrationChooser());
         findViewById(R.id.remap_link).setOnClickListener(v -> showRemapChooser());
+        audioSettingsLink.setOnClickListener(v -> showAudioChooser());
         findViewById(R.id.touch_overlay_link).setOnClickListener(v ->
                 startActivity(new Intent(this, TouchOverlayActivity.class)));
         findViewById(R.id.play).setOnClickListener(v -> launchEmulation(null));
@@ -269,6 +294,9 @@ public class MainActivity extends AppCompatActivity {
         }
         boolean hasAdapter = hasWiiUAdapter();
         adapterStatus.setText(hasAdapter ? R.string.adapter_connected : R.string.adapter_none);
+        AudioPreset audioPreset = currentAudioPreset();
+        audioSettingsLink.setText(getString(R.string.audio_status_format,
+                audioPreset.backend, audioPreset.bursts));
     }
 
     private void launchEmulation(File replayOrNull) {
@@ -330,6 +358,29 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
+    private void showAudioChooser() {
+        CharSequence[] labels = new CharSequence[AUDIO_PRESETS.length];
+        int checked = -1;
+        AudioPreset current = currentAudioPreset();
+        for (int i = 0; i < AUDIO_PRESETS.length; i++) {
+            AudioPreset preset = AUDIO_PRESETS[i];
+            labels[i] = getString(preset.labelResId);
+            if (preset.equals(current)) checked = i;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.audio_pick_preset)
+                .setSingleChoiceItems(labels, checked, (d, which) -> {
+                    AudioPreset preset = AUDIO_PRESETS[which];
+                    prefs().edit()
+                            .putString(PREF_KEY_AUDIO_BACKEND, preset.backend)
+                            .putInt(PREF_KEY_AUDIO_BUFFER_BURSTS, preset.bursts)
+                            .apply();
+                    refresh();
+                    d.dismiss();
+                })
+                .show();
+    }
+
     /**
      * Push every saved per-port adapter button remap to the C++ side
      * so GCAdapter::Input picks them up on the next poll. Ports
@@ -372,6 +423,11 @@ public class MainActivity extends AppCompatActivity {
         String backend = prefs().getString(PREF_KEY_BACKEND, BACKEND_VULKAN);
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "GFXBackend", backend);
 
+        AudioPreset audioPreset = currentAudioPreset();
+        NativeLibrary.SetConfig("Dolphin.ini", "DSP", "Backend", audioPreset.backend);
+        NativeLibrary.SetConfig("Dolphin.ini", "DSP", "AndroidAudioBufferBursts",
+                Integer.toString(audioPreset.bursts));
+
         // SIDevice routing: 12 = WIIU_ADAPTER, 6 = emulated GC pad (which
         // reads from our Touchscreen-via-ButtonManager input bus).
         boolean hasAdapter = hasWiiUAdapter();
@@ -382,6 +438,17 @@ public class MainActivity extends AppCompatActivity {
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "SIDevice2", portN);
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "SIDevice3", portN);
         return hasAdapter;
+    }
+
+    private AudioPreset currentAudioPreset() {
+        SharedPreferences p = prefs();
+        String backend = p.getString(PREF_KEY_AUDIO_BACKEND, AUDIO_BACKEND_OBOE);
+        int bursts = p.getInt(PREF_KEY_AUDIO_BUFFER_BURSTS, AUDIO_BURSTS_BALANCED);
+        AudioPreset candidate = new AudioPreset(backend, bursts, R.string.audio_preset_custom);
+        for (AudioPreset preset : AUDIO_PRESETS) {
+            if (preset.equals(candidate)) return preset;
+        }
+        return candidate;
     }
 
     private boolean hasWiiUAdapter() {
@@ -418,5 +485,29 @@ public class MainActivity extends AppCompatActivity {
 
     private void toast(String msg) {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+    }
+
+    private static final class AudioPreset {
+        final String backend;
+        final int bursts;
+        final int labelResId;
+
+        AudioPreset(String backend, int bursts, int labelResId) {
+            this.backend = backend == null ? AUDIO_BACKEND_OBOE : backend;
+            this.bursts = bursts;
+            this.labelResId = labelResId;
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (!(obj instanceof AudioPreset)) return false;
+            AudioPreset other = (AudioPreset) obj;
+            return backend.equals(other.backend) && bursts == other.bursts;
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * backend.hashCode() + bursts;
+        }
     }
 }

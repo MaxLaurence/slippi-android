@@ -45,6 +45,8 @@ static std::map<int, std::string> quickChatOptions = {
 #define BACKEND_OPENAL "OpenAL"
 #define BACKEND_PULSEAUDIO "Pulse"
 #define BACKEND_XAUDIO2 "XAudio2"
+#define BACKEND_AAUDIO "AAudio"
+#define BACKEND_OBOE "Oboe"
 #define BACKEND_OPENSLES "OpenSLES"
 
 enum GPUDeterminismMode
@@ -181,6 +183,7 @@ struct SConfig : NonCopyable
 	bool bTimeStretching = false;
 	bool bRSHACK = false;
 	int iLatency = 14;
+	int iAndroidAudioBufferBursts = 4;
 
 	bool bRunCompareServer = false;
 	bool bRunCompareClient = false;

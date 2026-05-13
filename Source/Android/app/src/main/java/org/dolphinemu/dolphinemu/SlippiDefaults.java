@@ -33,11 +33,17 @@ public final class SlippiDefaults {
      * concern — there's no settings UI yet, so anyone touching the ini files
      * directly is implicitly opting out of the version bump.
      */
+    // v7 moves the Android low-latency audio default to Oboe and exposes a
+    // configurable audio buffer burst count. Latency stays 2f.
+    // v6 enables the Android low-latency profile: AAudio output, 120Hz-capable
+    // display preference, and event-driven raw input.
+    // v5 tightened netplay latency defaults: explicit SlippiOnlineDelay=2,
+    // native EFB scale, and no runtime overlays.
     // v4 introduced the Slippi replay-dir default so the in-app browser
     // sees auto-saved netplay matches. Bump whenever any canned config
     // below changes — users with hand-edited overrides keep theirs only
     // until the next bump.
-    private static final int DEFAULTS_VERSION = 4;
+    private static final int DEFAULTS_VERSION = 7;
     private static final String DEFAULTS_VERSION_FILE = "defaults_version";
 
     public static void writeIfMissing(File configDir) {
@@ -120,6 +126,7 @@ public final class SlippiDefaults {
             + "OverrideGCLang = False\n"
             + "DPL2Decoder = False\n"
             + "Latency = 2\n"
+            + "SlippiOnlineDelay = 2\n"
             // Match desktop Slippi: SlotA = 255 (NONE). The Slippi EXI device
             // is hardcoded into SlotB via the default of
             // `SConfig::m_EXIDevice[1] = EXIDEVICE_SLIPPI` in ConfigManager.h
@@ -144,7 +151,7 @@ public final class SlippiDefaults {
             + "OverclockEnable = False\n"
             + "AutoDiscChange = True\n"
             // Slippi Jukebox = the OST player implemented in Rust on top of
-            // cpal/rodio. cpal's Android backend needs extra init / Oboe
+            // cpal/rodio. cpal's Android backend needs extra init / AAudio
             // wiring that isn't hooked up here; it SIGABRTs the
             // SlippiJukebox thread on launch. Disable for now — Melee plays
             // its own DSP-emulated music regardless.
@@ -160,7 +167,8 @@ public final class SlippiDefaults {
             + "[DSP]\n"
             + "EnableJIT = True\n"
             + "DumpAudio = False\n"
-            + "Backend = OpenSLES\n"
+            + "Backend = Oboe\n"
+            + "AndroidAudioBufferBursts = 4\n"
             + "Volume = 100\n"
             + "DSPThread = True\n"
             + "[General]\n"
@@ -172,14 +180,14 @@ public final class SlippiDefaults {
             + "Adapter = 0\n"
             + "[Settings]\n"
             + "AspectRatio = 5\n"
-            + "InternalResolution = 2\n"
+            + "InternalResolution = 1\n"
             + "Crop = False\n"
             + "wideScreenHack = False\n"
             + "UseXFB = False\n"
             + "UseRealXFB = False\n"
             + "SafeTextureCacheColorSamples = 128\n"
-            + "ShowFPS = True\n"
-            + "ShowNetPlayPing = True\n"
+            + "ShowFPS = False\n"
+            + "ShowNetPlayPing = False\n"
             + "LogRenderTimeToFile = False\n"
             + "OverlayStats = False\n"
             + "OverlayProjStats = False\n"
@@ -194,7 +202,9 @@ public final class SlippiDefaults {
             + "FastDepthCalc = True\n"
             + "MSAA = 0\n"
             + "SSAA = False\n"
-            + "EFBScale = 2\n"
+            // SCALE_1X. The prior value (2) was SCALE_AUTO_INTEGRAL, which can
+            // silently raise GPU cost on high-density Android displays.
+            + "EFBScale = 3\n"
             + "TexFmtOverlayEnable = False\n"
             + "TexFmtOverlayCenter = False\n"
             + "Wireframe = False\n"

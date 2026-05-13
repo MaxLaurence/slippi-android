@@ -16,6 +16,13 @@ if(OPENSLES_FOUND)
 	set(LIBS ${LIBS} ${OPENSLES_LIBRARIES})
 endif(OPENSLES_FOUND)
 
+if(ANDROID)
+	find_package(oboe REQUIRED CONFIG)
+	set(SRCS ${SRCS} AAudioStream.cpp)
+	set(SRCS ${SRCS} OboeStream.cpp)
+	set(LIBS ${LIBS} aaudio oboe::oboe)
+endif(ANDROID)
+
 if(ALSA_FOUND)
 	set(SRCS ${SRCS} AlsaSoundStream.cpp)
 	set(LIBS ${LIBS} ${ALSA_LIBRARIES})

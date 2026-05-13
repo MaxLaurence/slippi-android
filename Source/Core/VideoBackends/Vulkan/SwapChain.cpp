@@ -15,6 +15,10 @@
 #include "VideoBackends/Vulkan/CommandBufferManager.h"
 #include "VideoBackends/Vulkan/VulkanContext.h"
 
+#if defined(VK_USE_PLATFORM_ANDROID_KHR)
+#include <android/log.h>
+#endif
+
 #if defined(VK_USE_PLATFORM_XLIB_KHR)
 #include <X11/Xlib.h>
 #elif defined(VK_USE_PLATFORM_XCB_KHR)
@@ -230,6 +234,17 @@ bool SwapChain::SelectPresentMode()
 		return true;
 	}
 
+#if defined(VK_USE_PLATFORM_ANDROID_KHR)
+	// Android's compositor can still put an "immediate" producer behind BLAST
+	// buffering. Prefer MAILBOX when available so SurfaceFlinger/HWC keeps the
+	// latest completed frame instead of scanning out older queued frames.
+	if (!m_vsync_enabled && CheckForMode(VK_PRESENT_MODE_MAILBOX_KHR))
+	{
+		m_present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
+		return true;
+	}
+#endif
+
 	// Prefer screen-tearing, if possible, for lowest latency.
 	if (CheckForMode(VK_PRESENT_MODE_IMMEDIATE_KHR))
 	{
@@ -320,12 +335,27 @@ bool SwapChain::CreateSwapChain()
 	// minImageCount tends to be 2 and the system compositor already adds a
 	// frame of its own.
 	uint32_t image_count = surface_capabilities.minImageCount;
-	if (m_present_mode != VK_PRESENT_MODE_IMMEDIATE_KHR)
+	bool use_minimum_images = m_present_mode == VK_PRESENT_MODE_IMMEDIATE_KHR;
+#if defined(VK_USE_PLATFORM_ANDROID_KHR)
+	use_minimum_images = use_minimum_images ||
+		(!m_vsync_enabled && m_present_mode == VK_PRESENT_MODE_MAILBOX_KHR);
+#endif
+	if (!use_minimum_images)
 		image_count += 1;
 
 	// maxImageCount can be zero, in which case there isn't an upper limit on the number of buffers.
 	if (surface_capabilities.maxImageCount > 0)
 		image_count = std::min(image_count, surface_capabilities.maxImageCount);
+
+	INFO_LOG(VIDEO, "Vulkan swapchain latency config: present_mode=%u images=%u min=%u max=%u vsync=%d",
+		static_cast<u32>(m_present_mode), image_count, surface_capabilities.minImageCount,
+		surface_capabilities.maxImageCount, m_vsync_enabled ? 1 : 0);
+#if defined(VK_USE_PLATFORM_ANDROID_KHR)
+	__android_log_print(ANDROID_LOG_INFO, "SlippiVulkan",
+		"swapchain present_mode=%u images=%u min=%u max=%u vsync=%d",
+		static_cast<u32>(m_present_mode), image_count, surface_capabilities.minImageCount,
+		surface_capabilities.maxImageCount, m_vsync_enabled ? 1 : 0);
+#endif
 
 	// Determine the dimensions of the swap chain. Values of -1 indicate the size we specify here
 	// determines window size?
