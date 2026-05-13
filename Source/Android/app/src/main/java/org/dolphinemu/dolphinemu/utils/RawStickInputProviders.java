@@ -19,8 +19,8 @@ public final class RawStickInputProviders {
 
     public static RawStickInputProvider create(Context context) {
         List<RawStickInputProvider> providers = Arrays.asList(
-                new NativeEvdevStickInputProvider(),
                 OdinMappingInput.getInstance(context),
+                new NativeEvdevStickInputProvider(),
                 new KnownUnsupportedHandheldProvider("retroid", "Retroid handheld raw provider"),
                 new KnownUnsupportedHandheldProvider("ayaneo", "AYANEO handheld raw provider"),
                 new KnownUnsupportedHandheldProvider("anbernic", "Anbernic handheld raw provider"),

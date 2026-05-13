@@ -423,8 +423,8 @@ handheld would walk):
 2. Register it in `RawStickInputProviders.create()`. **Order
    matters** — the first provider whose `isAvailable()` returns
    true is chosen, so list device-specific providers above generic
-   ones. The order today is: native evdev (privileged kernel
-   access) → Odin/Thor vendor service → research stubs.
+   ones. The order today is: Odin/Thor vendor service → native
+   evdev (privileged kernel access) → research stubs.
 3. Convert to Android axis convention in your provider. Vendor
    payloads frequently have inverted polarity (positive = left
    instead of positive = right) or transposed XY; handle that

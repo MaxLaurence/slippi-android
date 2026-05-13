@@ -104,6 +104,10 @@ public class CalibrationActivity extends AppCompatActivity {
                 Float x = s.valueForAxis(xAxis);
                 Float y = s.valueForAxis(yAxis);
                 if (x != null && y != null) onRawSample(x, y);
+            } else if (!rawStickInput.keepPollingWhenUnavailable()) {
+                rawStickInput.stop();
+                rawStickInput = null;
+                return;
             }
             ui.postDelayed(this, 16);
         }
@@ -208,18 +212,19 @@ public class CalibrationActivity extends AppCompatActivity {
      */
     @Override
     public boolean dispatchGenericMotionEvent(MotionEvent ev) {
-        if (rawStickInput == null
-                && ((ev.getSource() & InputDevice.SOURCE_JOYSTICK) != 0
-                ||  (ev.getSource() & InputDevice.SOURCE_GAMEPAD) != 0)) {
-            float x, y;
-            if (stick == Stick.MAIN) {
-                x = ev.getAxisValue(MotionEvent.AXIS_X);
-                y = ev.getAxisValue(MotionEvent.AXIS_Y);
-            } else {
-                x = ev.getAxisValue(MotionEvent.AXIS_Z);
-                y = ev.getAxisValue(MotionEvent.AXIS_RZ);
+        if ((ev.getSource() & InputDevice.SOURCE_JOYSTICK) != 0
+                || (ev.getSource() & InputDevice.SOURCE_GAMEPAD) != 0) {
+            if (rawStickInput == null) {
+                float x, y;
+                if (stick == Stick.MAIN) {
+                    x = ev.getAxisValue(MotionEvent.AXIS_X);
+                    y = ev.getAxisValue(MotionEvent.AXIS_Y);
+                } else {
+                    x = ev.getAxisValue(MotionEvent.AXIS_Z);
+                    y = ev.getAxisValue(MotionEvent.AXIS_RZ);
+                }
+                onRawSample(x, y);
             }
-            onRawSample(x, y);
             return true;
         }
         return super.dispatchGenericMotionEvent(ev);
