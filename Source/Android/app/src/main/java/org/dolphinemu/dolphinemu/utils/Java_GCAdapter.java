@@ -48,9 +48,6 @@ public final class Java_GCAdapter {
     private static final String TAG = "SlippiGCAdapter";
     private static final int NINTENDO_VID = 0x057E;
     private static final int WUP028_PID = 0x0337;
-    private static final String ACTION_USB_PERMISSION =
-            "org.dolphinemu.dolphinemu.USB_PERMISSION";
-
     private static UsbManager sManager;
     private static UsbDeviceConnection sConnection;
     private static UsbInterface sInterface;
@@ -83,7 +80,7 @@ public final class Java_GCAdapter {
     private static final BroadcastReceiver sPermissionReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            if (ACTION_USB_PERMISSION.equals(intent.getAction())) {
+            if (context != null && actionUsbPermission(context).equals(intent.getAction())) {
                 boolean granted = intent.getBooleanExtra(
                         UsbManager.EXTRA_PERMISSION_GRANTED, false);
                 Log.i(TAG, "Permission result: granted=" + granted);
@@ -91,13 +88,17 @@ public final class Java_GCAdapter {
         }
     };
 
+    private static String actionUsbPermission(Context ctx) {
+        return ctx.getPackageName() + ".USB_PERMISSION";
+    }
+
     private static synchronized UsbManager manager() {
         if (sManager == null) {
             Context ctx = DolphinApplication.getAppContext();
             if (ctx == null) return null;
             sManager = (UsbManager) ctx.getSystemService(Context.USB_SERVICE);
             if (!sReceiverRegistered) {
-                IntentFilter filter = new IntentFilter(ACTION_USB_PERMISSION);
+                IntentFilter filter = new IntentFilter(actionUsbPermission(ctx));
                 int flags = 0;
                 try {
                     flags = Context.RECEIVER_NOT_EXPORTED;
@@ -126,7 +127,7 @@ public final class Java_GCAdapter {
         if (m == null) return;
         Context ctx = DolphinApplication.getAppContext();
         if (ctx == null) return;
-        Intent intent = new Intent(ACTION_USB_PERMISSION);
+        Intent intent = new Intent(actionUsbPermission(ctx));
         intent.setPackage(ctx.getPackageName());
         int flags = PendingIntent.FLAG_UPDATE_CURRENT;
         try {

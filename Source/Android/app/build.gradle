@@ -14,7 +14,7 @@ android {
     ndkVersion '27.1.12297006'
 
     defaultConfig {
-        applicationId 'org.dolphinemu.dolphinemu'
+        applicationId 'org.ishiiruka.slippidolphin'
         minSdk 29
         targetSdk 34
         versionCode 1
@@ -135,10 +135,10 @@ android {
 
     buildTypes {
         debug {
-            // Intentionally no applicationIdSuffix: the device is a
-            // single-purpose handheld and we want each debug install
-            // to update the existing "Slippi Dolphin" rather than
-            // installing alongside it.
+            // Keep debug installs separate from both release builds and
+            // upstream Dolphin. The Java namespace stays org.dolphinemu.*
+            // because JNI symbols and FindClass paths depend on it.
+            applicationIdSuffix '.debug'
             versionNameSuffix '-debug'
             jniDebuggable true
             minifyEnabled false

@@ -50,6 +50,21 @@ Output APKs:
 - `Source/Android/app/build/outputs/apk/debug/app-debug.apk`
 - `Source/Android/app/build/outputs/apk/release/app-release.apk`
 
+Package IDs:
+
+- Release: `org.ishiiruka.slippidolphin`
+- Debug: `org.ishiiruka.slippidolphin.debug`
+
+These are intentionally different from upstream Dolphin's
+`org.dolphinemu.dolphinemu`, so users can keep both apps installed. The Java
+namespace remains `org.dolphinemu.dolphinemu` because the native JNI symbols
+and `FindClass(...)` paths depend on that package.
+
+Moving from an older build that used `org.dolphinemu.dolphinemu` is not an
+in-place Android app update; the new package starts with its own private app
+data, so users may need to re-pick their ISO and sign in/import `user.json`
+again.
+
 A clean build is ~8 minutes (Rust crates + boost dominate). Incremental
 C++ rebuilds are ~10s; Java/AGP-only changes are sub-second.
 
@@ -97,7 +112,7 @@ the launcher's account card for users who already have one on disk.
 ```sh
 ADB=$ANDROID_HOME/platform-tools/adb
 $ADB install -r Source/Android/app/build/outputs/apk/debug/app-debug.apk
-$ADB shell am start -n org.dolphinemu.dolphinemu.debug/.MainActivity
+$ADB shell am start -n org.ishiiruka.slippidolphin.debug/org.dolphinemu.dolphinemu.activities.MainActivity
 ```
 
 Wireless ADB (so you can keep the GameCube adapter plugged into the
