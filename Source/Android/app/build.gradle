@@ -134,7 +134,10 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix '.debug'
+            // Intentionally no applicationIdSuffix: the device is a
+            // single-purpose handheld and we want each debug install
+            // to update the existing "Slippi Dolphin" rather than
+            // installing alongside it.
             versionNameSuffix '-debug'
             jniDebuggable true
             minifyEnabled false

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/menu_row_play"
+        android:title="@string/replay_action_play"/>
+    <item
+        android:id="@+id/menu_row_delete"
+        android:title="@string/replay_action_delete"/>
+    <item
+        android:id="@+id/menu_row_share"
+        android:title="@string/replay_action_share"/>
+</menu>

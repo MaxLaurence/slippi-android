@@ -42,4 +42,18 @@ file(COPY ${CMAKE_SOURCE_DIR}/Data/Sys/GameSettings
           ${CMAKE_SOURCE_DIR}/Data/Sys/bootloader.gct
      DESTINATION ${CMAKE_SOURCE_DIR}/Source/Android/app/src/main/assets/Sys/)
 
+# Playback gecko codes ini files. PC Dolphin ships two flavors of
+# Sys/GameSettings/GALE01r2.ini: a netplay one (Slippi Online + Recording)
+# in Data/Sys, and a playback one (Slippi Playback + Recording) in
+# Data/PlaybackGeckoCodes. The playback Dolphin build packages the playback
+# flavor where Sys/GameSettings/ would normally be. Our Android build is
+# always the netplay flavor (so live netplay works), and at replay-launch
+# time we write the playback flavor as a user-dir override
+# (${UserDir}/GameSettings/) which SConfig::LoadGameIni reads with higher
+# priority than the bundled Sys copy. The Java side reads these from
+# assets/PlaybackGeckoCodes/.
+file(REMOVE_RECURSE ${CMAKE_SOURCE_DIR}/Source/Android/app/src/main/assets/PlaybackGeckoCodes)
+file(COPY ${CMAKE_SOURCE_DIR}/Data/PlaybackGeckoCodes
+     DESTINATION ${CMAKE_SOURCE_DIR}/Source/Android/app/src/main/assets/)
+
 set(CPACK_PACKAGE_EXECUTABLES ${CPACK_PACKAGE_EXECUTABLES} ${SHARED_LIB})

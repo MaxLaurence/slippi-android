@@ -83,5 +83,22 @@
             android:label="Sign in via slippi.gg"
             android:theme="@style/Theme.SlippiDolphin"
             android:configChanges="orientation|screenSize|keyboardHidden|keyboard" />
+
+        <activity
+            android:name=".activities.ReplayListActivity"
+            android:exported="false"
+            android:label="@string/replay_list_title"
+            android:theme="@style/Theme.SlippiDolphin"
+            android:configChanges="orientation|screenSize|keyboardHidden|keyboard" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.replays"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_provider_paths" />
+        </provider>
     </application>
 </manifest>

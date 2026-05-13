@@ -162,7 +162,9 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.remap_link).setOnClickListener(v -> showRemapChooser());
         findViewById(R.id.touch_overlay_link).setOnClickListener(v ->
                 startActivity(new Intent(this, TouchOverlayActivity.class)));
-        findViewById(R.id.play).setOnClickListener(v -> launchEmulation());
+        findViewById(R.id.play).setOnClickListener(v -> launchEmulation(null));
+        findViewById(R.id.replays_button).setOnClickListener(v ->
+                startActivity(new Intent(this, ReplayListActivity.class)));
 
         // Restore the saved backend selection (defaults to Vulkan —
         // lower CPU overhead, better frame pacing on Adreno; OGL is
@@ -269,7 +271,7 @@ public class MainActivity extends AppCompatActivity {
         adapterStatus.setText(hasAdapter ? R.string.adapter_connected : R.string.adapter_none);
     }
 
-    private void launchEmulation() {
+    private void launchEmulation(File replayOrNull) {
         String isoPath = prefs().getString(PREF_KEY_ISO_URI, null);
         if (TextUtils.isEmpty(isoPath) || !new File(isoPath).exists()) {
             toast("Pick an ISO first");
@@ -280,6 +282,9 @@ public class MainActivity extends AppCompatActivity {
         Intent it = new Intent(this, EmulationActivity.class);
         it.putExtra(EmulationActivity.EXTRA_ISO_PATH, isoPath);
         it.putExtra(EmulationActivity.EXTRA_USE_GC_ADAPTER, useGcAdapter);
+        if (replayOrNull != null) {
+            it.putExtra(EmulationActivity.EXTRA_REPLAY_PATH, replayOrNull.getAbsolutePath());
+        }
         startActivity(it);
     }
 

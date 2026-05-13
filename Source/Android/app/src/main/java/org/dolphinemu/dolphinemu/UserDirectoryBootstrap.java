@@ -50,7 +50,8 @@ public final class UserDirectoryBootstrap {
         File root = userDir(ctx);
         for (String sub : new String[]{
                 "Config", "Cache", "GC", "Load", "Logs",
-                "ScreenShots", "StateSaves", "Wii", "Dump", "Slippi"
+                "ScreenShots", "StateSaves", "Wii", "Dump",
+                "Slippi", "Slippi/Replays"
         }) {
             File d = new File(root, sub);
             if (!d.exists() && !d.mkdirs()) {
@@ -67,7 +68,7 @@ public final class UserDirectoryBootstrap {
         }
         copyAssetDirIfMissing(ctx, SYS_DIR_NAME, sysDir);
         writeVersion(versionFile, SYS_VERSION);
-        SlippiDefaults.writeIfMissing(new File(root, "Config"));
+        SlippiDefaults.writeIfMissing(new File(root, "Config"), ctx);
     }
 
     private static int readVersion(File f) {

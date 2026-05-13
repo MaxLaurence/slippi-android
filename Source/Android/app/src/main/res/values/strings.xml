@@ -31,4 +31,34 @@
     <string name="remap_pick_controller">Remap buttons for which controller?</string>
     <string name="calibrate_device">This device\'s controls</string>
     <string name="calibrate_adapter_port">Adapter port %1$d</string>
+
+    <!-- Replay playback -->
+    <string name="replays_button">▶ REPLAYS</string>
+    <string name="save_netplay_replays_label">Save netplay replays</string>
+    <string name="replay_hud_loading">Loading…</string>
+    <string name="replay_hud_play">Play</string>
+    <string name="replay_hud_pause">Pause</string>
+    <string name="replay_hud_jump_back">Jump back 5s</string>
+    <string name="replay_hud_jump_forward">Jump forward 5s</string>
+    <string name="replay_hud_ffw">Fast-forward</string>
+
+    <string name="replay_list_title">Replays</string>
+    <string name="replay_list_header">Replays · %1$d · %2$s</string>
+    <string name="replay_list_import">Import .slp</string>
+    <string name="replay_list_empty_no_iso">Pick an ISO from the launcher first</string>
+    <string name="replay_list_empty">No replays yet · Tap + to import or finish a netplay match to auto-save one.</string>
+    <string name="replay_row_unparseable">Unparseable replay</string>
+    <string name="replay_action_play">Play</string>
+    <string name="replay_action_delete">Delete</string>
+    <string name="replay_action_share">Share</string>
+    <string name="replay_delete_older_30">Delete older than 30 days</string>
+    <string name="replay_delete_older_7">Delete older than 7 days</string>
+    <string name="replay_delete_all">Delete all</string>
+    <string name="replay_delete_selected">Delete %1$d selected</string>
+    <string name="replay_delete_confirm_title">Delete?</string>
+    <string name="replay_delete_confirm_body">%1$d replay(s) will be permanently removed.</string>
+    <string name="replay_delete_confirm_cta">Delete</string>
+    <string name="replay_cancel">Cancel</string>
+    <string name="replay_share_chooser">Share replay via…</string>
+    <string name="replay_unparseable_toast">Couldn\'t read this replay</string>
 </resources>

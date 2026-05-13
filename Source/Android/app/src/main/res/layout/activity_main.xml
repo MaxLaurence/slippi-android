@@ -344,12 +344,24 @@
         app:layout_constraintTop_toBottomOf="@id/remap_link"
         app:layout_constraintEnd_toEndOf="parent"/>
 
-    <!-- Big play button -->
+    <!-- Bottom action bar: PLAY and REPLAYS are the two primary
+         entry points. Equal-width chain so neither dominates; PLAY
+         is filled green (live game = the "go" action), REPLAYS is
+         tonal so it reads as an equally available alternative
+         rather than secondary. -->
+    <androidx.constraintlayout.widget.Guideline
+        android:id="@+id/bottom_actions_midline"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        app:layout_constraintGuide_percent="0.5"/>
+
     <Button
         android:id="@+id/play"
         style="@style/Widget.Material3.Button"
         android:layout_width="0dp"
         android:layout_height="56dp"
+        android:layout_marginEnd="6dp"
         android:layout_marginBottom="4dp"
         android:text="@string/play"
         android:textSize="18sp"
@@ -359,5 +371,20 @@
         app:cornerRadius="14dp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/bottom_actions_midline"/>
+
+    <Button
+        android:id="@+id/replays_button"
+        style="@style/Widget.Material3.Button.TonalButton"
+        android:layout_width="0dp"
+        android:layout_height="56dp"
+        android:layout_marginStart="6dp"
+        android:layout_marginBottom="4dp"
+        android:text="@string/replays_button"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        app:cornerRadius="14dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toEndOf="@id/bottom_actions_midline"
         app:layout_constraintEnd_toEndOf="parent"/>
 </androidx.constraintlayout.widget.ConstraintLayout>

@@ -153,6 +153,26 @@ public final class NativeLibrary {
     public static native void SetUserDirectory(String directory);
     public static native String GetUserDirectory();
 
+    /**
+     * Point SlippiReplayComm at a JSON playback config file. Must be
+     * called BEFORE Run(); the C++ side reads it once during CEXISlippi
+     * construction. Pass an empty string to neutralize a stale config
+     * left behind by a prior replay launch.
+     */
+    public static native void SetSlippiInputPath(String path);
+    public static native void ClearSlippiInputPath();
+
+    /** Latest frame index the parser has produced, or {@link Integer#MIN_VALUE} if no replay is active. */
+    public static native int GetReplayLatestFrame();
+    /** Current playback frame, or {@link Integer#MIN_VALUE} before the seek thread has started. */
+    public static native int GetReplayCurrentFrame();
+    /** Ask the seek thread to jump to a specific frame. Latest wins. */
+    public static native void SetReplayTargetFrame(int frame);
+    /** Discrete ±5s nudge in playback time. */
+    public static native void SetReplayJump(boolean forward);
+    /** 0 = normal, 1 = hard fast-forward (~4×). */
+    public static native void SetReplaySpeedMode(int mode);
+
     public static native void Run();
     public static native void SurfaceChanged(Surface surface);
     public static native void SurfaceDestroyed();

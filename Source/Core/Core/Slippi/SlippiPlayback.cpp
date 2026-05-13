@@ -68,8 +68,9 @@ SlippiPlaybackStatus::SlippiPlaybackStatus()
 	prevOCEnable = SConfig::GetInstance().m_OCEnable;
 	prevOCFactor = SConfig::GetInstance().m_OCFactor;
 
-	// Only generate these if this is a playback configuration. Should this class get initialized at all?
-	#ifdef IS_PLAYBACK
+	// Android can enter replay playback at runtime from the normal netplay build,
+	// so it still needs the playback denylist/codelist data.
+	#if defined(IS_PLAYBACK) || defined(ANDROID)
 	generateDenylist();
 	generateLegacyCodelist();
 	#endif

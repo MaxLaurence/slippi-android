@@ -1,5 +1,6 @@
 package org.dolphinemu.dolphinemu;
 
+import android.content.Context;
 import android.util.Log;
 
 import java.io.File;
@@ -32,10 +33,18 @@ public final class SlippiDefaults {
      * concern — there's no settings UI yet, so anyone touching the ini files
      * directly is implicitly opting out of the version bump.
      */
-    private static final int DEFAULTS_VERSION = 3;
+    // v4 introduced the Slippi replay-dir default so the in-app browser
+    // sees auto-saved netplay matches. Bump whenever any canned config
+    // below changes — users with hand-edited overrides keep theirs only
+    // until the next bump.
+    private static final int DEFAULTS_VERSION = 4;
     private static final String DEFAULTS_VERSION_FILE = "defaults_version";
 
     public static void writeIfMissing(File configDir) {
+        writeIfMissing(configDir, null);
+    }
+
+    public static void writeIfMissing(File configDir, Context ctx) {
         if (!configDir.exists() && !configDir.mkdirs()) {
             Log.w(TAG, "Could not create " + configDir);
             return;
@@ -43,7 +52,15 @@ public final class SlippiDefaults {
         File versionFile = new File(configDir, DEFAULTS_VERSION_FILE);
         int existing = readVersion(versionFile);
         boolean force = existing < DEFAULTS_VERSION;
-        writeOrUpgrade(new File(configDir, "Dolphin.ini"), DOLPHIN_INI, force);
+        // SlippiReplayDir needs a runtime-resolved absolute path; the
+        // rest of Dolphin.ini is canned. Substitute %REPLAY_DIR% with
+        // either the on-device path or a sentinel that the C++ side
+        // falls back from cleanly.
+        String replayDir = ctx == null
+                ? ""  // C++ side defaults to userdir/Slippi when empty
+                : new File(ctx.getFilesDir(), "dolphin/Slippi/Replays").getAbsolutePath();
+        String dolphinIni = DOLPHIN_INI.replace("%REPLAY_DIR%", replayDir);
+        writeOrUpgrade(new File(configDir, "Dolphin.ini"), dolphinIni, force);
         writeOrUpgrade(new File(configDir, "GFX.ini"), GFX_INI, force);
         writeOrUpgrade(new File(configDir, "GCPadNew.ini"), GCPAD_INI, force);
         writeOrUpgrade(new File(configDir, "WiimoteNew.ini"), WIIMOTE_INI, force);
@@ -132,6 +149,14 @@ public final class SlippiDefaults {
             // SlippiJukebox thread on launch. Disable for now — Melee plays
             // its own DSP-emulated music regardless.
             + "SlippiJukeboxEnabled = False\n"
+            // Replay browser sees this directory (Phase 3). Auto-saved
+            // netplay replays land here; importer copies into here.
+            // %REPLAY_DIR% is substituted at write time with the on-device
+            // absolute path. Flat dir (MonthFolders=False) keeps the
+            // listing simple — the row itself is timestamped.
+            + "SlippiReplayDir = %REPLAY_DIR%\n"
+            + "SlippiSaveReplays = True\n"
+            + "SlippiReplayMonthFolders = False\n"
             + "[DSP]\n"
             + "EnableJIT = True\n"
             + "DumpAudio = False\n"

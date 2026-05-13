@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Slippi/Replays under getFilesDir(). The whole tree is exposed
+         because the user picks specific files via the share menu;
+         "files/dolphin/Slippi/Replays" is the only thing in this tree
+         we hand out URIs for. -->
+    <files-path
+        name="replays"
+        path="dolphin/Slippi/Replays/"/>
+</paths>

@@ -27,11 +27,16 @@ import org.dolphinemu.dolphinemu.controller.ControllerProfile;
 import org.dolphinemu.dolphinemu.controller.GameCubePadState;
 import org.dolphinemu.dolphinemu.controller.StickCalibration;
 import org.dolphinemu.dolphinemu.controller.TouchOverlayLayoutStore;
+import org.dolphinemu.dolphinemu.replay.GeckoOverride;
+import org.dolphinemu.dolphinemu.replay.ReplayConfig;
 import org.dolphinemu.dolphinemu.utils.PhysicalControllerDetector;
 import org.dolphinemu.dolphinemu.utils.RawStickInputProvider;
 import org.dolphinemu.dolphinemu.utils.RawStickInputProviders;
 import org.dolphinemu.dolphinemu.utils.RawStickState;
+import org.dolphinemu.dolphinemu.views.ReplayHudView;
 import org.dolphinemu.dolphinemu.views.TouchControlOverlayView;
+
+import java.io.File;
 
 /**
  * Hosts the SurfaceView that the C++ renderer draws into and pumps the
@@ -40,6 +45,8 @@ import org.dolphinemu.dolphinemu.views.TouchControlOverlayView;
 public class EmulationActivity extends AppCompatActivity implements SurfaceHolder.Callback {
     public static final String EXTRA_ISO_PATH = "iso_path";
     public static final String EXTRA_USE_GC_ADAPTER = "use_gc_adapter";
+    /** Absolute path to a .slp file. Triggers replay playback mode when present. */
+    public static final String EXTRA_REPLAY_PATH = "replay_path";
     private static final String TAG = "SlippiEmu";
     private static final boolean INPUT_DIAGNOSTICS = false;
 
@@ -59,8 +66,10 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     private ButtonMap buttonMap = ButtonMap.defaults();
     private RawStickInputProvider rawStickInput;
     private TouchControlOverlayView touchOverlay;
+    private ReplayHudView replayHud;
     private boolean touchOverlayVisible;
     private boolean useGcAdapter;
+    private boolean isReplayMode;
     private final Runnable rawInputPoll = new Runnable() {
         @Override
         public void run() {
@@ -141,6 +150,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         surfaceView = findViewById(R.id.emulation_surface);
         touchOverlay = findViewById(R.id.touch_overlay);
         touchOverlay.setListener(touchOverlayListener);
+        replayHud = findViewById(R.id.replay_hud);
         surfaceView.getHolder().addCallback(this);
         // We dispatch key/motion events at the Activity level, but the system
         // only sends them to the foreground window — make sure the surface
@@ -203,6 +213,29 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
             return;
         }
         NativeLibrary.SetFilename(iso);
+
+        // Replay mode: write the JSON config and point the C++ side at
+        // it before Run() boots. Live mode: write a neutral file AND
+        // point at it — defense in depth so a stale config from a prior
+        // replay launch can never bleed into a netplay session.
+        String replayPath = getIntent().getStringExtra(EXTRA_REPLAY_PATH);
+        isReplayMode = replayPath != null && new File(replayPath).exists();
+        if (isReplayMode) {
+            ReplayConfig.writeNormal(this, new File(replayPath));
+            // Swap in the playback-mode gecko codes so the title
+            // screen runs the Slippi Playback boot path instead of
+            // dropping into the Online menu.
+            GeckoOverride.applyReplayMode(this);
+        } else {
+            ReplayConfig.writeEmpty(this);
+            GeckoOverride.applyLiveMode(this);
+        }
+        NativeLibrary.SetSlippiInputPath(ReplayConfig.commFile(this).getAbsolutePath());
+
+        if (isReplayMode && replayHud != null) {
+            replayHud.setVisibility(View.VISIBLE);
+            replayHud.startPolling();
+        }
     }
 
     @Override
@@ -222,6 +255,14 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     protected void onDestroy() {
         ui.removeCallbacks(rawInputPoll);
         ui.removeCallbacks(controllerDetectorPoll);
+        if (replayHud != null) replayHud.stopPolling();
+        if (isReplayMode) {
+            // Belt-and-suspenders: if the user exits mid-FFW, the OC
+            // settings would otherwise leak into the next session (the
+            // CEXISlippi dtor restores them, but that runs on a thread
+            // we can't guarantee finishes before the next BootCore).
+            try { NativeLibrary.SetReplaySpeedMode(0); } catch (Throwable ignored) {}
+        }
         super.onDestroy();
         if (hintSession != null) {
             try { hintSession.close(); } catch (Throwable ignored) {}
@@ -277,12 +318,17 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         updateTouchOverlayVisibility();
         ui.post(controllerDetectorPoll);
         if (shouldPollRawStickSource()) ui.post(rawInputPoll);
+        if (isReplayMode && replayHud != null) {
+            replayHud.setVisibility(View.VISIBLE);
+            replayHud.startPolling();
+        }
     }
 
     @Override
     protected void onPause() {
         ui.removeCallbacks(rawInputPoll);
         ui.removeCallbacks(controllerDetectorPoll);
+        if (replayHud != null) replayHud.stopPolling();
         super.onPause();
         if (emuStarted) {
             try { NativeLibrary.PauseEmulation(); } catch (Throwable ignored) {}
@@ -509,6 +555,16 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
 
     private void updateTouchOverlayVisibility() {
         if (touchOverlay == null) return;
+        // Replay mode has no input; show the playback HUD instead of the
+        // virtual gamepad.
+        if (isReplayMode) {
+            if (touchOverlayVisible) {
+                touchOverlayVisible = false;
+                touchOverlay.setControlsEnabled(false);
+                touchOverlay.setVisibility(View.GONE);
+            }
+            return;
+        }
         boolean show = !useGcAdapter && (BuildConfig.FORCE_TOUCH_CONTROLS
                 || !PhysicalControllerDetector.hasUsableP1Controller(rawStickInput));
         if (show == touchOverlayVisible) return;

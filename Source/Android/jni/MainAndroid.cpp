@@ -31,6 +31,9 @@
 #include "Core/HW/SI_DeviceGCController.h"
 #include "Core/HW/Memmap.h"
 #include "Core/Core.h"
+#include "Core/Slippi/SlippiPlayback.h"
+
+extern std::unique_ptr<SlippiPlaybackStatus> g_playbackStatus;
 
 #include "Common/CPUDetect.h"
 #include "Common/CommonPaths.h"
@@ -63,6 +66,12 @@
 ANativeWindow* surf;
 std::string g_filename;
 std::string g_set_userpath = "";
+// Path passed in from Java via SetSlippiInputPath. Cannot be applied to
+// SConfig directly from arbitrary threads/timings — SConfig is constructed
+// during UICommon::Init() on the emu thread. We stash it here and apply
+// inside Run() once SConfig is alive. Empty string = leave default.
+static std::mutex s_slippi_input_path_mutex;
+static std::string s_slippi_input_path;
 static std::atomic<int> g_emu_thread_tid{0};
 
 JavaVM* g_java_vm;
@@ -380,15 +389,27 @@ static bool MsgAlert(const char* caption, const char* text, bool yes_no, int /*S
 {
   __android_log_print(ANDROID_LOG_ERROR, DOLPHIN_TAG, "%s:%s", caption, text);
 
-  // Associate the current Thread with the Java VM.
-  JNIEnv* env;
-  g_java_vm->AttachCurrentThread(&env, NULL);
+  JNIEnv* env = nullptr;
+  bool did_attach = false;
+  jint env_status = g_java_vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
+  if (env_status == JNI_EDETACHED)
+  {
+    if (g_java_vm->AttachCurrentThread(&env, NULL) != JNI_OK)
+      return false;
+    did_attach = true;
+  }
+  else if (env_status != JNI_OK)
+  {
+    return false;
+  }
 
   // Execute the Java method.
-  env->CallStaticVoidMethod(g_jni_class, g_jni_method_alert, env->NewStringUTF(text));
+  jstring message = env->NewStringUTF(text);
+  env->CallStaticVoidMethod(g_jni_class, g_jni_method_alert, message);
+  env->DeleteLocalRef(message);
 
-  // Must be called before the current thread exits; might as well do it here.
-  g_java_vm->DetachCurrentThread();
+  if (did_attach)
+    g_java_vm->DetachCurrentThread();
 
   return false;
 }
@@ -696,6 +717,21 @@ JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SurfaceChang
                                                                                    jobject _surf);
 JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SurfaceDestroyed(JNIEnv* env,
                                                                                      jobject obj);
+
+JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetSlippiInputPath(
+    JNIEnv* env, jobject obj, jstring jPath);
+JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_ClearSlippiInputPath(
+    JNIEnv* env, jobject obj);
+JNIEXPORT jint JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetReplayLatestFrame(
+    JNIEnv* env, jobject obj);
+JNIEXPORT jint JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetReplayCurrentFrame(
+    JNIEnv* env, jobject obj);
+JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetReplayTargetFrame(
+    JNIEnv* env, jobject obj, jint frame);
+JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetReplayJump(
+    JNIEnv* env, jobject obj, jboolean forward);
+JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetReplaySpeedMode(
+    JNIEnv* env, jobject obj, jint mode);
 
 JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_UnPauseEmulation(JNIEnv* env,
                                                                                      jobject obj)
@@ -1101,6 +1137,67 @@ JNIEXPORT jstring JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetUserDi
   return env->NewStringUTF(File::GetUserPath(D_USER_IDX).c_str());
 }
 
+// Stash the playback config path for the next Run(). We can't poke
+// SConfig::GetInstance() directly here — SConfig isn't constructed
+// until UICommon::Init runs on the emu thread, so doing it from the
+// activity's onCreate (where this is called) hits a null deref.
+JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetSlippiInputPath(
+    JNIEnv* env, jobject obj, jstring jPath)
+{
+  std::lock_guard<std::mutex> guard(s_slippi_input_path_mutex);
+  s_slippi_input_path = GetJString(env, jPath);
+}
+
+JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_ClearSlippiInputPath(
+    JNIEnv* env, jobject obj)
+{
+  std::lock_guard<std::mutex> guard(s_slippi_input_path_mutex);
+  s_slippi_input_path.clear();
+}
+
+// Replay HUD getters / setters. g_playbackStatus is only allocated while a
+// CEXISlippi instance exists (i.e. during a Slippi game), so every entry
+// point null-checks. The HUD treats INT_MIN as "not loaded yet" and skips
+// rendering until the seek thread publishes a real frame.
+JNIEXPORT jint JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetReplayLatestFrame(
+    JNIEnv* env, jobject obj)
+{
+  return g_playbackStatus ? static_cast<jint>(g_playbackStatus->latestFrame) : INT_MIN;
+}
+
+JNIEXPORT jint JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetReplayCurrentFrame(
+    JNIEnv* env, jobject obj)
+{
+  return g_playbackStatus ? static_cast<jint>(g_playbackStatus->currentPlaybackFrame) : INT_MIN;
+}
+
+JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetReplayTargetFrame(
+    JNIEnv* env, jobject obj, jint frame)
+{
+  if (g_playbackStatus)
+    g_playbackStatus->targetFrameNum = static_cast<s32>(frame);
+}
+
+JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetReplayJump(
+    JNIEnv* env, jobject obj, jboolean forward)
+{
+  if (!g_playbackStatus)
+    return;
+  if (forward)
+    g_playbackStatus->shouldJumpForward = true;
+  else
+    g_playbackStatus->shouldJumpBack = true;
+}
+
+// 0 = normal speed, 1 = hard fast-forward (~4x). setHardFFW mutates the
+// global SConfig OC settings; resetPlayback restores them on game exit.
+JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetReplaySpeedMode(
+    JNIEnv* env, jobject obj, jint mode)
+{
+  if (g_playbackStatus)
+    g_playbackStatus->setHardFFW(mode == 1);
+}
+
 JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetProfiling(JNIEnv* env,
                                                                                  jobject obj,
                                                                                  jboolean enable)
@@ -1240,6 +1337,13 @@ JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_Run(JNIEnv* 
   std::unique_lock<std::mutex> guard(s_host_identity_lock);
   UICommon::SetUserDirectory(g_set_userpath);
   UICommon::Init();
+
+  // SConfig is alive now; apply any pending Slippi playback config
+  // path before BootCore constructs CEXISlippi (which reads it).
+  {
+    std::lock_guard<std::mutex> slip_guard(s_slippi_input_path_mutex);
+    SConfig::GetInstance().m_strSlippiInput = s_slippi_input_path;
+  }
 
   WiimoteReal::InitAdapterClass();
 

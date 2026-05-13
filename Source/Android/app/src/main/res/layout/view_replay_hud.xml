@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <ImageButton
+        android:id="@+id/replay_jump_back"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_gravity="center_vertical"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:src="@android:drawable/ic_media_rew"
+        android:contentDescription="@string/replay_hud_jump_back"
+        app:tint="@android:color/white"
+        xmlns:app="http://schemas.android.com/apk/res-auto"/>
+
+    <ImageButton
+        android:id="@+id/replay_play_pause"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:layout_gravity="center_vertical"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:src="@android:drawable/ic_media_pause"
+        android:contentDescription="@string/replay_hud_pause"
+        app:tint="@android:color/white"
+        xmlns:app="http://schemas.android.com/apk/res-auto"/>
+
+    <ImageButton
+        android:id="@+id/replay_jump_forward"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_gravity="center_vertical"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:src="@android:drawable/ic_media_ff"
+        android:contentDescription="@string/replay_hud_jump_forward"
+        app:tint="@android:color/white"
+        xmlns:app="http://schemas.android.com/apk/res-auto"/>
+
+    <SeekBar
+        android:id="@+id/replay_seek"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:layout_gravity="center_vertical"
+        android:layout_marginHorizontal="12dp"
+        android:max="1"/>
+
+    <TextView
+        android:id="@+id/replay_frame_label"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_vertical"
+        android:minWidth="120dp"
+        android:gravity="end"
+        android:fontFamily="monospace"
+        android:textColor="@android:color/white"
+        android:textSize="13sp"
+        android:text="@string/replay_hud_loading"/>
+
+    <ImageButton
+        android:id="@+id/replay_ffw"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_marginStart="8dp"
+        android:layout_gravity="center_vertical"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:src="@android:drawable/ic_media_ff"
+        android:contentDescription="@string/replay_hud_ffw"
+        app:tint="@android:color/white"
+        xmlns:app="http://schemas.android.com/apk/res-auto"/>
+</merge>

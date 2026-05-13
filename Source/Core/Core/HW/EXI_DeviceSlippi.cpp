@@ -400,6 +400,14 @@ void CEXISlippi::writeToFileAsync(u8 *payload, u32 length, std::string fileOptio
 {
 #ifndef IS_PLAYBACK
 	bool shouldSaveReplays = SConfig::GetInstance().m_slippiSaveReplays;
+	if (g_replayComm)
+	{
+		auto replaySettings = g_replayComm->getSettings();
+		// Android replay playback runs inside the netplay build; don't record
+		// a replay of the replay and leave partial .slp files in the browser.
+		if (!replaySettings.replayPath.empty() || !replaySettings.queue.empty())
+			shouldSaveReplays = false;
+	}
 #else
 	bool shouldSaveReplays = SConfig::GetInstance().m_slippiRegenerateReplays;
 #endif
