@@ -14,9 +14,11 @@ recent aarch64 Android devices with Adreno or comparable GPUs.
 > button remap is in. Vulkan is the default graphics backend. Full
 > Slippi replay support too — netplay matches auto-save to the device,
 > and an in-app browser lets you watch them with a touch-friendly
-> seek / pause / fast-forward HUD. Low-latency audio (Oboe / AAudio
-> with selectable buffer presets) and a refresh-rate-cap-lift during
-> emulation round out the latency story.
+> seek / pause / fast-forward HUD. **Training Mode (Community
+> Edition)** is built right into the launcher — tap a button and the
+> app downloads the latest version and sets it up for you. Low-latency
+> audio (Oboe / AAudio with selectable buffer presets) and a
+> refresh-rate-cap-lift during emulation round out the latency story.
 >
 > This is a personal / hobbyist port — no warranty, no auto-update
 > channel; treat it as such.
@@ -52,10 +54,16 @@ For the official desktop launcher, go to https://slippi.gg.
      the wizard.
    - (Optional) **🎮 Remap buttons** — per-device and per-adapter-port
      button mapping with a color-coded GC layout.
-   - Tap **PLAY** for a live match, or **▶ REPLAYS** to browse + watch
+   - Tap **PLAY** for a live match, **▶ REPLAYS** to browse + watch
      saved `.slp` files (importer + bulk-delete + share are in the
-     browser). Netplay matches auto-save into the browser; the toggle
-     is on the launcher next to the sign-in card.
+     browser; netplay matches auto-save into it), or **TRAINING MODE**
+     to set up [Training Mode Community Edition](https://github.com/AlexanderHarrison/TrainingMode-CommunityEdition).
+     The first time you tap it the app downloads the latest version,
+     patches your vanilla ISO on-device, and tells you how much extra
+     storage it'll use before committing. After that, "Play" boots
+     straight into training. When a new Training Mode version drops,
+     tap "Check updates" → "Update". Tap "Remove" to free the storage
+     back up.
 
 ## What works
 
@@ -85,6 +93,15 @@ For the official desktop launcher, go to https://slippi.gg.
   fast-forward toggle. Bulk delete (older than 7 / 30 days, or all),
   per-row delete, and Android-share-sheet export for sending `.slp`
   files to other apps.
+- **Training Mode (Community Edition)** built into the launcher —
+  tap the **TRAINING MODE** button and the app fetches the latest
+  release of [TrainingMode-CommunityEdition](https://github.com/AlexanderHarrison/TrainingMode-CommunityEdition)
+  from GitHub, patches it into your vanilla ISO on-device, and lets
+  you launch into it with one tap. Storage cost is shown up front
+  (peak during build + final size). "Check updates" surfaces new
+  versions whenever they drop; "Remove" cleans the patched ISO + any
+  cached files back up. No need to track down xdelta tools or move
+  files between a desktop and the device.
 - **Low-latency audio** — Oboe (default), AAudio, and OpenSLES
   backends with a launcher-side preset picker (Low / Balanced /
   Stable burst counts). Tap the green "Audio: …" status text on the

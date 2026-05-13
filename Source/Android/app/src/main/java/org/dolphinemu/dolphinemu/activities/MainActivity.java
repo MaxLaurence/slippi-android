@@ -188,6 +188,8 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.touch_overlay_link).setOnClickListener(v ->
                 startActivity(new Intent(this, TouchOverlayActivity.class)));
         findViewById(R.id.play).setOnClickListener(v -> launchEmulation(null));
+        findViewById(R.id.training_mode_button).setOnClickListener(v ->
+                startActivity(new Intent(this, TrainingModeActivity.class)));
         findViewById(R.id.replays_button).setOnClickListener(v ->
                 startActivity(new Intent(this, ReplayListActivity.class)));
 
@@ -312,6 +314,9 @@ public class MainActivity extends AppCompatActivity {
         it.putExtra(EmulationActivity.EXTRA_USE_GC_ADAPTER, useGcAdapter);
         if (replayOrNull != null) {
             it.putExtra(EmulationActivity.EXTRA_REPLAY_PATH, replayOrNull.getAbsolutePath());
+            it.putExtra(EmulationActivity.EXTRA_LAUNCH_MODE, EmulationActivity.LAUNCH_MODE_REPLAY);
+        } else {
+            it.putExtra(EmulationActivity.EXTRA_LAUNCH_MODE, EmulationActivity.LAUNCH_MODE_LIVE);
         }
         startActivity(it);
     }
@@ -417,6 +422,15 @@ public class MainActivity extends AppCompatActivity {
      * launches and we don't want to rewrite the whole defaults file.
      */
     private boolean applyRuntimeConfig() {
+        boolean hasAdapter = applyControllerAndAvRuntimeConfig();
+        NativeLibrary.SetConfig("Dolphin.ini", "Core", "SlotA",
+                Integer.toString(NativeLibrary.EXI_DEVICE_NONE));
+        NativeLibrary.SetConfig("Dolphin.ini", "Core", "SerialPort1",
+                Integer.toString(NativeLibrary.EXI_DEVICE_NONE));
+        return hasAdapter;
+    }
+
+    private boolean applyControllerAndAvRuntimeConfig() {
         // Graphics backend selection from the toggle. Same default as
         // the initial-restore path so a fresh install gets Vulkan
         // without first touching the toggle.

@@ -60,6 +60,10 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     public static final String EXTRA_USE_GC_ADAPTER = "use_gc_adapter";
     /** Absolute path to a .slp file. Triggers replay playback mode when present. */
     public static final String EXTRA_REPLAY_PATH = "replay_path";
+    public static final String EXTRA_LAUNCH_MODE = "launch_mode";
+    public static final String LAUNCH_MODE_LIVE = "live";
+    public static final String LAUNCH_MODE_REPLAY = "replay";
+    public static final String LAUNCH_MODE_TRAINING = "training";
     private static final String TAG = "SlippiEmu";
     private static final boolean INPUT_DIAGNOSTICS = false;
     private static final boolean LATENCY_TRACE = BuildConfig.DEBUG;
@@ -104,6 +108,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     private boolean touchOverlayVisible;
     private boolean useGcAdapter;
     private boolean isReplayMode;
+    private boolean isTrainingMode;
     private String previousPeakRefreshRate;
     private String previousMinRefreshRate;
     private boolean refreshRateSettingsSaved;
@@ -257,23 +262,39 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         }
         NativeLibrary.SetFilename(iso);
 
-        // Replay mode: write the JSON config and point the C++ side at
-        // it before Run() boots. Live mode: write a neutral file AND
-        // point at it — defense in depth so a stale config from a prior
-        // replay launch can never bleed into a netplay session.
         String replayPath = getIntent().getStringExtra(EXTRA_REPLAY_PATH);
-        isReplayMode = replayPath != null && new File(replayPath).exists();
-        if (isReplayMode) {
+        String launchMode = getIntent().getStringExtra(EXTRA_LAUNCH_MODE);
+        isTrainingMode = LAUNCH_MODE_TRAINING.equals(launchMode);
+        isReplayMode = !isTrainingMode && replayPath != null && new File(replayPath).exists();
+
+        if (isTrainingMode) {
+            ReplayConfig.writeEmpty(this);
+            GeckoOverride.applyTrainingMode(this);
+            NativeLibrary.SetSlippiInputPath("");
+            NativeLibrary.SetEXIDeviceOverride(0, NativeLibrary.EXI_DEVICE_MEMORYCARD);
+            NativeLibrary.SetEXIDeviceOverride(1, NativeLibrary.EXI_DEVICE_NONE);
+            NativeLibrary.SetEXIDeviceOverride(2, NativeLibrary.EXI_DEVICE_NONE);
+        } else if (isReplayMode) {
+            NativeLibrary.SetEXIDeviceOverride(0, NativeLibrary.EXI_DEVICE_NONE);
+            NativeLibrary.SetEXIDeviceOverride(1, NativeLibrary.EXI_DEVICE_SLIPPI);
+            NativeLibrary.SetEXIDeviceOverride(2, NativeLibrary.EXI_DEVICE_NONE);
             ReplayConfig.writeNormal(this, new File(replayPath));
             // Swap in the playback-mode gecko codes so the title
             // screen runs the Slippi Playback boot path instead of
             // dropping into the Online menu.
             GeckoOverride.applyReplayMode(this);
+            NativeLibrary.SetSlippiInputPath(ReplayConfig.commFile(this).getAbsolutePath());
         } else {
+            NativeLibrary.SetEXIDeviceOverride(0, NativeLibrary.EXI_DEVICE_NONE);
+            NativeLibrary.SetEXIDeviceOverride(1, NativeLibrary.EXI_DEVICE_SLIPPI);
+            NativeLibrary.SetEXIDeviceOverride(2, NativeLibrary.EXI_DEVICE_NONE);
+            // Live mode: write a neutral file AND point at it — defense
+            // in depth so a stale config from a prior replay launch can
+            // never bleed into a netplay session.
             ReplayConfig.writeEmpty(this);
             GeckoOverride.applyLiveMode(this);
+            NativeLibrary.SetSlippiInputPath(ReplayConfig.commFile(this).getAbsolutePath());
         }
-        NativeLibrary.SetSlippiInputPath(ReplayConfig.commFile(this).getAbsolutePath());
 
         if (isReplayMode && replayHud != null) {
             replayHud.setVisibility(View.VISIBLE);
@@ -321,6 +342,9 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         restoreSystemRefreshRateSettings();
         // Idempotent: harmless if onBackPressed already stopped us.
         shutdownEmuThreadSync();
+        try {
+            NativeLibrary.ClearEXIDeviceOverrides();
+        } catch (Throwable ignored) {}
         if (NativeLibrary.sEmulationActivity == this) {
             NativeLibrary.setEmulationActivity(null);
         }

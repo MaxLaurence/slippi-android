@@ -74,6 +74,8 @@ std::string g_set_userpath = "";
 static std::mutex s_slippi_input_path_mutex;
 static std::string s_slippi_input_path;
 static std::atomic<int> g_emu_thread_tid{0};
+static std::mutex s_exi_override_mutex;
+static int s_exi_overrides[3] = {-1, -1, -1};
 
 JavaVM* g_java_vm;
 jclass g_jni_class;
@@ -758,6 +760,10 @@ JNIEXPORT jstring JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetConfig
     JNIEnv* env, jobject obj, jstring jFile, jstring jSection, jstring jKey, jstring jDefault);
 JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetConfig(
     JNIEnv* env, jobject obj, jstring jFile, jstring jSection, jstring jKey, jstring jValue);
+JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetEXIDeviceOverride(
+    JNIEnv* env, jobject obj, jint slot, jint device);
+JNIEXPORT void JNICALL
+Java_org_dolphinemu_dolphinemu_NativeLibrary_ClearEXIDeviceOverrides(JNIEnv* env, jobject obj);
 JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetFilename(JNIEnv* env,
                                                                                 jobject obj,
                                                                                 jstring jFile);
@@ -1161,6 +1167,23 @@ JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetConfig(
   ini.Save(File::GetUserPath(D_CONFIG_IDX) + std::string(file));
 }
 
+JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetEXIDeviceOverride(
+    JNIEnv* env, jobject obj, jint slot, jint device)
+{
+  if (slot < 0 || slot >= 3)
+    return;
+  std::lock_guard<std::mutex> guard(s_exi_override_mutex);
+  s_exi_overrides[slot] = device;
+}
+
+JNIEXPORT void JNICALL
+Java_org_dolphinemu_dolphinemu_NativeLibrary_ClearEXIDeviceOverrides(JNIEnv* env, jobject obj)
+{
+  std::lock_guard<std::mutex> guard(s_exi_override_mutex);
+  for (int& override_device : s_exi_overrides)
+    override_device = -1;
+}
+
 JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetFilename(JNIEnv* env,
                                                                                 jobject obj,
                                                                                 jstring jFile)
@@ -1429,6 +1452,14 @@ JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_Run(JNIEnv* 
   {
     std::lock_guard<std::mutex> slip_guard(s_slippi_input_path_mutex);
     SConfig::GetInstance().m_strSlippiInput = s_slippi_input_path;
+  }
+  {
+    std::lock_guard<std::mutex> exi_guard(s_exi_override_mutex);
+    for (int i = 0; i < 3; ++i)
+    {
+      if (s_exi_overrides[i] >= 0)
+        SConfig::GetInstance().m_EXIDevice[i] = static_cast<TEXIDevices>(s_exi_overrides[i]);
+    }
   }
 
   WiimoteReal::InitAdapterClass();

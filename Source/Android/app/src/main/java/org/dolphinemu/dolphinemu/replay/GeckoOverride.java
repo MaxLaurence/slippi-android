@@ -90,6 +90,28 @@ public final class GeckoOverride {
     }
 
     /**
+     * Training Mode Community Edition is already a patched ISO, so the
+     * Slippi Online and recording gecko defaults should not be injected
+     * on top of it. Keep a tiny per-game override that disables those
+     * bundled defaults while leaving the Training Mode DOL/files alone.
+     */
+    public static void applyTrainingMode(Context ctx) {
+        File dir = overrideDir(ctx);
+        if (!dir.exists() && !dir.mkdirs()) {
+            Log.w(TAG, "could not create " + dir);
+            return;
+        }
+        for (String name : INI_NAMES) {
+            File dst = new File(dir, name);
+            try (FileWriter w = new FileWriter(dst)) {
+                writeTrainingIni(w);
+            } catch (IOException e) {
+                Log.w(TAG, "apply training override " + dst + ": " + e);
+            }
+        }
+    }
+
+    /**
      * Copy the ini, dropping any {@code [Core]} section. Dolphin merges
      * per-game ini's [Core] over the global Dolphin.ini, and the
      * playback ini's [Core] disables CPUThread — a non-starter on
@@ -133,5 +155,10 @@ public final class GeckoOverride {
             w.write('\n');
         }
         w.write('\n');
+    }
+
+    private static void writeTrainingIni(FileWriter w) throws IOException {
+        w.write("# Android Training Mode launch override\n");
+        writeDisabledNetplayDefaults(w);
     }
 }

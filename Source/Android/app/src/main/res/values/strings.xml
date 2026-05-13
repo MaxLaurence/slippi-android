@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Slippi Dolphin</string>
+    <string name="back">Back</string>
     <string name="header_title">Slippi</string>
     <string name="build_chip">android · alpha</string>
     <string name="iso_section">Melee ISO</string>
@@ -17,13 +18,17 @@
     <string name="auth_resuming">Refreshing session…</string>
     <string name="auth_sign_out">Sign out</string>
     <string name="auth_import_link">Already have a user.json? Import it</string>
-    <string name="auth_explainer">Logs into slippi.gg in an in-app browser and pulls down your user.json. Required for netplay; uses the official Slippi flow.</string>
+    <string name="auth_import_link_compact">Import user.json</string>
+    <string name="auth_explainer">Required for netplay. Uses the official slippi.gg sign-in flow.</string>
     <string name="play">PLAY</string>
+    <string name="training_mode_button">TRAINING MODE</string>
+    <string name="settings_section">Launch settings</string>
+    <string name="settings_status_title">Live play defaults</string>
     <string name="graphics_label">Graphics backend</string>
     <string name="backend_vulkan">Vulkan</string>
     <string name="backend_ogl">OpenGL</string>
-    <string name="audio_status_default">Audio: Oboe / 4 bursts</string>
-    <string name="audio_status_format">Audio: %1$s / %2$d bursts</string>
+    <string name="audio_status_default">Audio Oboe/4</string>
+    <string name="audio_status_format">Audio %1$s/%2$d</string>
     <string name="audio_pick_preset">Audio preset</string>
     <string name="audio_preset_oboe_low">Oboe - Low latency (2 bursts)</string>
     <string name="audio_preset_oboe_balanced">Oboe - Balanced (4 bursts)</string>
@@ -37,13 +42,52 @@
     <string name="calibrate_sticks_link">⚙ Calibrate sticks</string>
     <string name="remap_buttons_link">🎮 Remap buttons</string>
     <string name="touch_controls_link">Touch controls</string>
+    <string name="calibrate_sticks_compact">Sticks</string>
+    <string name="remap_buttons_compact">Buttons</string>
+    <string name="touch_controls_compact">Touch</string>
     <string name="calibrate_pick_controller">Calibrate which controller?</string>
     <string name="remap_pick_controller">Remap buttons for which controller?</string>
     <string name="calibrate_device">This device\'s controls</string>
     <string name="calibrate_adapter_port">Adapter port %1$d</string>
 
+    <!-- Training Mode Community Edition -->
+    <string name="training_screen_title">Training Mode</string>
+    <string name="training_screen_chip">Community Edition</string>
+    <string name="training_section">Training Mode CE</string>
+    <string name="training_source_iso">Source ISO</string>
+    <string name="training_actions_section">Actions</string>
+    <string name="training_status_no_iso">Choose a Melee ISO first</string>
+    <string name="training_status_needs_check">Check for the latest Community Edition release</string>
+    <string name="training_status_can_build">Latest available: %1$s</string>
+    <string name="training_status_update_available">Update available: %1$s</string>
+    <string name="training_status_ready">Training Mode is ready</string>
+    <string name="training_status_working">Working on Training Mode…</string>
+    <string name="training_latest_format">Latest: %1$s</string>
+    <string name="training_installed_format">Installed: %1$s · %2$s</string>
+    <string name="training_no_version">No local Training Mode ISO yet</string>
+    <string name="training_unknown_version">unknown version</string>
+    <string name="training_storage_unknown">Storage impact shown before build</string>
+    <string name="training_storage_summary">Adds %1$s after cleanup · peaks at %2$s while building</string>
+    <string name="training_build">Build</string>
+    <string name="training_rebuild">Rebuild</string>
+    <string name="training_update">Update</string>
+    <string name="training_play">Play</string>
+    <string name="training_check_updates">Check updates</string>
+    <string name="training_remove">Remove Training Mode</string>
+    <string name="training_installed_path_label">Installed ISO</string>
+    <string name="training_no_installed_path">No Training Mode ISO installed</string>
+    <string name="training_remove_dialog_title">Remove Training Mode?</string>
+    <string name="training_remove_dialog_body">This removes the patched Training Mode ISO and frees %1$s. Your source Melee ISO stays installed.</string>
+    <string name="training_storage_dialog_title">Create Training Mode ISO?</string>
+    <string name="training_storage_dialog_body">This builds %1$s (%2$s) from your selected vanilla Melee ISO and leaves that ISO untouched.\n\nPermanent extra storage after cleanup: %3$s\nPeak extra space during build: %4$s\nPatch download: %5$s\nFree space now: %6$s</string>
+    <string name="training_storage_dialog_not_enough">Free up storage before building.</string>
+    <string name="training_build_progress_title">Building Training Mode</string>
+    <string name="training_building">Starting build…</string>
+    <string name="training_build_failed_title">Training Mode build failed</string>
+    <string name="training_build_failed_body">The patched ISO could not be created.</string>
+
     <!-- Replay playback -->
-    <string name="replays_button">▶ REPLAYS</string>
+    <string name="replays_button">REPLAYS</string>
     <string name="save_netplay_replays_label">Save netplay replays</string>
     <string name="replay_hud_loading">Loading…</string>
     <string name="replay_hud_play">Play</string>

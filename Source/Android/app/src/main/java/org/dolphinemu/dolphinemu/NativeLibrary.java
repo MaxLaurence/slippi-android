@@ -141,6 +141,13 @@ public final class NativeLibrary {
 
     public static native String GetConfig(String configFile, String section, String key, String defaultValue);
     public static native void SetConfig(String configFile, String section, String key, String value);
+    public static native void SetEXIDeviceOverride(int slot, int device);
+    public static native void ClearEXIDeviceOverrides();
+    public static native int ApplyXdeltaPatch(String sourcePath, String patchPath, String outputPath);
+
+    public static final int EXI_DEVICE_MEMORYCARD = 1;
+    public static final int EXI_DEVICE_SLIPPI = 10;
+    public static final int EXI_DEVICE_NONE = 255;
 
     public static native void SetFilename(String filename);
     public static native int[] GetBanner(String filename);

@@ -59,6 +59,14 @@
             android:theme="@style/Theme.SlippiDolphin.Emulation" />
 
         <activity
+            android:name="org.dolphinemu.dolphinemu.activities.TrainingModeActivity"
+            android:exported="false"
+            android:label="@string/training_screen_title"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@style/Theme.SlippiDolphin"
+            android:configChanges="orientation|screenSize|keyboardHidden|keyboard" />
+
+        <activity
             android:name="org.dolphinemu.dolphinemu.activities.CalibrationActivity"
             android:exported="false"
             android:label="Stick calibration"
