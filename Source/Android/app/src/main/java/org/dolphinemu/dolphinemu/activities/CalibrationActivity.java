@@ -14,7 +14,6 @@ import androidx.appcompat.app.AppCompatActivity;
 import com.google.android.material.button.MaterialButtonToggleGroup;
 import com.google.android.material.slider.Slider;
 
-import org.dolphinemu.dolphinemu.NativeLibrary;
 import org.dolphinemu.dolphinemu.R;
 import org.dolphinemu.dolphinemu.controller.ControllerProfile;
 import org.dolphinemu.dolphinemu.controller.StickCalibration;
@@ -54,8 +53,6 @@ public class CalibrationActivity extends AppCompatActivity {
 
     private String deviceKey;
     private String deviceLabel;
-    private boolean isAdapter;
-    private int adapterPort;
     private Stick stick = Stick.MAIN;
 
     // ─── view bindings ────────────────────────────────────────────
@@ -94,19 +91,6 @@ public class CalibrationActivity extends AppCompatActivity {
     private final StickCalibration.Out previewOut = new StickCalibration.Out();
 
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private final Runnable adapterPoll = new Runnable() {
-        @Override
-        public void run() {
-            int[] raw = NativeLibrary.GetRawAdapterStick(adapterPort,
-                    stick == Stick.MAIN ? 0 : 1);
-            if (raw != null && raw.length == 2) {
-                float nx = (raw[0] - 128f) / 127f;
-                float ny = (raw[1] - 128f) / 127f;
-                onRawSample(nx, ny);
-            }
-            ui.postDelayed(this, 16);
-        }
-    };
     private final Runnable rawInputPoll = new Runnable() {
         @Override
         public void run() {
@@ -134,13 +118,11 @@ public class CalibrationActivity extends AppCompatActivity {
         deviceLabel = getIntent().getStringExtra(EXTRA_DEVICE_LABEL);
         if (deviceKey == null) deviceKey = ControllerProfile.DEVICE_BUILTIN;
         if (deviceLabel == null) deviceLabel = "Controller";
-        isAdapter = deviceKey.startsWith("adapter:");
-        if (isAdapter) {
-            try {
-                adapterPort = Integer.parseInt(deviceKey.substring("adapter:".length()));
-            } catch (NumberFormatException e) {
-                adapterPort = 0;
-            }
+        if (deviceKey.startsWith("adapter:")) {
+            Toast.makeText(this, "GC adapter sticks use hardware calibration.",
+                    Toast.LENGTH_SHORT).show();
+            finish();
+            return;
         }
 
         previewView = findViewById(R.id.cal_preview_view);
@@ -190,10 +172,8 @@ public class CalibrationActivity extends AppCompatActivity {
             renderPreview();
         });
 
-        if (!isAdapter) {
-            rawStickInput = RawStickInputProviders.create(this);
-            if (rawStickInput != null) rawStickInput.start();
-        }
+        rawStickInput = RawStickInputProviders.create(this);
+        if (rawStickInput != null) rawStickInput.start();
 
         loadSlidersForCurrentStick();
         renderHeader();
@@ -203,23 +183,19 @@ public class CalibrationActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        if (isAdapter) {
-            ui.post(adapterPoll);
-        } else if (rawStickInput != null) {
+        if (rawStickInput != null) {
             ui.post(rawInputPoll);
         }
     }
 
     @Override
     protected void onPause() {
-        ui.removeCallbacks(adapterPoll);
         ui.removeCallbacks(rawInputPoll);
         super.onPause();
     }
 
     @Override
     protected void onDestroy() {
-        ui.removeCallbacks(adapterPoll);
         ui.removeCallbacks(rawInputPoll);
         if (rawStickInput != null) rawStickInput.stop();
         super.onDestroy();
@@ -232,8 +208,7 @@ public class CalibrationActivity extends AppCompatActivity {
      */
     @Override
     public boolean dispatchGenericMotionEvent(MotionEvent ev) {
-        if (!isAdapter
-                && rawStickInput == null
+        if (rawStickInput == null
                 && ((ev.getSource() & InputDevice.SOURCE_JOYSTICK) != 0
                 ||  (ev.getSource() & InputDevice.SOURCE_GAMEPAD) != 0)) {
             float x, y;
@@ -310,16 +285,6 @@ public class CalibrationActivity extends AppCompatActivity {
                 + " dz=" + cal.deadzone + " sens=" + cal.sensitivity
                 + " scaleXPos=" + cal.scaleXPos);
         profile.putStick(deviceKey, s, cal);
-
-        if (isAdapter) {
-            float cxByte = cal.centerX * 127f + 128f;
-            float cyByte = cal.centerY * 127f + 128f;
-            int stickIdx = which == Stick.MAIN ? 0 : 1;
-            NativeLibrary.SetGCAdapterStickCalibration(adapterPort, stickIdx,
-                    cxByte, cyByte,
-                    cal.scaleXPos, cal.scaleXNeg, cal.scaleYPos, cal.scaleYNeg,
-                    cal.deadzone, cal.sensitivity);
-        }
     }
 
     private StickCalibration buildCalibration(StickEdit edit) {
@@ -334,7 +299,7 @@ public class CalibrationActivity extends AppCompatActivity {
                 minX, maxX, minY, maxY,
                 restCenterX, restCenterY,
                 edit.deadzone, edit.sensitivity, edit.outputCap,
-                isAdapter || hasRawStickSource());
+                hasRawStickSource());
     }
 
     private boolean hasRawStickSource() {

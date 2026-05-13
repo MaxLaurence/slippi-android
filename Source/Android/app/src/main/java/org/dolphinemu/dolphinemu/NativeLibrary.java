@@ -51,11 +51,9 @@ public final class NativeLibrary {
     public static native void onGamePadMoveEvent(String device, int axis, float value);
 
     /**
-     * Push per-port stick calibration into GCAdapter_Android. stickIdx 0 = main, 1 = C.
-     * centerX/Y are in raw GC byte space (0..255, midpoint 128). Scales are
-     * multipliers in normalized [-1..+1] space; deadzone is normalized [0..1).
-     * Safe to call before emulation starts; the C++ side stores values
-     * atomically and uses them on the next Input() poll.
+     * Deprecated no-op kept for JNI compatibility. Physical GC adapter sticks
+     * pass through unchanged; app-level calibration only applies to Android/HID
+     * controller input.
      */
     public static native void SetGCAdapterStickCalibration(
             int port, int stickIdx,
@@ -65,9 +63,8 @@ public final class NativeLibrary {
             float deadzone, float sensitivity);
 
     /**
-     * Returns the latest raw stick bytes from a given GC adapter port,
-     * BYPASSING calibration. Used by the calibration wizard to capture
-     * the controller's actual range. stickIdx 0 = main, 1 = C.
+     * Returns the latest raw stick bytes from a given GC adapter port.
+     * stickIdx 0 = main, 1 = C.
      * Returns null if the adapter isn't connected on that port.
      * Each element is in 0..255 (128 is center).
      */

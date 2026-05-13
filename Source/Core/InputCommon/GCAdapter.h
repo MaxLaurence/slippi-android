@@ -36,10 +36,9 @@ bool IsDriverDetected();
 bool DeviceConnected(int chan);
 bool UseAdapter();
 
-// Per-port stick calibration. Set from the Android launcher; applied
-// in Input() before the GCPadStatus is returned to the emulator.
-// stick_idx: 0 = main stick, 1 = C-stick. Pass identity values
-// (center 128/128, scales all 1, deadzone 0) to disable.
+// Deprecated Android JNI entry point. Physical GC adapter sticks pass
+// through unchanged; app-level StickCalibration is only for Android/HID
+// controller paths.
 void SetStickCalibration(int chan, int stick_idx,
                          float center_x_byte, float center_y_byte,
                          float scale_x_pos, float scale_x_neg,
@@ -47,11 +46,8 @@ void SetStickCalibration(int chan, int stick_idx,
                          float deadzone_normalized,
                          float sensitivity_exponent);
 
-// Snapshot the latest raw (pre-calibration) stick bytes from a port.
-// Returns true and populates out_x/out_y if the port is connected and
-// has data. Used by the Android calibration wizard to capture the
-// controller's actual range without the calibration that Input() would
-// otherwise apply.
+// Snapshot the latest raw stick bytes from a port. Returns true and
+// populates out_x/out_y if the port is connected and has data.
 bool GetLatestRawStick(int chan, int stick_idx, u8* out_x, u8* out_y);
 
 // Per-port button remap. source_bit must be one of the PAD_BUTTON_* /

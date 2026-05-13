@@ -39,6 +39,7 @@ import org.dolphinemu.dolphinemu.views.TouchControlOverlayView;
  */
 public class EmulationActivity extends AppCompatActivity implements SurfaceHolder.Callback {
     public static final String EXTRA_ISO_PATH = "iso_path";
+    public static final String EXTRA_USE_GC_ADAPTER = "use_gc_adapter";
     private static final String TAG = "SlippiEmu";
     private static final boolean INPUT_DIAGNOSTICS = false;
 
@@ -59,6 +60,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     private RawStickInputProvider rawStickInput;
     private TouchControlOverlayView touchOverlay;
     private boolean touchOverlayVisible;
+    private boolean useGcAdapter;
     private final Runnable rawInputPoll = new Runnable() {
         @Override
         public void run() {
@@ -146,16 +148,17 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         surfaceView.setFocusable(true);
         surfaceView.setFocusableInTouchMode(true);
         surfaceView.requestFocus();
+        useGcAdapter = getIntent().getBooleanExtra(EXTRA_USE_GC_ADAPTER, false);
 
-        // Pull the latest on-device stick calibration. (GC adapter
-        // calibration is pushed into the C++ side from MainActivity
-        // before launch, so we don't need to do anything here for that
-        // path.)
+        // Pull the latest on-device stick calibration. GC adapter stick
+        // bytes pass through the native adapter path unchanged.
         ControllerProfile profile = new ControllerProfile(this);
         mainStickCal = profile.getStick(ControllerProfile.DEVICE_BUILTIN, ControllerProfile.Stick.MAIN);
         cStickCal    = profile.getStick(ControllerProfile.DEVICE_BUILTIN, ControllerProfile.Stick.C);
         buttonMap    = profile.getButtonMap(ControllerProfile.DEVICE_BUILTIN);
-        rawStickInput = RawStickInputProviders.create(this);
+        if (!useGcAdapter) {
+            rawStickInput = RawStickInputProviders.create(this);
+        }
         if (rawStickInput != null) {
             rawStickInput.start();
         }
@@ -374,6 +377,9 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        if (useGcAdapter) {
+            return super.dispatchKeyEvent(event);
+        }
         int action = event.getAction();
         int keyCode = event.getKeyCode();
         int bit = mapKeyToGcBit(keyCode);
@@ -395,6 +401,9 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     public boolean dispatchGenericMotionEvent(MotionEvent ev) {
         if ((ev.getSource() & android.view.InputDevice.SOURCE_JOYSTICK) == 0
                 && (ev.getSource() & android.view.InputDevice.SOURCE_GAMEPAD) == 0) {
+            return super.dispatchGenericMotionEvent(ev);
+        }
+        if (useGcAdapter) {
             return super.dispatchGenericMotionEvent(ev);
         }
         if (!shouldPollRawStickSource()) {
@@ -495,13 +504,13 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     }
 
     private boolean shouldPollRawStickSource() {
-        return hasRawStickSource() && !BuildConfig.FORCE_TOUCH_CONTROLS;
+        return !useGcAdapter && hasRawStickSource() && !BuildConfig.FORCE_TOUCH_CONTROLS;
     }
 
     private void updateTouchOverlayVisibility() {
         if (touchOverlay == null) return;
-        boolean show = BuildConfig.FORCE_TOUCH_CONTROLS
-                || !PhysicalControllerDetector.hasUsableP1Controller(rawStickInput);
+        boolean show = !useGcAdapter && (BuildConfig.FORCE_TOUCH_CONTROLS
+                || !PhysicalControllerDetector.hasUsableP1Controller(rawStickInput));
         if (show == touchOverlayVisible) return;
 
         touchOverlayVisible = show;

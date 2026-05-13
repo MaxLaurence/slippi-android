@@ -165,8 +165,9 @@ Calibration defaults (per-stick, applied even with no saved profile):
   providers** below.
 - **GC adapter (WUP-028)**: USB → `Java_GCAdapter.java` (async
   `UsbRequest` pipeline) → `GCAdapter_Android.cpp::Input` →
-  `ApplyStickCalibration` + `ApplyButtonRemap` (per-port atomic
-  tables) → emulator.
+  raw GameCube stick bytes + `ApplyButtonRemap` (per-port atomic
+  button table) → emulator. App-level stick calibration is not applied
+  to GC adapter controllers.
 
 ## Raw stick input providers
 
@@ -231,10 +232,10 @@ handheld would walk):
    instead of positive = right) or transposed XY; handle that
    inside the provider so consumers stay uniform.
 4. The launcher's calibration wizard automatically uses whichever
-   provider is selected — there is no per-device branch in
-   `CalibrationActivity`. If your provider works, the live preview
-   should jump past the firmware saturation point during the
-   "roll the stick" capture phase.
+   built-in/Bluetooth provider is selected. GC adapter controllers are
+   excluded because their stick bytes should pass through unchanged. If
+   your provider works, the live preview should jump past the firmware
+   saturation point during the "roll the stick" capture phase.
 
 **How the Odin/Thor binder contract was reverse-engineered** (for
 contributors who want to do similar work on another vendor):
@@ -331,7 +332,7 @@ See `git log android-port` for the full series. Highlights:
 - `Source/Core/InputCommon/GCAdapter_Android.cpp` — async
   `UsbRequest` read pipeline, big-core `sched_setaffinity`, fixed
   memcpy buffer bound that was overflowing the 37-byte payload,
-  per-port atomic stick calibration + button remap.
+  raw stick pass-through, and per-port atomic button remap.
 - `Source/Android/app/src/main/java/.../utils/Java_GCAdapter.java` —
   pre-queued `UsbRequest`s, hot-plug intent filter, faster polling.
 - `Source/Android/jni/MainAndroid.cpp` —

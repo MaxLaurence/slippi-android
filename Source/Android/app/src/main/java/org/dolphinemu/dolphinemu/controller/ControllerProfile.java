@@ -11,10 +11,13 @@ import android.content.SharedPreferences;
  * during the calibration wizard).
  *
  * Device keys:
- *   "builtin"       — the host device's onboard pad / any Bluetooth pad
- *                     (we deliberately don't distinguish Bluetooth pads
- *                      yet — the typical user has exactly one)
- *   "adapter:N"     — WUP-028 GameCube adapter port N (0..3)
+ *   "builtin"       — stick calibration and button maps for the host
+ *                     device's onboard pad / any Bluetooth pad (we
+ *                     deliberately don't distinguish Bluetooth pads yet —
+ *                     the typical user has exactly one)
+ *   "adapter:N"     — WUP-028 GameCube adapter port N (0..3), button maps
+ *                     only. Adapter stick bytes are already calibrated by
+ *                     the controller hardware and are not app-calibrated.
  *
  * Stick keys: {@link Stick#MAIN}, {@link Stick#C}.
  */

@@ -36,7 +36,6 @@ import org.json.JSONObject;
 import java.io.FileInputStream;
 import java.nio.charset.StandardCharsets;
 import org.dolphinemu.dolphinemu.controller.ControllerProfile;
-import org.dolphinemu.dolphinemu.controller.StickCalibration;
 
 import androidx.appcompat.app.AlertDialog;
 
@@ -276,22 +275,17 @@ public class MainActivity extends AppCompatActivity {
             toast("Pick an ISO first");
             return;
         }
-        applyRuntimeConfig();
-        pushAdapterCalibrationToNative();
+        boolean useGcAdapter = applyRuntimeConfig();
         pushAdapterButtonMapsToNative();
         Intent it = new Intent(this, EmulationActivity.class);
         it.putExtra(EmulationActivity.EXTRA_ISO_PATH, isoPath);
+        it.putExtra(EmulationActivity.EXTRA_USE_GC_ADAPTER, useGcAdapter);
         startActivity(it);
     }
 
     /**
-     * Show a chooser dialog for which controller to calibrate. The list
-     * includes the on-device pad ("Ayn Thor") plus any GC adapter ports
-     * the OS reports as connected. Tapping a row launches the wizard.
-     */
-    /**
-     * Same chooser pattern as calibration: list the available controllers,
-     * tap to launch the per-device remap activity.
+     * List controllers available for button remapping. GC adapter ports stay
+     * here because remapping buttons does not alter the controller's stick data.
      */
     private void showRemapChooser() {
         java.util.List<String> labels = new java.util.ArrayList<>();
@@ -320,16 +314,6 @@ public class MainActivity extends AppCompatActivity {
         java.util.List<String> deviceKeys = new java.util.ArrayList<>();
         labels.add(getString(R.string.calibrate_device));
         deviceKeys.add(ControllerProfile.DEVICE_BUILTIN);
-        if (hasWiiUAdapter()) {
-            // Adapter has 4 ports; we don't know which are populated
-            // without reading the payload, but offering all four is
-            // cheap and the wizard tells the user when nothing is
-            // connected on a port (no live readout = no range captured).
-            for (int i = 0; i < 4; i++) {
-                labels.add(getString(R.string.calibrate_adapter_port, i + 1));
-                deviceKeys.add(ControllerProfile.adapterDeviceKey(i));
-            }
-        }
         new AlertDialog.Builder(this)
                 .setTitle(R.string.calibrate_pick_controller)
                 .setItems(labels.toArray(new CharSequence[0]), (d, which) -> {
@@ -339,31 +323,6 @@ public class MainActivity extends AppCompatActivity {
                     startActivity(it);
                 })
                 .show();
-    }
-
-    /**
-     * Push every saved GC adapter stick calibration to the C++ side so
-     * Input() picks them up on the next poll. Identity values for ports
-     * that have never been calibrated.
-     */
-    private void pushAdapterCalibrationToNative() {
-        ControllerProfile profile = new ControllerProfile(this);
-        for (int port = 0; port < 4; port++) {
-            String key = ControllerProfile.adapterDeviceKey(port);
-            for (ControllerProfile.Stick s : ControllerProfile.Stick.values()) {
-                StickCalibration cal = profile.getStick(key, s);
-                int stickIdx = s == ControllerProfile.Stick.MAIN ? 0 : 1;
-                // Calibration is normalized; convert center back to byte space.
-                float centerXByte = cal.centerX * 127f + 128f;
-                float centerYByte = cal.centerY * 127f + 128f;
-                NativeLibrary.SetGCAdapterStickCalibration(
-                        port, stickIdx,
-                        centerXByte, centerYByte,
-                        cal.scaleXPos, cal.scaleXNeg,
-                        cal.scaleYPos, cal.scaleYNeg,
-                        cal.deadzone, cal.sensitivity);
-            }
-        }
     }
 
     /**
@@ -401,7 +360,7 @@ public class MainActivity extends AppCompatActivity {
      * plus runtime state (adapter presence) — both can change between
      * launches and we don't want to rewrite the whole defaults file.
      */
-    private void applyRuntimeConfig() {
+    private boolean applyRuntimeConfig() {
         // Graphics backend selection from the toggle. Same default as
         // the initial-restore path so a fresh install gets Vulkan
         // without first touching the toggle.
@@ -417,6 +376,7 @@ public class MainActivity extends AppCompatActivity {
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "SIDevice1", portN);
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "SIDevice2", portN);
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "SIDevice3", portN);
+        return hasAdapter;
     }
 
     private boolean hasWiiUAdapter() {
