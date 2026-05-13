@@ -23,15 +23,21 @@ public:
 	void ReleaseSHMSegment();
 	void* CreateView(s64 offset, size_t size, void* base = nullptr);
 	void ReleaseView(void* view, size_t size);
+	u8* ReserveMemoryRegion(size_t size, size_t alignment = 0, void* fixed_base = nullptr);
+	void ReleaseMemoryRegion();
+	bool HasMemoryRegion() const;
+	bool HasSHMSegment() const;
 
 	// This finds 1 GB in 32-bit, 16 GB in 64-bit.
 	static u8* FindMemoryBase();
 private:
 
 #ifdef _WIN32
-	HANDLE hMemoryMapping;
+	HANDLE hMemoryMapping = 0;
 #else
-	int fd;
+	int fd = -1;
+	void* reserved_base = nullptr;
+	size_t reserved_size = 0;
 #endif
 };
 

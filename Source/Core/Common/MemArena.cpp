@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <set>
 #include <string>
@@ -21,8 +22,11 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <sys/syscall.h>
 #ifdef ANDROID
+#include <android/log.h>
 #include <sys/ioctl.h>
+#include <sys/system_properties.h>
 #include <linux/ashmem.h>
 #endif
 
@@ -33,6 +37,11 @@
 
 #ifdef ANDROID
 #define ASHMEM_DEVICE "/dev/ashmem"
+#define DOLPHIN_MEMMAP_TAG "DolphinMemMap"
+
+#ifndef MFD_CLOEXEC
+#define MFD_CLOEXEC 0x0001U
+#endif
 
 static int AshmemCreateFileMapping(const char* name, size_t size)
 {
@@ -48,10 +57,43 @@ static int AshmemCreateFileMapping(const char* name, size_t size)
 	if (ret < 0)
 	{
 		close(fd);
-		NOTICE_LOG(MEMMAP, "Ashmem returned error: 0x%08x", ret);
+		NOTICE_LOG(MEMMAP, "Ashmem returned error: 0x%08x: %s", ret, strerror(errno));
 		return ret;
 	}
 	return fd;
+}
+
+static int MemfdCreateFileMapping(const char* name, size_t size)
+{
+#ifdef __NR_memfd_create
+	int fd = static_cast<int>(syscall(__NR_memfd_create, name, MFD_CLOEXEC));
+	if (fd < 0)
+	{
+		NOTICE_LOG(MEMMAP, "memfd_create failed: %s", strerror(errno));
+		return fd;
+	}
+
+	if (ftruncate(fd, size) < 0)
+	{
+		NOTICE_LOG(MEMMAP, "memfd ftruncate failed: %s", strerror(errno));
+		close(fd);
+		return -1;
+	}
+
+	return fd;
+#else
+	return -1;
+#endif
+}
+
+static bool ShouldForceAlignedMemoryBase()
+{
+	char value[PROP_VALUE_MAX] = {};
+	if (__system_property_get("debug.dolphin.force_aligned_membase", value) <= 0)
+		return false;
+
+	return strcmp(value, "1") == 0 || strcasecmp(value, "true") == 0 ||
+	       strcasecmp(value, "yes") == 0;
 }
 #endif
 
@@ -62,8 +104,10 @@ void MemArena::GrabSHMSegment(size_t size)
 #elif defined(ANDROID)
 	fd = AshmemCreateFileMapping("Dolphin-emu", size);
 	if (fd < 0)
+		fd = MemfdCreateFileMapping("Dolphin-emu", size);
+	if (fd < 0)
 	{
-		NOTICE_LOG(MEMMAP, "Ashmem allocation failed");
+		NOTICE_LOG(MEMMAP, "Shared memory allocation failed");
 		return;
 	}
 #else
@@ -94,7 +138,9 @@ void MemArena::ReleaseSHMSegment()
 	CloseHandle(hMemoryMapping);
 	hMemoryMapping = 0;
 #else
-	close(fd);
+	if (fd >= 0)
+		close(fd);
+	fd = -1;
 #endif
 }
 
@@ -112,7 +158,8 @@ void* MemArena::CreateView(s64 offset, size_t size, void* base)
 
 	if (retval == MAP_FAILED)
 	{
-		NOTICE_LOG(MEMMAP, "mmap failed");
+		NOTICE_LOG(MEMMAP, "mmap failed base=%p size=%zu offset=%lld fd=%d: %s",
+		           base, size, static_cast<long long>(offset), fd, strerror(errno));
 		return nullptr;
 	}
 	else
@@ -129,6 +176,116 @@ void MemArena::ReleaseView(void* view, size_t size)
 	UnmapViewOfFile(view);
 #else
 	munmap(view, size);
+#endif
+}
+
+
+u8* MemArena::ReserveMemoryRegion(size_t size, size_t alignment, void* fixed_base)
+{
+#ifdef _WIN32
+	return static_cast<u8*>(fixed_base);
+#else
+	ReleaseMemoryRegion();
+
+	if (size == 0)
+		return nullptr;
+
+	const int flags = MAP_ANON | MAP_PRIVATE;
+
+	if (fixed_base)
+	{
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE 0x100000
+#endif
+		void* base = mmap(fixed_base, size, PROT_NONE, flags | MAP_FIXED_NOREPLACE, -1, 0);
+		if (base == MAP_FAILED)
+		{
+			NOTICE_LOG(MEMMAP, "Failed to reserve fixed memory region base=%p size=%zu: %s",
+			           fixed_base, size, strerror(errno));
+			return nullptr;
+		}
+		if (base != fixed_base)
+		{
+			NOTICE_LOG(MEMMAP, "Fixed memory reservation returned unexpected base=%p requested=%p",
+			           base, fixed_base);
+			munmap(base, size);
+			return nullptr;
+		}
+
+		reserved_base = base;
+		reserved_size = size;
+		return static_cast<u8*>(base);
+	}
+
+	if (alignment <= static_cast<size_t>(getpagesize()))
+	{
+		void* base = mmap(nullptr, size, PROT_NONE, flags, -1, 0);
+		if (base == MAP_FAILED)
+		{
+			NOTICE_LOG(MEMMAP, "Failed to reserve memory region size=%zu: %s",
+			           size, strerror(errno));
+			return nullptr;
+		}
+
+		reserved_base = base;
+		reserved_size = size;
+		return static_cast<u8*>(base);
+	}
+
+	const size_t allocation_size = size + alignment;
+	void* allocation = mmap(nullptr, allocation_size, PROT_NONE, flags, -1, 0);
+	if (allocation == MAP_FAILED)
+	{
+		NOTICE_LOG(MEMMAP, "Failed to reserve aligned memory region size=%zu alignment=%zu: %s",
+		           size, alignment, strerror(errno));
+		return nullptr;
+	}
+
+	const uintptr_t raw = reinterpret_cast<uintptr_t>(allocation);
+	const uintptr_t aligned = (raw + alignment - 1) & ~(static_cast<uintptr_t>(alignment) - 1);
+	const size_t prefix_size = aligned - raw;
+	const uintptr_t allocation_end = raw + allocation_size;
+	const uintptr_t aligned_end = aligned + size;
+	const size_t suffix_size = allocation_end - aligned_end;
+
+	if (prefix_size != 0)
+		munmap(reinterpret_cast<void*>(raw), prefix_size);
+	if (suffix_size != 0)
+		munmap(reinterpret_cast<void*>(aligned_end), suffix_size);
+
+	reserved_base = reinterpret_cast<void*>(aligned);
+	reserved_size = size;
+	return static_cast<u8*>(reserved_base);
+#endif
+}
+
+void MemArena::ReleaseMemoryRegion()
+{
+#ifndef _WIN32
+	if (!reserved_base)
+		return;
+
+	munmap(reserved_base, reserved_size);
+	reserved_base = nullptr;
+	reserved_size = 0;
+#endif
+}
+
+bool MemArena::HasMemoryRegion() const
+{
+#ifdef _WIN32
+	return false;
+#else
+	return reserved_base != nullptr;
+#endif
+}
+
+bool MemArena::HasSHMSegment() const
+{
+#ifdef _WIN32
+	return hMemoryMapping != 0;
+#else
+	return fd >= 0;
 #endif
 }
 
@@ -272,23 +429,74 @@ u8* MemoryMap_Setup(MemoryView* views, int num_views, u32 flags, MemArena* arena
 	u32 total_mem = MemoryMap_InitializeViews(views, num_views, flags);
 
 	arena->GrabSHMSegment(total_mem);
-
-	// Now, create views in high memory where there's plenty of space.
-	u8* base = MemArena::FindMemoryBase();
-	// This really shouldn't fail - in 64-bit, there will always be enough
-	// address space.
-	if (!Memory_TryBase(base, views, num_views, flags, arena))
+	if (!arena->HasSHMSegment())
 	{
-		PanicAlert("MemoryMap_Setup: Failed finding a memory base.");
+		PanicAlert("MemoryMap_Setup: Failed creating shared memory backing store.");
 		exit(0);
 		return nullptr;
 	}
 
-	return base;
+#if defined(ANDROID) && _ARCH_64
+	// The ARM64 JIT assumes the emulated memory base is 4 GB aligned, and
+	// fastmem relies on the unmapped holes in the 16 GB address window staying
+	// reserved so invalid guest accesses fault instead of hitting unrelated
+	// process mappings.
+	constexpr size_t MEMORY_REGION_SIZE = 0x400000000ULL;
+	constexpr size_t MEMORY_BASE_ALIGNMENT = 0x100000000ULL;
+	const bool force_aligned_base = ShouldForceAlignedMemoryBase();
+	u8* base = nullptr;
+
+	if (!force_aligned_base)
+	{
+		base = arena->ReserveMemoryRegion(
+		    MEMORY_REGION_SIZE, 0, reinterpret_cast<void*>(0x2300000000ULL));
+		if (base && Memory_TryBase(base, views, num_views, flags, arena))
+		{
+			__android_log_print(ANDROID_LOG_INFO, DOLPHIN_MEMMAP_TAG,
+			                    "using fixed ARM64 memory base %p", base);
+			return base;
+		}
+	}
+	else
+	{
+		__android_log_print(ANDROID_LOG_INFO, DOLPHIN_MEMMAP_TAG,
+		                    "forcing aligned ARM64 memory base fallback");
+	}
+
+	base = arena->ReserveMemoryRegion(MEMORY_REGION_SIZE, MEMORY_BASE_ALIGNMENT);
+	if (base && Memory_TryBase(base, views, num_views, flags, arena))
+	{
+		__android_log_print(ANDROID_LOG_INFO, DOLPHIN_MEMMAP_TAG,
+		                    "using aligned ARM64 memory base %p", base);
+		return base;
+	}
+#else
+	// Now, create views in high memory where there's plenty of space.
+	u8* base = MemArena::FindMemoryBase();
+	// This really shouldn't fail - in 64-bit, there will always be enough
+	// address space.
+	if (Memory_TryBase(base, views, num_views, flags, arena))
+		return base;
+#endif
+
+	PanicAlert("MemoryMap_Setup: Failed finding a memory base.");
+	exit(0);
+	return nullptr;
 }
 
 void MemoryMap_Shutdown(MemoryView* views, int num_views, u32 flags, MemArena* arena)
 {
+	if (arena->HasMemoryRegion())
+	{
+		arena->ReleaseMemoryRegion();
+		for (int i = 0; i < num_views; i++)
+		{
+			views[i].mapped_ptr = nullptr;
+			views[i].view_ptr = nullptr;
+		}
+		return;
+	}
+
 	std::set<void*> freeset;
 	for (int i = 0; i < num_views; i++)
 	{
