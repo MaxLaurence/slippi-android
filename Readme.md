@@ -6,7 +6,8 @@ Ishiiruka fork of Dolphin), built and tuned for the
 recent aarch64 Android devices with Adreno or comparable GPUs.
 
 > **Status:** Plays Melee online via Slippi netplay (direct-connect,
-> ranked, unranked, teams) at full speed on the Thor, with both the
+> unranked, teams) at full speed on the Thor, with ranked queues
+> disabled in this Android build, with both the
 > official GameCube USB adapter (WUP-028) and the device's built-in
 > controls. Sign-in is handled by the official slippi.gg flow embedded
 > in the launcher; the calibration wizard lets you tune stick deadzone
@@ -67,7 +68,8 @@ For the official desktop launcher, go to https://slippi.gg.
 
 ## What works
 
-- Slippi netplay: direct-connect, unranked, ranked, teams.
+- Slippi netplay: direct-connect, unranked, teams. Ranked queues are
+  disabled in this Android build.
 - Official GameCube USB adapter (WUP-028 / WUP-028-NA), including
   hot-plug and 4-port local versus.
 - Bluetooth controllers and on-device gamepads.
@@ -163,7 +165,7 @@ Output APKs land at `Source/Android/app/build/outputs/apk/{debug,release}/`.
 ## Credits
 
 - [Project Slippi](https://github.com/project-slippi) — the netplay,
-  matchmaking, replay, and ranked stack this port depends on.
+  matchmaking and replay stack this port depends on.
 - [connoranastasio/Ishiiruka-rocknix](https://github.com/connoranastasio/Ishiiruka-rocknix) —
   the ROCKNIX port that was a useful reference for the JitArm64
   emitter patches and several CMake-side build fixes.

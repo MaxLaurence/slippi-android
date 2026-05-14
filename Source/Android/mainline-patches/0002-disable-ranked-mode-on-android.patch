@@ -1,0 +1,64 @@
+diff --git a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
+--- a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
++++ b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
+@@ -1759,6 +1759,16 @@ void CEXISlippi::startFindMatch(u8* payload)
+   SlippiMatchmaking::MatchSearchSettings search;
+   search.mode = (SlippiMatchmaking::OnlinePlayMode)payload[0];
+ 
++#ifdef ANDROID
++  if (search.mode == SlippiMatchmaking::OnlinePlayMode::RANKED)
++  {
++    last_search = search;
++    forced_error = SlippiMatchmaking::RankedDisabledMessage();
++    ERROR_LOG_FMT(SLIPPI_ONLINE, "Ranked matchmaking is disabled on Android");
++    return;
++  }
++#endif
++
+   std::string shift_jis_code;
+   shift_jis_code.insert(shift_jis_code.begin(), &payload[1], &payload[1] + 18);
+   shift_jis_code.erase(std::find(shift_jis_code.begin(), shift_jis_code.end(), 0x00),
+diff --git a/Source/Core/Core/Slippi/SlippiMatchmaking.cpp b/Source/Core/Core/Slippi/SlippiMatchmaking.cpp
+--- a/Source/Core/Core/Slippi/SlippiMatchmaking.cpp
++++ b/Source/Core/Core/Slippi/SlippiMatchmaking.cpp
+@@ -62,6 +62,17 @@ void SlippiMatchmaking::FindMatch(MatchSearchSettings settings)
+ {
+   is_mm_connected = false;
+ 
++#ifdef ANDROID
++  if (settings.mode == SlippiMatchmaking::OnlinePlayMode::RANKED)
++  {
++    m_search_settings = settings;
++    m_error_msg = RankedDisabledMessage();
++    m_state = ProcessState::ERROR_ENCOUNTERED;
++    ERROR_LOG_FMT(SLIPPI_ONLINE, "[Matchmaking] Ranked mode is disabled on Android");
++    return;
++  }
++#endif
++
+   ERROR_LOG_FMT(SLIPPI_ONLINE, "[Matchmaking] Starting matchmaking...");
+ 
+   m_search_settings = settings;
+@@ -70,6 +81,11 @@ void SlippiMatchmaking::FindMatch(MatchSearchSettings settings)
+   m_matchmake_thread = std::thread(&SlippiMatchmaking::MatchmakeThread, this);
+ }
+ 
++const char* SlippiMatchmaking::RankedDisabledMessage()
++{
++  return "Ranked mode is disabled on this Android build";
++}
++
+ SlippiMatchmaking::ProcessState SlippiMatchmaking::GetMatchmakeState()
+ {
+   return m_state;
+diff --git a/Source/Core/Core/Slippi/SlippiMatchmaking.h b/Source/Core/Core/Slippi/SlippiMatchmaking.h
+--- a/Source/Core/Core/Slippi/SlippiMatchmaking.h
++++ b/Source/Core/Core/Slippi/SlippiMatchmaking.h
+@@ -94,6 +94,7 @@ public:
+   u8 RemotePlayerCount();
+   MatchmakeResult GetMatchmakeResult();
+   static bool IsFixedRulesMode(OnlinePlayMode mode);
++  static const char* RankedDisabledMessage();
+ 
+ protected:
+   const std::string MM_HOST_DEV = "mm2.slippi.gg";  // Dev host

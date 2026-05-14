@@ -1817,6 +1817,16 @@ void CEXISlippi::startFindMatch(u8 *payload)
 	SlippiMatchmaking::MatchSearchSettings search;
 	search.mode = (SlippiMatchmaking::OnlinePlayMode)payload[0];
 
+#ifdef ANDROID
+	if (search.mode == SlippiMatchmaking::OnlinePlayMode::RANKED)
+	{
+		lastSearch = search;
+		forcedError = SlippiMatchmaking::RankedDisabledMessage();
+		ERROR_LOG(SLIPPI_ONLINE, "Ranked matchmaking is disabled on Android");
+		return;
+	}
+#endif
+
 	std::string shiftJisCode;
 	shiftJisCode.insert(shiftJisCode.begin(), &payload[1], &payload[1] + 18);
 	shiftJisCode.erase(std::find(shiftJisCode.begin(), shiftJisCode.end(), 0x00), shiftJisCode.end());

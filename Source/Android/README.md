@@ -85,6 +85,12 @@ embedding changes there instead of leaving hidden edits in
 `Externals/MainlineSlippiDolphin`; the patch task reports upstream conflicts
 early and skips patches that are already present in a local development copy.
 
+Ranked matchmaking is intentionally disabled for Android in both native cores.
+Ishiiruka carries the guard in this checkout's `EXI_DeviceSlippi` and
+`SlippiMatchmaking` sources; mainline gets the same guard from
+`Source/Android/mainline-patches/0002-disable-ranked-mode-on-android.patch`.
+Direct connect, unranked and teams are still available.
+
 ## Slippi sign-in
 
 The launcher signs users in by embedding `https://slippi.gg/online/enable`

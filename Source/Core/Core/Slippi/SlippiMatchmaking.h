@@ -93,6 +93,7 @@ class SlippiMatchmaking
 	u8 RemotePlayerCount();
 	MatchmakeResult GetMatchmakeResult();
 	static bool IsFixedRulesMode(OnlinePlayMode mode);
+	static const char* RankedDisabledMessage();
 
   protected:
 	const std::string MM_HOST_DEV = "mm2.slippi.gg";

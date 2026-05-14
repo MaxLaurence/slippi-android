@@ -59,6 +59,17 @@ void SlippiMatchmaking::FindMatch(MatchSearchSettings settings)
 {
 	isMmConnected = false;
 
+#ifdef ANDROID
+	if (settings.mode == SlippiMatchmaking::OnlinePlayMode::RANKED)
+	{
+		m_searchSettings = settings;
+		m_errorMsg = RankedDisabledMessage();
+		m_state = ProcessState::ERROR_ENCOUNTERED;
+		ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Ranked mode is disabled on Android");
+		return;
+	}
+#endif
+
 	ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Starting matchmaking...");
 
 	m_searchSettings = settings;
@@ -66,6 +77,11 @@ void SlippiMatchmaking::FindMatch(MatchSearchSettings settings)
 	m_errorMsg = "";
 	m_state = ProcessState::INITIALIZING;
 	m_matchmakeThread = std::thread(&SlippiMatchmaking::MatchmakeThread, this);
+}
+
+const char* SlippiMatchmaking::RankedDisabledMessage()
+{
+	return "Ranked mode is disabled on this Android build";
 }
 
 SlippiMatchmaking::ProcessState SlippiMatchmaking::GetMatchmakeState()

@@ -280,35 +280,53 @@ tasks.register('applyMainlineSlippiPatches') {
         }
 
         def sourceDir = mainlineWorkDir.get().asFile
-        patches.each { patch ->
-            def reverseCheck = exec {
+        def gitCeilingDir = sourceDir.parentFile.absolutePath
+        def checkPatch = { List<String> gitApplyArgs ->
+            def standardOutputBytes = new ByteArrayOutputStream()
+            def errorOutputBytes = new ByteArrayOutputStream()
+            def result = exec {
                 workingDir sourceDir
-                commandLine 'git', 'apply', '--reverse', '--check', patch.absolutePath
+                environment 'GIT_CEILING_DIRECTORIES', gitCeilingDir
+                commandLine gitApplyArgs
                 ignoreExitValue true
+                standardOutput = standardOutputBytes
+                errorOutput = errorOutputBytes
             }
+
+            return [
+                    exitValue: result.exitValue,
+                    stdout: standardOutputBytes.toString('UTF-8').trim(),
+                    stderr: errorOutputBytes.toString('UTF-8').trim()
+            ]
+        }
+
+        patches.each { patch ->
+            def reverseCheck = checkPatch(['git', 'apply', '--reverse', '--check', patch.absolutePath])
             if (reverseCheck.exitValue == 0) {
                 logger.lifecycle("Mainline Slippi patch ${patch.name} is already applied")
                 return
             }
 
-            def applyCheck = exec {
-                workingDir sourceDir
-                commandLine 'git', 'apply', '--check', patch.absolutePath
-                ignoreExitValue true
-            }
+            def applyCheck = checkPatch(['git', 'apply', '--check', patch.absolutePath])
             if (applyCheck.exitValue == 0) {
                 exec {
                     workingDir sourceDir
+                    environment 'GIT_CEILING_DIRECTORIES', gitCeilingDir
                     commandLine 'git', 'apply', patch.absolutePath
                 }
                 logger.lifecycle("Applied mainline Slippi patch ${patch.name}")
                 return
             }
 
+            def diagnostics = ([reverseCheck.stderr, reverseCheck.stdout,
+                                applyCheck.stderr, applyCheck.stdout]
+                    .findAll { it }
+                    .join(System.lineSeparator()))
             throw new GradleException(
                     "Could not apply mainline Slippi patch ${patch.name}. " +
                     "Upstream probably changed one of the patched files; refresh " +
-                    "Source/Android/mainline-patches before rebuilding.")
+                    "Source/Android/mainline-patches before rebuilding." +
+                    (diagnostics ? "${System.lineSeparator()}${diagnostics}" : ""))
         }
     }
 }
