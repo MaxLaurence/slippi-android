@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Slippi Dolphin</string>
+    <string name="app_name">Slippi (unofficial)</string>
     <string name="back">Back</string>
-    <string name="header_title">Slippi</string>
+    <string name="header_title">Slippi (unofficial)</string>
     <string name="build_chip">android · alpha</string>
     <string name="iso_section">Melee ISO</string>
     <string name="user_json_section">Slippi user.json</string>
@@ -24,6 +24,12 @@
     <string name="training_mode_button">TRAINING MODE</string>
     <string name="settings_section">Launch settings</string>
     <string name="settings_status_title">Live play defaults</string>
+    <string name="launcher_settings_content_description">Settings</string>
+    <string name="launcher_settings_audio">Audio configuration</string>
+    <string name="launcher_settings_audio_current">Audio: %1$s/%2$d</string>
+    <string name="launcher_settings_calibrate">Calibrate sticks</string>
+    <string name="launcher_settings_remap">Remap buttons</string>
+    <string name="launcher_settings_touch">Touch controls</string>
     <string name="emulator_core_label">Emulator core</string>
     <string name="core_ishiiruka">Ishiiruka</string>
     <string name="core_mainline">Mainline</string>

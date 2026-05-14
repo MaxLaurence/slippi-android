@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/menu_launcher_audio"
+        android:title="@string/launcher_settings_audio"/>
+    <item
+        android:id="@+id/menu_launcher_calibrate"
+        android:title="@string/launcher_settings_calibrate"/>
+    <item
+        android:id="@+id/menu_launcher_remap"
+        android:title="@string/launcher_settings_remap"/>
+    <item
+        android:id="@+id/menu_launcher_touch"
+        android:title="@string/launcher_settings_touch"/>
+</menu>

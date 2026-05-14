@@ -18,6 +18,7 @@ import android.widget.Toast;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.widget.PopupMenu;
 import androidx.preference.PreferenceManager;
 
 import com.google.android.material.button.MaterialButtonToggleGroup;
@@ -85,7 +86,7 @@ public class MainActivity extends AppCompatActivity {
 
     private TextView isoStatus;
     private TextView adapterStatus;
-    private TextView audioSettingsLink;
+    private TextView audioStatus;
     private TextView emulatorCoreStatus;
     private MaterialButtonToggleGroup emulatorCoreToggle;
     private MaterialButtonToggleGroup backendToggle;
@@ -151,7 +152,7 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
         isoStatus = findViewById(R.id.iso_status);
         adapterStatus = findViewById(R.id.adapter_status);
-        audioSettingsLink = findViewById(R.id.audio_settings_link);
+        audioStatus = findViewById(R.id.audio_status);
         emulatorCoreStatus = findViewById(R.id.emulator_core_status);
         emulatorCoreToggle = findViewById(R.id.emulator_core_toggle);
         backendToggle = findViewById(R.id.backend_toggle);
@@ -191,11 +192,7 @@ public class MainActivity extends AppCompatActivity {
         });
         authImportLink.setOnClickListener(v ->
                 pickUserJson.launch(new String[]{"application/json", "*/*"}));
-        findViewById(R.id.calibrate_link).setOnClickListener(v -> showCalibrationChooser());
-        findViewById(R.id.remap_link).setOnClickListener(v -> showRemapChooser());
-        audioSettingsLink.setOnClickListener(v -> showAudioChooser());
-        findViewById(R.id.touch_overlay_link).setOnClickListener(v ->
-                startActivity(new Intent(this, TouchOverlayActivity.class)));
+        findViewById(R.id.launcher_settings).setOnClickListener(this::showLauncherSettingsMenu);
         findViewById(R.id.play).setOnClickListener(v -> launchEmulation(null));
         findViewById(R.id.training_mode_button).setOnClickListener(v ->
                 startActivity(new Intent(this, TrainingModeActivity.class)));
@@ -318,7 +315,7 @@ public class MainActivity extends AppCompatActivity {
         boolean hasAdapter = hasWiiUAdapter();
         adapterStatus.setText(hasAdapter ? R.string.adapter_connected : R.string.adapter_none);
         AudioPreset audioPreset = currentAudioPreset();
-        audioSettingsLink.setText(getString(R.string.audio_status_format,
+        audioStatus.setText(getString(R.string.audio_status_format,
                 audioPreset.backend, audioPreset.bursts));
         refreshCoreStatus();
     }
@@ -436,6 +433,36 @@ public class MainActivity extends AppCompatActivity {
                     d.dismiss();
                 })
                 .show();
+    }
+
+    private void showLauncherSettingsMenu(View anchor) {
+        AudioPreset audioPreset = currentAudioPreset();
+        PopupMenu menu = new PopupMenu(this, anchor);
+        menu.getMenuInflater().inflate(R.menu.menu_launcher_settings, menu.getMenu());
+        menu.getMenu().findItem(R.id.menu_launcher_audio).setTitle(
+                getString(R.string.launcher_settings_audio_current,
+                        audioPreset.backend, audioPreset.bursts));
+        menu.setOnMenuItemClickListener(item -> {
+            int id = item.getItemId();
+            if (id == R.id.menu_launcher_audio) {
+                showAudioChooser();
+                return true;
+            }
+            if (id == R.id.menu_launcher_calibrate) {
+                showCalibrationChooser();
+                return true;
+            }
+            if (id == R.id.menu_launcher_remap) {
+                showRemapChooser();
+                return true;
+            }
+            if (id == R.id.menu_launcher_touch) {
+                startActivity(new Intent(this, TouchOverlayActivity.class));
+                return true;
+            }
+            return false;
+        });
+        menu.show();
     }
 
     /**
