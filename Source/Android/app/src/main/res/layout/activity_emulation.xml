@@ -24,4 +24,39 @@
         android:paddingHorizontal="12dp"
         android:paddingVertical="6dp"
         android:visibility="gone"/>
+
+    <FrameLayout
+        android:id="@+id/emulation_loading_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#D9000000"
+        android:clickable="true"
+        android:focusable="true">
+
+        <LinearLayout
+            android:layout_width="260dp"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/emulation_loading_label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:text="@string/emulation_loading_boot"
+                android:textColor="@android:color/white"
+                android:textSize="16sp"/>
+
+            <ProgressBar
+                android:id="@+id/emulation_loading_progress"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:indeterminate="true"
+                android:max="100"/>
+        </LinearLayout>
+    </FrameLayout>
 </FrameLayout>

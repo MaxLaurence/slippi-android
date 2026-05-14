@@ -81,6 +81,7 @@ JavaVM* g_java_vm;
 jclass g_jni_class;
 jmethodID g_jni_method_alert;
 jmethodID g_jni_method_end;
+jmethodID g_jni_method_launch_progress;
 
 #define DOLPHIN_TAG "DolphinEmuNative"
 
@@ -383,6 +384,36 @@ void Host_RefreshDSPDebuggerWindow()
 static std::mutex s_host_identity_lock;
 Common::Event updateMainFrameEvent;
 static bool s_have_wm_user_stop = false;
+
+static void NotifyLaunchProgress(const std::string& message)
+{
+  if (!g_java_vm || !g_jni_class || !g_jni_method_launch_progress)
+    return;
+
+  JNIEnv* env = nullptr;
+  bool detach = false;
+  jint status = g_java_vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
+  if (status == JNI_EDETACHED)
+  {
+    if (g_java_vm->AttachCurrentThread(&env, nullptr) != JNI_OK)
+      return;
+    detach = true;
+  }
+  else if (status != JNI_OK)
+  {
+    return;
+  }
+
+  jstring j_message = env->NewStringUTF(message.c_str());
+  env->CallStaticVoidMethod(g_jni_class, g_jni_method_launch_progress, j_message);
+  env->DeleteLocalRef(j_message);
+  if (env->ExceptionCheck())
+    env->ExceptionClear();
+
+  if (detach)
+    g_java_vm->DetachCurrentThread();
+}
+
 void Host_Message(int Id)
 {
   if (Id == WM_USER_JOB_DISPATCH)
@@ -405,6 +436,7 @@ void* Host_GetRenderHandle()
 void Host_UpdateTitle(const std::string& title)
 {
   __android_log_write(ANDROID_LOG_INFO, DOLPHIN_TAG, title.c_str());
+  NotifyLaunchProgress(title);
 }
 
 void Host_UpdateDisasmDialog()
@@ -1376,6 +1408,8 @@ Java_org_dolphinemu_dolphinemu_NativeLibrary_CacheClassesAndMethods(JNIEnv* env,
   g_jni_method_alert =
       env->GetStaticMethodID(g_jni_class, "displayAlertMsg", "(Ljava/lang/String;)V");
   g_jni_method_end = env->GetStaticMethodID(g_jni_class, "endEmulationActivity", "()V");
+  g_jni_method_launch_progress = env->GetStaticMethodID(
+      g_jni_class, "updateEmulationLaunchProgress", "(Ljava/lang/String;)V");
 }
 
 // Surface Handling
@@ -1460,6 +1494,11 @@ static void PinEmuThreadToPerformanceCores()
 JNIEXPORT jint JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetEmuThreadTid(JNIEnv*, jobject)
 {
   return g_emu_thread_tid.load();
+}
+
+JNIEXPORT jboolean JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_IsRunning(JNIEnv*, jobject)
+{
+  return Core::IsRunning() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_Run(JNIEnv* env, jobject obj)

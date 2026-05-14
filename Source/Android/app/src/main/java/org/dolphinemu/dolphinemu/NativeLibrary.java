@@ -336,6 +336,15 @@ public final class NativeLibrary {
         }
     }
 
+    public static void updateEmulationLaunchProgress(String message) {
+        final Activity activity = sCurrentActivity.get();
+        if (activity instanceof EmulationActivity) {
+            ((EmulationActivity) activity).onLaunchProgressFromNative(message);
+        } else if (activity instanceof MainlineEmulationActivity) {
+            ((MainlineEmulationActivity) activity).onLaunchProgressFromNative(message);
+        }
+    }
+
     public static float getRenderSurfaceScale() {
         final Activity activity = sCurrentActivity.get();
         return activity == null

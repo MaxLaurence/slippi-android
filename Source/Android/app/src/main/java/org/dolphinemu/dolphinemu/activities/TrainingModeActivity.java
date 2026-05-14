@@ -30,12 +30,10 @@ import org.dolphinemu.dolphinemu.controller.ControllerProfile;
 import org.dolphinemu.dolphinemu.gpu.GpuDriverManager;
 import org.dolphinemu.dolphinemu.settings.DolphinSettings;
 import org.dolphinemu.dolphinemu.training.TrainingModeManager;
+import org.dolphinemu.dolphinemu.utils.ContentCopyTask;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -76,14 +74,7 @@ public class TrainingModeActivity extends AppCompatActivity {
                     getContentResolver().takePersistableUriPermission(
                             uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 } catch (SecurityException ignored) {}
-                File copied = copyContentToCache(uri, "rom.iso");
-                if (copied != null) {
-                    prefs().edit().putString(PREF_KEY_ISO_URI, copied.getAbsolutePath()).apply();
-                    refreshTrainingStatus();
-                    maybeCheckTrainingUpdates(false);
-                } else {
-                    toast("Failed to import ISO");
-                }
+                importIso(uri);
             });
 
     @Override
@@ -519,23 +510,28 @@ public class TrainingModeActivity extends AppCompatActivity {
         return iso.exists() ? iso : null;
     }
 
-    private File copyContentToCache(Uri uri, String name) {
-        File dst = new File(getFilesDir(), name);
-        return copyContentToFile(uri, dst) ? dst : null;
-    }
+    private void importIso(Uri uri) {
+        File dst = new File(getFilesDir(), "rom.iso");
+        ContentCopyTask.copy(this, uri, dst, R.string.iso_import_title,
+                new ContentCopyTask.Callback() {
+                    @Override
+                    public void onCopied(File file) {
+                        prefs().edit().putString(PREF_KEY_ISO_URI, file.getAbsolutePath()).apply();
+                        refreshTrainingStatus();
+                        maybeCheckTrainingUpdates(false);
+                    }
 
-    private boolean copyContentToFile(Uri uri, File dst) {
-        try (InputStream in = getContentResolver().openInputStream(uri);
-             OutputStream out = new FileOutputStream(dst)) {
-            if (in == null) return false;
-            byte[] buf = new byte[1 << 16];
-            int n;
-            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-            return true;
-        } catch (IOException ex) {
-            Log.e(TAG, "copy failed: " + ex);
-            return false;
-        }
+                    @Override
+                    public void onFailed(Exception exception) {
+                        Log.e(TAG, "ISO import failed", exception);
+                        toast(getString(R.string.iso_import_failed));
+                    }
+
+                    @Override
+                    public void onCancelled() {
+                        toast(getString(R.string.iso_import_cancelled));
+                    }
+                });
     }
 
     private SharedPreferences prefs() {

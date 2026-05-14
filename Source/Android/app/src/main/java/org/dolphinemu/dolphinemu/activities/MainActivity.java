@@ -31,6 +31,7 @@ import org.dolphinemu.dolphinemu.R;
 import org.dolphinemu.dolphinemu.UserDirectoryBootstrap;
 import org.dolphinemu.dolphinemu.gpu.GpuDriverManager;
 import org.dolphinemu.dolphinemu.settings.DolphinSettings;
+import org.dolphinemu.dolphinemu.utils.ContentCopyTask;
 // SlippiAuthClient / SlippiSession (Firebase-based) intentionally removed
 // — the Slippi team prefers users go through their slippi.gg login flow
 // in a WebView (SlippiLoginActivity), which we trigger from the auth card
@@ -137,15 +138,7 @@ public class MainActivity extends AppCompatActivity {
                     getContentResolver().takePersistableUriPermission(
                             uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 } catch (SecurityException ignored) {}
-                File copied = copyContentToCache(uri, "rom.iso");
-                if (copied != null) {
-                    prefs().edit()
-                            .putString(PREF_KEY_ISO_URI, copied.getAbsolutePath())
-                            .apply();
-                    refresh();
-                } else {
-                    toast("Failed to import ISO");
-                }
+                importIso(uri);
             });
 
     private final ActivityResultLauncher<String[]> pickUserJson =
@@ -860,9 +853,29 @@ public class MainActivity extends AppCompatActivity {
         return PreferenceManager.getDefaultSharedPreferences(this);
     }
 
-    private File copyContentToCache(Uri uri, String name) {
-        File dst = new File(getFilesDir(), name);
-        return copyContentToFile(uri, dst) ? dst : null;
+    private void importIso(Uri uri) {
+        File dst = new File(getFilesDir(), "rom.iso");
+        ContentCopyTask.copy(this, uri, dst, R.string.iso_import_title,
+                new ContentCopyTask.Callback() {
+                    @Override
+                    public void onCopied(File file) {
+                        prefs().edit()
+                                .putString(PREF_KEY_ISO_URI, file.getAbsolutePath())
+                                .apply();
+                        refresh();
+                    }
+
+                    @Override
+                    public void onFailed(Exception exception) {
+                        Log.e(TAG, "ISO import failed", exception);
+                        toast(getString(R.string.iso_import_failed));
+                    }
+
+                    @Override
+                    public void onCancelled() {
+                        toast(getString(R.string.iso_import_cancelled));
+                    }
+                });
     }
 
     private boolean copyContentToFile(Uri uri, File dst) {

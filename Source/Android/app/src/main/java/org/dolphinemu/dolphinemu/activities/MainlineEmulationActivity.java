@@ -25,6 +25,8 @@ import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
+import android.widget.ProgressBar;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
@@ -122,6 +124,9 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     private RawStickInputProvider rawStickInput;
     private TouchControlOverlayView touchOverlay;
     private ReplayHudView replayHud;
+    private View loadingOverlay;
+    private ProgressBar loadingProgress;
+    private TextView loadingLabel;
     private boolean touchOverlayVisible;
     private String isoPath;
     private String replayPath;
@@ -156,6 +161,23 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             updateTouchOverlayVisibility();
             updatePerfHintThreads();
             ui.postDelayed(this, 1000);
+        }
+    };
+    private final Runnable bootStatusPoll = new Runnable() {
+        @Override
+        public void run() {
+            if (!emuStarted) {
+                return;
+            }
+            try {
+                if (NativeLibrary.IsRunning()) {
+                    hideLoadingOverlay();
+                    return;
+                }
+            } catch (Throwable t) {
+                Log.w(TAG, "mainline boot status unavailable", t);
+            }
+            ui.postDelayed(this, 100);
         }
     };
     private final TouchControlOverlayView.Listener touchOverlayListener =
@@ -242,6 +264,10 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         }
         replayHud = findViewById(R.id.replay_hud);
         if (replayHud != null) replayHud.setVisibility(View.GONE);
+        loadingOverlay = findViewById(R.id.emulation_loading_overlay);
+        loadingProgress = findViewById(R.id.emulation_loading_progress);
+        loadingLabel = findViewById(R.id.emulation_loading_label);
+        showLoadingOverlay();
 
         SurfaceView surfaceView = findViewById(R.id.emulation_surface);
         surfaceView.getHolder().addCallback(this);
@@ -330,6 +356,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     protected void onDestroy() {
         shutdownRawInputThread();
         ui.removeCallbacks(controllerDetectorPoll);
+        ui.removeCallbacks(bootStatusPoll);
         if (replayHud != null) replayHud.stopPolling();
         if (isReplayMode) {
             try {
@@ -858,6 +885,77 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         return "Android MotionEvent fallback";
     }
 
+    public void onLaunchProgressFromNative(String message) {
+        ui.post(() -> updateLoadingProgress(message));
+    }
+
+    private void showLoadingOverlay() {
+        if (loadingOverlay == null) {
+            return;
+        }
+        if (loadingLabel != null) {
+            loadingLabel.setText(R.string.emulation_loading_boot);
+        }
+        if (loadingProgress != null) {
+            loadingProgress.setIndeterminate(true);
+            loadingProgress.setMax(100);
+            loadingProgress.setProgress(0);
+        }
+        loadingOverlay.setVisibility(View.VISIBLE);
+    }
+
+    private void hideLoadingOverlay() {
+        ui.removeCallbacks(bootStatusPoll);
+        if (loadingOverlay != null) {
+            loadingOverlay.setVisibility(View.GONE);
+        }
+    }
+
+    private void updateLoadingProgress(String message) {
+        if (loadingOverlay == null || loadingOverlay.getVisibility() != View.VISIBLE
+                || message == null) {
+            return;
+        }
+        String lower = message.toLowerCase(Locale.US);
+        if (!lower.contains("compiling")) {
+            return;
+        }
+        int percent = parsePercent(message);
+        if (percent >= 0) {
+            if (loadingProgress != null) {
+                loadingProgress.setIndeterminate(false);
+                loadingProgress.setProgress(percent);
+            }
+            if (loadingLabel != null) {
+                loadingLabel.setText(getString(R.string.emulation_loading_shaders, percent));
+            }
+        }
+    }
+
+    private int parsePercent(String message) {
+        int percent = message.indexOf('%');
+        if (percent < 0) {
+            return -1;
+        }
+        int end = percent - 1;
+        while (end >= 0 && Character.isWhitespace(message.charAt(end))) {
+            --end;
+        }
+        int start = end;
+        while (start >= 0 && Character.isDigit(message.charAt(start))) {
+            --start;
+        }
+        if (start == end) {
+            return -1;
+        }
+        try {
+            int parsed = Integer.parseInt(message.substring(start + 1, end + 1));
+            return Math.max(0, Math.min(100, parsed));
+        } catch (NumberFormatException ignored) {
+            return -1;
+        }
+    }
+
     private void traceInputEvent(String source, long eventTimeMs, int historySize) {
         if (!LATENCY_TRACE) {
             return;
@@ -978,6 +1076,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         }, "MainlineDolphin");
         emuThread.start();
         registerPerfHintWhenReady();
+        ui.post(bootStatusPoll);
     }
 
     private void shutdownEmuThreadSync() {
