@@ -147,6 +147,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         @Override
         public void run() {
             updateTouchOverlayVisibility();
+            updatePerfHintThreads();
             ui.postDelayed(this, 1000);
         }
     };

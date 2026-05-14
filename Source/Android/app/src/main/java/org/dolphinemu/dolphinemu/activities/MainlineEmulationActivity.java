@@ -121,6 +121,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         @Override
         public void run() {
             updateTouchOverlayVisibility();
+            updatePerfHintThreads();
             ui.postDelayed(this, 1000);
         }
     };

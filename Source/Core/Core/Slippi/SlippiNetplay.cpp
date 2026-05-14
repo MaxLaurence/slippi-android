@@ -6,6 +6,7 @@
 #include "Common/CommonTypes.h"
 #include "Common/ENetUtil.h"
 #include "Common/MsgHandler.h"
+#include "Common/Thread.h"
 #include "Common/Timer.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
@@ -17,6 +18,9 @@
 #include <fstream>
 #include <memory>
 #include <thread>
+#ifdef __ANDROID__
+#include <sys/resource.h>
+#endif
 
 //#include "Common/MD5.h"
 //#include "Common/Common.h"
@@ -752,6 +756,11 @@ void SlippiNetplayClient::SendAsync(std::unique_ptr<sf::Packet> packet)
 // called from ---NETPLAY--- thread
 void SlippiNetplayClient::ThreadFunc()
 {
+	Common::SetCurrentThreadName("NetPlay Client");
+#ifdef __ANDROID__
+	setpriority(PRIO_PROCESS, 0, -8);
+#endif
+
 	// Let client die 1 second before host such that after a swap, the client won't be connected to
 	u64 startTime = Common::Timer::GetTimeMs();
 	u64 timeout = 8000;

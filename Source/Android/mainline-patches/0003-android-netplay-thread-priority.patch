@@ -1,0 +1,33 @@
+diff --git a/Source/Core/Core/Slippi/SlippiNetplay.cpp b/Source/Core/Core/Slippi/SlippiNetplay.cpp
+--- a/Source/Core/Core/Slippi/SlippiNetplay.cpp
++++ b/Source/Core/Core/Slippi/SlippiNetplay.cpp
+@@ -7,6 +7,9 @@
+ #include <fstream>
+ #include <memory>
+ #include <thread>
++#ifdef __ANDROID__
++#include <sys/resource.h>
++#endif
+ 
+ #include "Common/CommonTypes.h"
+ #include "Common/Config/Config.h"
+@@ -14,6 +17,7 @@
+ #include "Common/ENet.h"
+ #include "Common/Logging/Log.h"
+ #include "Common/MsgHandler.h"
++#include "Common/Thread.h"
+ #include "Common/Timer.h"
+ #include "Core/Config/GraphicsSettings.h"
+ #include "Core/Config/NetplaySettings.h"
+@@ -768,6 +772,11 @@ void SlippiNetplayClient::SendAsync(std::unique_ptr<sf::Packet> packet)
+ // called from ---NETPLAY--- thread
+ void SlippiNetplayClient::ThreadFunc()
+ {
++  Common::SetCurrentThreadName("NetPlay Client");
++#ifdef __ANDROID__
++  setpriority(PRIO_PROCESS, 0, -8);
++#endif
++
+   // Let client die 1 second before host such that after a swap, the client won't be connected to
+   u64 start_time = Common::Timer::NowMs();
+   u64 timeout = 8000;
