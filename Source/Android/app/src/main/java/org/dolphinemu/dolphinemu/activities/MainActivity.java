@@ -329,7 +329,7 @@ public class MainActivity extends AppCompatActivity {
         EmulatorCore core = EmulatorCore.fromPref(
                 prefs().getString(PREF_KEY_EMULATOR_CORE, EmulatorCore.DEFAULT.prefValue));
         if (core == EmulatorCore.MAINLINE) {
-            launchMainlineDolphin(replayOrNull != null);
+            launchMainlineDolphin(replayOrNull);
             return;
         }
         boolean useGcAdapter = applyRuntimeConfig();
@@ -346,22 +346,26 @@ public class MainActivity extends AppCompatActivity {
         startActivity(it);
     }
 
-    private void launchMainlineDolphin(boolean replayLaunch) {
-        if (replayLaunch) {
-            toast("Replay playback uses the built-in Ishiiruka core for now");
-            return;
-        }
+    private void launchMainlineDolphin(File replayOrNull) {
         if (!MainlineCore.isPackaged(this)) {
             showMainlineMissingDialog();
             return;
         }
 
         String isoPath = prefs().getString(PREF_KEY_ISO_URI, null);
+        boolean replayLaunch = replayOrNull != null;
         Intent it = new Intent(this, MainlineEmulationActivity.class);
         it.putExtra(MainlineEmulationActivity.EXTRA_ISO_PATH, isoPath);
-        it.putExtra(MainlineEmulationActivity.EXTRA_USE_GC_ADAPTER, hasWiiUAdapter());
+        it.putExtra(MainlineEmulationActivity.EXTRA_USE_GC_ADAPTER,
+                !replayLaunch && hasWiiUAdapter());
         it.putExtra(MainlineEmulationActivity.EXTRA_LAUNCH_MODE,
-                MainlineEmulationActivity.LAUNCH_MODE_LIVE);
+                replayLaunch
+                        ? MainlineEmulationActivity.LAUNCH_MODE_REPLAY
+                        : MainlineEmulationActivity.LAUNCH_MODE_LIVE);
+        if (replayLaunch) {
+            it.putExtra(MainlineEmulationActivity.EXTRA_REPLAY_PATH,
+                    replayOrNull.getAbsolutePath());
+        }
         try {
             startActivity(it);
         } catch (RuntimeException ex) {

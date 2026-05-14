@@ -34,6 +34,8 @@ import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
 import com.google.android.material.materialswitch.MaterialSwitch;
 
+import org.dolphinemu.dolphinemu.EmulatorCore;
+import org.dolphinemu.dolphinemu.MainlineCore;
 import org.dolphinemu.dolphinemu.NativeLibrary;
 import org.dolphinemu.dolphinemu.R;
 import org.dolphinemu.dolphinemu.UserDirectoryBootstrap;
@@ -62,6 +64,7 @@ import java.util.concurrent.Executors;
 public class ReplayListActivity extends AppCompatActivity {
     private static final String TAG = "ReplayListActivity";
     private static final String PREF_KEY_ISO_URI = "iso_uri";
+    private static final String PREF_KEY_EMULATOR_CORE = EmulatorCore.PREF_KEY;
 
     private ReplayStore store;
     private ReplayAdapter adapter;
@@ -240,9 +243,31 @@ public class ReplayListActivity extends AppCompatActivity {
         }
         SharedPreferences p = PreferenceManager.getDefaultSharedPreferences(this);
         String iso = p.getString(PREF_KEY_ISO_URI, null);
+        EmulatorCore core = EmulatorCore.fromPref(
+                p.getString(PREF_KEY_EMULATOR_CORE, EmulatorCore.DEFAULT.prefValue));
+        if (core == EmulatorCore.MAINLINE) {
+            if (!MainlineCore.isPackaged(this)) {
+                toast(getString(R.string.core_mainline_missing_title));
+                return;
+            }
+            Intent it = new Intent(this, MainlineEmulationActivity.class);
+            it.putExtra(MainlineEmulationActivity.EXTRA_ISO_PATH, iso);
+            it.putExtra(MainlineEmulationActivity.EXTRA_REPLAY_PATH, slp.getAbsolutePath());
+            it.putExtra(MainlineEmulationActivity.EXTRA_USE_GC_ADAPTER, false);
+            it.putExtra(MainlineEmulationActivity.EXTRA_LAUNCH_MODE,
+                    MainlineEmulationActivity.LAUNCH_MODE_REPLAY);
+            try {
+                startActivity(it);
+            } catch (RuntimeException ex) {
+                Log.e(TAG, "Failed to launch embedded mainline replay: " + ex);
+                toast(getString(R.string.core_mainline_launch_failed));
+            }
+            return;
+        }
         Intent it = new Intent(this, EmulationActivity.class);
         it.putExtra(EmulationActivity.EXTRA_ISO_PATH, iso);
         it.putExtra(EmulationActivity.EXTRA_REPLAY_PATH, slp.getAbsolutePath());
+        it.putExtra(EmulationActivity.EXTRA_LAUNCH_MODE, EmulationActivity.LAUNCH_MODE_REPLAY);
         // Replay mode never uses adapter input; leave the default (false).
         startActivity(it);
     }

@@ -39,11 +39,13 @@ import org.dolphinemu.dolphinemu.controller.StickCalibration;
 import org.dolphinemu.dolphinemu.controller.TouchOverlayLayoutStore;
 import org.dolphinemu.dolphinemu.features.settings.model.NativeConfig;
 import org.dolphinemu.dolphinemu.replay.GeckoOverride;
+import org.dolphinemu.dolphinemu.replay.ReplayConfig;
 import org.dolphinemu.dolphinemu.utils.DirectoryInitialization;
 import org.dolphinemu.dolphinemu.utils.PhysicalControllerDetector;
 import org.dolphinemu.dolphinemu.utils.RawStickInputProvider;
 import org.dolphinemu.dolphinemu.utils.RawStickInputProviders;
 import org.dolphinemu.dolphinemu.utils.RawStickState;
+import org.dolphinemu.dolphinemu.views.ReplayHudView;
 import org.dolphinemu.dolphinemu.views.TouchControlOverlayView;
 
 import java.io.BufferedReader;
@@ -56,9 +58,11 @@ import java.util.Set;
 
 public class MainlineEmulationActivity extends AppCompatActivity implements SurfaceHolder.Callback {
     public static final String EXTRA_ISO_PATH = "iso_path";
+    public static final String EXTRA_REPLAY_PATH = "replay_path";
     public static final String EXTRA_USE_GC_ADAPTER = "use_gc_adapter";
     public static final String EXTRA_LAUNCH_MODE = "launch_mode";
     public static final String LAUNCH_MODE_LIVE = "live";
+    public static final String LAUNCH_MODE_REPLAY = "replay";
     public static final String LAUNCH_MODE_TRAINING = "training";
     private static final String TAG = "MainlineEmu";
     private static final String PREF_KEY_BACKEND = "backend";
@@ -102,10 +106,13 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     private ButtonMap buttonMap = ButtonMap.defaults();
     private RawStickInputProvider rawStickInput;
     private TouchControlOverlayView touchOverlay;
+    private ReplayHudView replayHud;
     private boolean touchOverlayVisible;
     private String isoPath;
+    private String replayPath;
     private boolean useGcAdapter;
     private boolean isTrainingMode;
+    private boolean isReplayMode;
     private boolean refreshRateSettingsSaved;
     private boolean refreshRateSettingsOverridden;
     private String previousPeakRefreshRate;
@@ -195,7 +202,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             touchOverlay.setControlsEnabled(false);
             touchOverlay.setVisibility(View.GONE);
         }
-        View replayHud = findViewById(R.id.replay_hud);
+        replayHud = findViewById(R.id.replay_hud);
         if (replayHud != null) replayHud.setVisibility(View.GONE);
 
         SurfaceView surfaceView = findViewById(R.id.emulation_surface);
@@ -205,9 +212,14 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         surfaceView.requestFocus();
 
         isoPath = getIntent().getStringExtra(EXTRA_ISO_PATH);
+        replayPath = getIntent().getStringExtra(EXTRA_REPLAY_PATH);
         useGcAdapter = getIntent().getBooleanExtra(EXTRA_USE_GC_ADAPTER, false);
-        isTrainingMode = LAUNCH_MODE_TRAINING.equals(
-                getIntent().getStringExtra(EXTRA_LAUNCH_MODE));
+        String launchMode = getIntent().getStringExtra(EXTRA_LAUNCH_MODE);
+        isTrainingMode = LAUNCH_MODE_TRAINING.equals(launchMode);
+        isReplayMode = !isTrainingMode && replayPath != null && new File(replayPath).exists();
+        if (isReplayMode) {
+            useGcAdapter = false;
+        }
         if (TextUtils.isEmpty(isoPath) || !new File(isoPath).isFile()) {
             Toast.makeText(this, "No ISO path passed", Toast.LENGTH_LONG).show();
             finish();
@@ -227,9 +239,13 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             configureMainlineDirectories();
             NativeLibrary.Initialize();
             applyMainlineRuntimeConfig();
-            if (!useGcAdapter) {
+            if (!useGcAdapter && !isReplayMode) {
                 padState.reset();
                 pushPad();
+            }
+            if (isReplayMode && replayHud != null) {
+                replayHud.setVisibility(View.VISIBLE);
+                replayHud.startPolling();
             }
         } catch (Throwable t) {
             Log.e(TAG, "mainline native initialization failed", t);
@@ -251,12 +267,17 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         updateTouchOverlayVisibility();
         ui.post(controllerDetectorPoll);
         if (shouldPollRawStickSource()) startRawInputPolling();
+        if (isReplayMode && replayHud != null) {
+            replayHud.setVisibility(View.VISIBLE);
+            replayHud.startPolling();
+        }
     }
 
     @Override
     protected void onPause() {
         stopRawInputPolling();
         ui.removeCallbacks(controllerDetectorPoll);
+        if (replayHud != null) replayHud.stopPolling();
         super.onPause();
         if (emuStarted) {
             try {
@@ -270,6 +291,18 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     protected void onDestroy() {
         shutdownRawInputThread();
         ui.removeCallbacks(controllerDetectorPoll);
+        if (replayHud != null) replayHud.stopPolling();
+        if (isReplayMode) {
+            try {
+                NativeLibrary.SetReplaySpeedMode(0);
+            } catch (Throwable ignored) {
+            }
+            try {
+                NativeLibrary.SetSlippiInputPath("");
+                ReplayConfig.writeEmpty(ReplayConfig.mainlineCommFile(this));
+            } catch (Throwable ignored) {
+            }
+        }
         shutdownEmuThreadSync();
         if (hintSession != null) {
             try {
@@ -321,7 +354,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
-        if (useGcAdapter) {
+        if (isReplayMode || useGcAdapter) {
             return super.dispatchKeyEvent(event);
         }
         int action = event.getAction();
@@ -341,7 +374,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
                 && (event.getSource() & android.view.InputDevice.SOURCE_GAMEPAD) == 0) {
             return super.dispatchGenericMotionEvent(event);
         }
-        if (useGcAdapter) {
+        if (isReplayMode || useGcAdapter) {
             return super.dispatchGenericMotionEvent(event);
         }
         if (!shouldPollRawStickSource()) {
@@ -428,10 +461,13 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
 
     private void applyMainlineExiRuntimeConfig() {
         File userDir = MainlineCore.userDir(this);
+        File playbackConfig = ReplayConfig.mainlineCommFile(this);
         if (isTrainingMode) {
             File gcDir = new File(userDir, "GC");
             if (!gcDir.exists()) gcDir.mkdirs();
             File trainingCard = new File(gcDir, "TrainingMode.USA.raw");
+            ReplayConfig.writeEmpty(playbackConfig);
+            NativeLibrary.SetSlippiInputPath("");
             NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core",
                     "SlotA", EXI_DEVICE_MEMORYCARD);
             NativeConfig.setString(NativeConfig.LAYER_BASE, "Dolphin", "Core",
@@ -452,7 +488,15 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
                 "SlotB", EXI_DEVICE_SLIPPI);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core",
                 "SerialPort1", EXI_DEVICE_NONE);
+        if (isReplayMode) {
+            ReplayConfig.writeNormal(playbackConfig, new File(replayPath));
+            GeckoOverride.applyMainlineReplayMode(this, userDir);
+            NativeLibrary.SetSlippiInputPath(playbackConfig.getAbsolutePath());
+            return;
+        }
+        ReplayConfig.writeEmpty(playbackConfig);
         GeckoOverride.applyLiveMode(userDir);
+        NativeLibrary.SetSlippiInputPath(playbackConfig.getAbsolutePath());
     }
 
     private void setupCalibratedInput() {
@@ -463,7 +507,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
                 ControllerProfile.Stick.C);
         buttonMap = profile.getButtonMap(ControllerProfile.DEVICE_BUILTIN);
 
-        if (!useGcAdapter) {
+        if (!useGcAdapter && !isReplayMode) {
             rawStickInput = RawStickInputProviders.create(this);
             if (rawStickInput != null) {
                 rawStickInput.start();
@@ -536,7 +580,8 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     }
 
     private boolean shouldPollRawStickSource() {
-        return !useGcAdapter && hasRawStickSource() && !BuildConfig.FORCE_TOUCH_CONTROLS;
+        return !isReplayMode && !useGcAdapter && hasRawStickSource()
+                && !BuildConfig.FORCE_TOUCH_CONTROLS;
     }
 
     private void startRawInputPolling() {
@@ -618,6 +663,14 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
 
     private void updateTouchOverlayVisibility() {
         if (touchOverlay == null) return;
+        if (isReplayMode) {
+            if (touchOverlayVisible) {
+                touchOverlayVisible = false;
+                touchOverlay.setControlsEnabled(false);
+                touchOverlay.setVisibility(View.GONE);
+            }
+            return;
+        }
         boolean show = !useGcAdapter && (BuildConfig.FORCE_TOUCH_CONTROLS
                 || !PhysicalControllerDetector.hasUsableP1Controller(rawStickInput));
         if (show == touchOverlayVisible) return;

@@ -73,7 +73,8 @@ again.
 A clean build compiles both native cores. Ishiiruka uses this checkout's
 normal CMake path; mainline is built from `Externals/MainlineSlippiDolphin`
 into `app/build/generated/mainlineSlippi/jniLibs/arm64-v8a/libmainline_slippi.so`
-and packages `Data/Sys` as `assets/MainlineSys`. Use
+and packages `Data/Sys` as `assets/MainlineSys` plus
+`Data/PlaybackGeckoCodes` as `assets/MainlinePlaybackGeckoCodes`. Use
 `-PskipMainlineCoreBuild=true` for Java/AGP-only iteration; it reuses any
 previously generated mainline output, and a clean tree without that output will
 show the Mainline option as missing.
@@ -101,6 +102,9 @@ page as they normally would in any browser; when they tap the
 writes the response to `<app-files>/dolphin/Slippi/user.json`. From
 the user's perspective it's a single in-app sign-in step, with no
 external credentials in the binary.
+
+New Slippi accounts must be logged in once through the official
+PC / Mac / Linux launcher before they can play on Android.
 
 A manual `user.json` import is still available behind a small link on
 the launcher's account card for users who already have one on disk.
@@ -156,7 +160,9 @@ $ADB devices                   # confirm
    in-app `WebView` pointed at `https://slippi.gg/online/enable`.
    The user logs in there; on tapping **Download**, our blob
    interceptor captures the response and writes it to
-   `<files>/dolphin/Slippi/user.json` directly. (Manual file-picker
+   `<files>/dolphin/Slippi/user.json` directly. New Slippi accounts
+   must first log in once through the official PC / Mac / Linux
+   launcher before they can play on Android. (Manual file-picker
    import is still available as a link.)
 3. **Pick emulator core** — built-in Ishiiruka (default) or an
    embedded mainline Slippi Dolphin core.

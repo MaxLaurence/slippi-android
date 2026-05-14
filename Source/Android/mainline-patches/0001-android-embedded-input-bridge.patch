@@ -1,5 +1,5 @@
 diff --git a/Source/Android/jni/MainAndroid.cpp b/Source/Android/jni/MainAndroid.cpp
-index 973b492..4211b82 100644
+index 973b49233021e48b559230ee8981576b6181b1b0..5c1e717cfb3fa243160ceb08d43ac6feedc01dba 100644
 --- a/Source/Android/jni/MainAndroid.cpp
 +++ b/Source/Android/jni/MainAndroid.cpp
 @@ -2,21 +2,36 @@
@@ -39,7 +39,7 @@ index 973b492..4211b82 100644
  
  #include "Common/AndroidAnalytics.h"
  #include "Common/Assert.h"
-@@ -43,6 +58,7 @@
+@@ -43,10 +58,12 @@
  #include "Core/DolphinAnalytics.h"
  #include "Core/HW/DVD/DVDInterface.h"
  #include "Core/HW/Wiimote.h"
@@ -47,11 +47,27 @@ index 973b492..4211b82 100644
  #include "Core/HW/WiimoteReal/WiimoteReal.h"
  #include "Core/Host.h"
  #include "Core/PowerPC/JitInterface.h"
-@@ -86,6 +102,314 @@ bool s_need_nonblocking_alert_msg;
+ #include "Core/PowerPC/PowerPC.h"
++#include "Core/Slippi/SlippiPlayback.h"
+ #include "Core/State.h"
+ #include "Core/System.h"
+ 
+@@ -69,6 +86,8 @@
+ #include "jni/AndroidCommon/IDCache.h"
+ #include "jni/Host.h"
+ 
++extern std::unique_ptr<SlippiPlaybackStatus> g_playback_status;
++
+ namespace
+ {
+ constexpr char DOLPHIN_TAG[] = "DolphinEmuNative";
+@@ -86,6 +105,316 @@ bool s_need_nonblocking_alert_msg;
  
  Common::Flag s_is_booting;
  bool s_game_metadata_is_valid = false;
 +std::atomic<int> s_emu_thread_tid{0};
++std::mutex s_slippi_input_path_mutex;
++std::string s_slippi_input_path;
 +
 +struct RawAxis
 +{
@@ -362,7 +378,7 @@ index 973b492..4211b82 100644
  }  // Anonymous namespace
  
  void UpdatePointer()
-@@ -581,6 +905,64 @@ Java_org_dolphinemu_dolphinemu_NativeLibrary_UpdateGCAdapterScanThread(JNIEnv*,
+@@ -581,6 +910,120 @@ Java_org_dolphinemu_dolphinemu_NativeLibrary_UpdateGCAdapterScanThread(JNIEnv*,
    }
  }
  
@@ -424,10 +440,66 @@ index 973b492..4211b82 100644
 +  return s_emu_thread_tid.load();
 +}
 +
++JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetSlippiInputPath(
++    JNIEnv* env, jclass, jstring j_path)
++{
++  std::lock_guard<std::mutex> guard(s_slippi_input_path_mutex);
++  s_slippi_input_path = GetJString(env, j_path);
++  __android_log_print(ANDROID_LOG_INFO, "SlippiPlayback", "SetSlippiInputPath path=%s",
++                      s_slippi_input_path.c_str());
++}
++
++JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_ClearSlippiInputPath(JNIEnv*,
++                                                                                        jclass)
++{
++  std::lock_guard<std::mutex> guard(s_slippi_input_path_mutex);
++  s_slippi_input_path.clear();
++}
++
++JNIEXPORT jint JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetReplayLatestFrame(JNIEnv*,
++                                                                                         jclass)
++{
++  return g_playback_status ? static_cast<jint>(g_playback_status->last_frame) : INT_MIN;
++}
++
++JNIEXPORT jint JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetReplayCurrentFrame(JNIEnv*,
++                                                                                          jclass)
++{
++  return g_playback_status ? static_cast<jint>(g_playback_status->current_playback_frame) :
++                             INT_MIN;
++}
++
++JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetReplayTargetFrame(JNIEnv*,
++                                                                                        jclass,
++                                                                                        jint frame)
++{
++  if (g_playback_status)
++    g_playback_status->target_frame_num = static_cast<s32>(frame);
++}
++
++JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetReplayJump(JNIEnv*, jclass,
++                                                                                  jboolean forward)
++{
++  if (!g_playback_status)
++    return;
++  if (forward)
++    g_playback_status->should_jump_forward = true;
++  else
++    g_playback_status->should_jump_back = true;
++}
++
++JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetReplaySpeedMode(JNIEnv*,
++                                                                                       jclass,
++                                                                                       jint mode)
++{
++  if (g_playback_status)
++    g_playback_status->setHardFFW(mode == 1);
++}
++
  JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_Initialize(JNIEnv*, jclass)
  {
    HostThreadLock guard;
-@@ -619,6 +1001,9 @@ static float GetRenderSurfaceScale(JNIEnv* env)
+@@ -619,6 +1062,9 @@ static float GetRenderSurfaceScale(JNIEnv* env)
  
  static void Run(JNIEnv* env, std::unique_ptr<BootParameters>&& boot, bool riivolution)
  {
@@ -437,7 +509,21 @@ index 973b492..4211b82 100644
    HostThreadLock host_identity_guard;
  
    if (riivolution && std::holds_alternative<BootParameters::Disc>(boot->parameters))
-@@ -660,6 +1045,7 @@ static void Run(JNIEnv* env, std::unique_ptr<BootParameters>&& boot, bool riivol
+@@ -631,6 +1077,13 @@ static void Run(JNIEnv* env, std::unique_ptr<BootParameters>&& boot, bool riivol
+                                           volume.GetDiscNumber()));
+   }
+ 
++  {
++    std::lock_guard<std::mutex> guard(s_slippi_input_path_mutex);
++    SConfig::GetSlippiConfig().slippi_input = s_slippi_input_path;
++    __android_log_print(ANDROID_LOG_INFO, "SlippiPlayback", "Run slippi_input path=%s",
++                        s_slippi_input_path.c_str());
++  }
++
+   s_need_nonblocking_alert_msg = true;
+   std::unique_lock<std::mutex> surface_guard(s_surface_lock);
+ 
+@@ -660,6 +1113,7 @@ static void Run(JNIEnv* env, std::unique_ptr<BootParameters>&& boot, bool riivol
  
    s_game_metadata_is_valid = false;
    Core::Shutdown(Core::System::GetInstance());
@@ -447,7 +533,7 @@ index 973b492..4211b82 100644
    env->CallStaticVoidMethod(IDCache::GetNativeLibraryClass(),
 diff --git a/Source/Core/AudioCommon/AAudioStream.cpp b/Source/Core/AudioCommon/AAudioStream.cpp
 new file mode 100644
-index 0000000..5c6cfa0
+index 0000000000000000000000000000000000000000..5c6cfa045a76b947b722ad99a8f157e07557d394
 --- /dev/null
 +++ b/Source/Core/AudioCommon/AAudioStream.cpp
 @@ -0,0 +1,138 @@
@@ -591,7 +677,7 @@ index 0000000..5c6cfa0
 +#endif  // HAVE_AAUDIO
 diff --git a/Source/Core/AudioCommon/AAudioStream.h b/Source/Core/AudioCommon/AAudioStream.h
 new file mode 100644
-index 0000000..6d7ccfd
+index 0000000000000000000000000000000000000000..6d7ccfd0aa367ef649b4a5e172521492cecd803a
 --- /dev/null
 +++ b/Source/Core/AudioCommon/AAudioStream.h
 @@ -0,0 +1,23 @@
@@ -619,7 +705,7 @@ index 0000000..6d7ccfd
 +#endif
 +};
 diff --git a/Source/Core/AudioCommon/AudioCommon.cpp b/Source/Core/AudioCommon/AudioCommon.cpp
-index de046a9..a21142e 100644
+index de046a9aab7df69ee317c26a75fdda55c98c0293..a21142eed7c3e97d019c1ed9c354f007f73a60a3 100644
 --- a/Source/Core/AudioCommon/AudioCommon.cpp
 +++ b/Source/Core/AudioCommon/AudioCommon.cpp
 @@ -6,10 +6,12 @@
@@ -700,7 +786,7 @@ index de046a9..a21142e 100644
      backends.emplace_back(BACKEND_OPENSLES);
    if (WASAPIStream::IsValid())
 diff --git a/Source/Core/AudioCommon/CMakeLists.txt b/Source/Core/AudioCommon/CMakeLists.txt
-index 04ad967..9fced37 100644
+index 04ad9672344ce903dcf2efb9c8676ead1a63f51c..9fced37b89721a04b63bc8974f406b0485a405f5 100644
 --- a/Source/Core/AudioCommon/CMakeLists.txt
 +++ b/Source/Core/AudioCommon/CMakeLists.txt
 @@ -34,6 +34,39 @@ if(ANDROID)
@@ -745,7 +831,7 @@ index 04ad967..9fced37 100644
  if(ENABLE_ALSA)
 diff --git a/Source/Core/AudioCommon/OboeStream.cpp b/Source/Core/AudioCommon/OboeStream.cpp
 new file mode 100644
-index 0000000..c3ff080
+index 0000000000000000000000000000000000000000..c3ff080c716577672065cbace741034f77835ba1
 --- /dev/null
 +++ b/Source/Core/AudioCommon/OboeStream.cpp
 @@ -0,0 +1,146 @@
@@ -897,7 +983,7 @@ index 0000000..c3ff080
 +#endif  // HAVE_OBOE
 diff --git a/Source/Core/AudioCommon/OboeStream.h b/Source/Core/AudioCommon/OboeStream.h
 new file mode 100644
-index 0000000..5bbf73d
+index 0000000000000000000000000000000000000000..5bbf73d737f872295055068a5bb3a744ffdd6d94
 --- /dev/null
 +++ b/Source/Core/AudioCommon/OboeStream.h
 @@ -0,0 +1,44 @@
@@ -946,7 +1032,7 @@ index 0000000..5bbf73d
 +
 +#endif
 diff --git a/Source/Core/AudioCommon/OpenSLESStream.cpp b/Source/Core/AudioCommon/OpenSLESStream.cpp
-index a3f6308..add4ff1 100644
+index a3f6308187ad0744d6f03c8cb8b01ed62507d42d..add4ff17ebad62d180e46ba6c28d14059909495f 100644
 --- a/Source/Core/AudioCommon/OpenSLESStream.cpp
 +++ b/Source/Core/AudioCommon/OpenSLESStream.cpp
 @@ -4,14 +4,18 @@
@@ -1075,7 +1161,7 @@ index a3f6308..add4ff1 100644
      return false;
  
 diff --git a/Source/Core/Common/FileUtil.cpp b/Source/Core/Common/FileUtil.cpp
-index 10abba8..d42210b 100644
+index 10abba86350310860ed320e1b4e096799c96089d..d42210badcb085ec660c92b23f51b72d06e83367 100644
 --- a/Source/Core/Common/FileUtil.cpp
 +++ b/Source/Core/Common/FileUtil.cpp
 @@ -837,7 +837,10 @@ std::string GetHomeDirectory()
@@ -1091,7 +1177,7 @@ index 10abba8..d42210b 100644
  
    return homeDir;
 diff --git a/Source/Core/Core/Config/MainSettings.cpp b/Source/Core/Core/Config/MainSettings.cpp
-index 2a2e77d..7e3033f 100644
+index 2a2e77d29827eb4448cd798d2aa9519736d59a6d..7e3033f76508e7fc07e3b73cf3423ed3d30fffc2 100644
 --- a/Source/Core/Core/Config/MainSettings.cpp
 +++ b/Source/Core/Core/Config/MainSettings.cpp
 @@ -337,6 +337,9 @@ const Info<bool> MAIN_DUMP_UCODE{{System::Main, "DSP", "DumpUCode"}, false};
@@ -1105,7 +1191,7 @@ index 2a2e77d..7e3033f 100644
  const Info<bool> MAIN_AUDIO_MUTE_ON_DISABLED_SPEED_LIMIT{
      {System::Main, "DSP", "MuteOnDisabledSpeedLimit"}, false};
 diff --git a/Source/Core/Core/Config/MainSettings.h b/Source/Core/Core/Config/MainSettings.h
-index eab3604..0c488dc 100644
+index eab36049e8dce5ee401b41d3a60267ae557a9028..0c488dcb657dd5a773c325d47bf02422162321be 100644
 --- a/Source/Core/Core/Config/MainSettings.h
 +++ b/Source/Core/Core/Config/MainSettings.h
 @@ -18,7 +18,9 @@
@@ -1126,8 +1212,141 @@ index eab3604..0c488dc 100644
  extern const Info<bool> MAIN_AUDIO_MUTED;
  extern const Info<bool> MAIN_AUDIO_MUTE_ON_DISABLED_SPEED_LIMIT;
  #ifdef _WIN32
+diff --git a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
+index a2d0a26a13102d014c9969dc8b8035bedd282c3b..6372b79245876f5532358d383b36fe2eb85e31c9 100644
+--- a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
++++ b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
+@@ -3,9 +3,14 @@
+ // Refer to the license.txt file included.
+ 
+ #include <algorithm>
++#include <bit>
+ #include <semver/include/semver200.h>
+ #include <utility>  // std::move
+ 
++#ifdef ANDROID
++#include <android/log.h>
++#endif
++
+ #include "Common/CommonPaths.h"
+ #include "Common/CommonTypes.h"
+ #include "Common/Logging/Log.h"
+@@ -52,6 +57,13 @@ extern std::unique_ptr<SlippiPlaybackStatus> g_playback_status;
+ extern std::unique_ptr<SlippiReplayComm> g_replay_comm;
+ bool g_need_input_for_frame;
+ 
++#ifdef ANDROID
++#define SLIPPI_ANDROID_PLAYBACK_LOG(...) \
++  __android_log_print(ANDROID_LOG_INFO, "SlippiPlayback", __VA_ARGS__)
++#else
++#define SLIPPI_ANDROID_PLAYBACK_LOG(...) ((void)0)
++#endif
++
+ #ifdef LOCAL_TESTING
+ bool is_local_connected = false;
+ int local_chat_message_id = 0;
+@@ -155,6 +167,8 @@ CEXISlippi::CEXISlippi(Core::System& system, const std::string current_file_name
+   matchmaking = std::make_unique<SlippiMatchmaking>(slprs_exi_device_ptr, user.get());
+   game_file_loader = std::make_unique<SlippiGameFileLoader>();
+   g_replay_comm = std::make_unique<SlippiReplayComm>();
++  SLIPPI_ANDROID_PLAYBACK_LOG("EXI constructed iso=%s slippi_input=%s", current_file_name.c_str(),
++                              SConfig::GetSlippiConfig().slippi_input.c_str());
+   direct_codes =
+       std::make_unique<SlippiDirectCodes>(slprs_exi_device_ptr, SlippiDirectCodes::DIRECT);
+   teams_codes = std::make_unique<SlippiDirectCodes>(slprs_exi_device_ptr, SlippiDirectCodes::TEAMS);
+@@ -723,6 +737,9 @@ void CEXISlippi::prepareGameInfo(u8* payload)
+   // Return the size of the gecko code list
+   prepareGeckoList();
+   appendWordToBuffer(&m_read_queue, static_cast<u32>(gecko_list.size()));
++  SLIPPI_ANDROID_PLAYBACK_LOG("game info ready version=%s gecko=%zu start=%d end=%d",
++                              m_current_game->GetVersionString().c_str(), gecko_list.size(),
++                              replay_comm_settings.start_frame, replay_comm_settings.end_frame);
+ 
+   // Initialize frame sequence index value for reading rollbacks
+   frame_seq_idx = 0;
+@@ -863,19 +880,19 @@ void CEXISlippi::prepareCharacterFrameData(Slippi::FrameData* frame, u8 port, u8
+ 
+   // Add all of the inputs in order
+   appendWordToBuffer(&m_read_queue, data.randomSeed);
+-  appendWordToBuffer(&m_read_queue, static_cast<u32>(data.joystickX));
+-  appendWordToBuffer(&m_read_queue, static_cast<u32>(data.joystickY));
+-  appendWordToBuffer(&m_read_queue, static_cast<u32>(data.cstickX));
+-  appendWordToBuffer(&m_read_queue, static_cast<u32>(data.cstickY));
+-  appendWordToBuffer(&m_read_queue, static_cast<u32>(data.trigger));
++  appendWordToBuffer(&m_read_queue, std::bit_cast<u32>(data.joystickX));
++  appendWordToBuffer(&m_read_queue, std::bit_cast<u32>(data.joystickY));
++  appendWordToBuffer(&m_read_queue, std::bit_cast<u32>(data.cstickX));
++  appendWordToBuffer(&m_read_queue, std::bit_cast<u32>(data.cstickY));
++  appendWordToBuffer(&m_read_queue, std::bit_cast<u32>(data.trigger));
+   appendWordToBuffer(&m_read_queue, data.buttons);
+-  appendWordToBuffer(&m_read_queue, static_cast<u32>(data.locationX));
+-  appendWordToBuffer(&m_read_queue, static_cast<u32>(data.locationY));
+-  appendWordToBuffer(&m_read_queue, static_cast<u32>(data.facingDirection));
++  appendWordToBuffer(&m_read_queue, std::bit_cast<u32>(data.locationX));
++  appendWordToBuffer(&m_read_queue, std::bit_cast<u32>(data.locationY));
++  appendWordToBuffer(&m_read_queue, std::bit_cast<u32>(data.facingDirection));
+   appendWordToBuffer(&m_read_queue, static_cast<u32>(data.animation));
+   m_read_queue.push_back(data.joystickXRaw);
+   m_read_queue.push_back(data.joystickYRaw);
+-  appendWordToBuffer(&m_read_queue, static_cast<u32>(data.percent));
++  appendWordToBuffer(&m_read_queue, std::bit_cast<u32>(data.percent));
+   m_read_queue.push_back(data.cstickXRaw);
+   m_read_queue.push_back(data.cstickYRaw);
+   // NOTE TO DEV: If you add data here, make sure to increase the size above
+@@ -948,6 +965,16 @@ void CEXISlippi::prepareFrameData(u8* payload)
+   g_playback_status->last_frame = m_current_game->GetLatestIndex();
+   auto is_frame_complete = checkFrameFullyFetched(frame_idx);
+   auto is_frame_ready = is_frame_found && (is_processing_complete || is_frame_complete);
++  static int s_android_frame_log_count = 0;
++  if (s_android_frame_log_count < 12 || frame_idx % 300 == 0)
++  {
++    SLIPPI_ANDROID_PLAYBACK_LOG(
++        "frame request frame=%d found=%d complete=%d processing_complete=%d ready=%d latest=%d",
++        frame_idx, is_frame_found ? 1 : 0, is_frame_complete ? 1 : 0,
++        is_processing_complete ? 1 : 0, is_frame_ready ? 1 : 0,
++        g_playback_status->last_frame);
++    ++s_android_frame_log_count;
++  }
+ 
+   // If there is a start_frame configured, manage the fast-forward flag
+   if (watch_settings.start_frame > Slippi::GAME_FIRST_FRAME)
+@@ -1134,6 +1161,12 @@ void CEXISlippi::prepareIsFileReady()
+   auto is_new_replay = g_replay_comm->isNewReplay();
+   if (!is_new_replay)
+   {
++    static int s_android_not_ready_log_count = 0;
++    if (s_android_not_ready_log_count < 12)
++    {
++      SLIPPI_ANDROID_PLAYBACK_LOG("file ready request: no new replay");
++      ++s_android_not_ready_log_count;
++    }
+     g_replay_comm->nextReplay();
+     m_read_queue.push_back(0);
+     return;
+@@ -1147,11 +1180,13 @@ void CEXISlippi::prepareIsFileReady()
+     // Do not start if replay file doesn't exist
+     // TODO: maybe display error message?
+     INFO_LOG_FMT(SLIPPI, "EXI_DeviceSlippi.cpp: Replay file does not exist?");
++    SLIPPI_ANDROID_PLAYBACK_LOG("file ready request: load failed");
+     m_read_queue.push_back(0);
+     return;
+   }
+ 
+   INFO_LOG_FMT(SLIPPI, "EXI_DeviceSlippi.cpp: Replay file loaded successfully!?");
++  SLIPPI_ANDROID_PLAYBACK_LOG("file ready request: load success");
+ 
+   // Clear playback control related vars
+   g_playback_status->resetPlayback();
+@@ -3288,6 +3323,7 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
+     case CMD_GET_GECKO_CODES:
+       m_read_queue.clear();
+       m_read_queue.insert(m_read_queue.begin(), gecko_list.begin(), gecko_list.end());
++      SLIPPI_ANDROID_PLAYBACK_LOG("get gecko codes size=%zu", gecko_list.size());
+       break;
+     case CMD_ONLINE_INPUTS:
+       handleOnlineInputs(&mem_ptr[buf_loc + 1]);
 diff --git a/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp b/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp
-index beb633f..c3a29b2 100644
+index beb633f499294f27b910d1b493027e43e9f4832d..c3a29b20ad6114ab53d1862ba387eaf77fe41219 100644
 --- a/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp
 +++ b/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp
 @@ -3,6 +3,8 @@
@@ -1237,7 +1456,7 @@ index beb633f..c3a29b2 100644
  
    HandleMoviePadStatus(m_system.GetMovie(), m_device_number, &pad_status);
 diff --git a/Source/Core/Core/HW/SI/SI_DeviceGCController.h b/Source/Core/Core/HW/SI/SI_DeviceGCController.h
-index 19b5bdb..d0bf154 100644
+index 19b5bdb14b21ae7042f6d9cfb6e843467810c9fe..d0bf1542ea1e3343286c177dc73ac12eaa055a6c 100644
 --- a/Source/Core/Core/HW/SI/SI_DeviceGCController.h
 +++ b/Source/Core/Core/HW/SI/SI_DeviceGCController.h
 @@ -16,6 +16,14 @@ class MovieManager;
@@ -1255,8 +1474,153 @@ index 19b5bdb..d0bf154 100644
  class CSIDevice_GCController : public ISIDevice
  {
  protected:
+diff --git a/Source/Core/Core/Slippi/SlippiPlayback.cpp b/Source/Core/Core/Slippi/SlippiPlayback.cpp
+index 8a626e7600b838a7cbc904011a5cf6db1aaaef92..baa6eef6a62e8517c2abc2a4b4c103c135bcca7f 100644
+--- a/Source/Core/Core/Slippi/SlippiPlayback.cpp
++++ b/Source/Core/Core/Slippi/SlippiPlayback.cpp
+@@ -1,6 +1,10 @@
+ #include <memory>
+ #include <mutex>
+ 
++#ifdef ANDROID
++#include <android/log.h>
++#endif
++
+ #ifdef _WIN32
+ #include <share.h>
+ #endif
+@@ -68,11 +72,17 @@ SlippiPlaybackStatus::SlippiPlaybackStatus()
+   current_playback_frame = INT_MIN;
+   target_frame_num = INT_MAX;
+   last_frame = Slippi::PLAYBACK_FIRST_SAVE;
+-#ifdef IS_PLAYBACK
+-  // Only generate these if this is a playback configuration. Should this class get initialized at
+-  // all?
++#if defined(IS_PLAYBACK) || defined(ANDROID)
++  // Android can enter replay playback from the normal netplay build, so it
++  // still needs the playback denylist/codelist data even when IS_PLAYBACK is
++  // not defined.
+   generateDenylist();
+   generateLegacyCodelist();
++#ifdef ANDROID
++  __android_log_print(ANDROID_LOG_INFO, "SlippiPlayback",
++                      "playback code filters initialized deny=%zu legacy=%zu",
++                      deny_list.size(), legacy_code_list.size());
++#endif
+ #endif
+ }
+ 
+diff --git a/Source/Core/Core/Slippi/SlippiReplayComm.cpp b/Source/Core/Core/Slippi/SlippiReplayComm.cpp
+index 8c625a6587ba327b2cd4a78cbf0ac72760ee39a5..daa259cfef32ac4650c6d4666f2037dbdb8cc20f 100644
+--- a/Source/Core/Core/Slippi/SlippiReplayComm.cpp
++++ b/Source/Core/Core/Slippi/SlippiReplayComm.cpp
+@@ -3,6 +3,10 @@
+ #include <cctype>
+ #include <memory>
+ 
++#ifdef ANDROID
++#include <android/log.h>
++#endif
++
+ #include "Common/CommonPaths.h"
+ #include "Common/FileUtil.h"
+ #include "Common/Logging/LogManager.h"
+@@ -14,6 +18,12 @@ using json = nlohmann::json;
+ 
+ std::unique_ptr<SlippiReplayComm> g_replay_comm;
+ 
++#ifdef ANDROID
++#define SLIPPI_PLAYBACK_LOG(...) __android_log_print(ANDROID_LOG_INFO, "SlippiPlayback", __VA_ARGS__)
++#else
++#define SLIPPI_PLAYBACK_LOG(...) ((void)0)
++#endif
++
+ // https://stackoverflow.com/questions/216823/whats-the-best-way-to-trim-stdstring
+ // trim from start (in place)
+ static inline void ltrim(std::string& s)
+@@ -35,11 +45,21 @@ static inline void trim(std::string& s)
+   rtrim(s);
+ }
+ 
+-SlippiReplayComm::SlippiReplayComm()
++SlippiReplayComm::SlippiReplayComm() : m_previous_idx(0), m_config_last_load_mod_time(0)
+ {
+   INFO_LOG_FMT(EXPANSIONINTERFACE, "SlippiReplayComm: Using playback config path: {}",
+                SConfig::GetSlippiConfig().slippi_input);
+   m_config_file_path = SConfig::GetSlippiConfig().slippi_input;
++  m_comm_file_settings.mode = "normal";
++  m_comm_file_settings.replay_path = "";
++  m_comm_file_settings.start_frame = Slippi::GAME_FIRST_FRAME;
++  m_comm_file_settings.end_frame = INT_MAX;
++  m_comm_file_settings.command_id = "";
++  m_comm_file_settings.output_overlay_files = false;
++  m_comm_file_settings.is_real_time_mode = false;
++  m_comm_file_settings.should_resync = true;
++  m_comm_file_settings.rollback_display_method = "off";
++  SLIPPI_PLAYBACK_LOG("ReplayComm init config=%s", m_config_file_path.c_str());
+ }
+ 
+ SlippiReplayComm::~SlippiReplayComm()
+@@ -88,6 +108,14 @@ bool SlippiReplayComm::isNewReplay()
+ 
+   bool is_new_replay = has_path_changed || has_command_changed || has_queue_idx_changed;
+ 
++  if (is_replay && is_new_replay)
++  {
++    SLIPPI_PLAYBACK_LOG("new replay path_changed=%d command_changed=%d queue_changed=%d path=%s command=%s",
++                        has_path_changed ? 1 : 0, has_command_changed ? 1 : 0,
++                        has_queue_idx_changed ? 1 : 0, replay_file_path.c_str(),
++                        m_comm_file_settings.command_id.c_str());
++  }
++
+   return is_replay && is_new_replay;
+ }
+ 
+@@ -104,6 +132,7 @@ std::unique_ptr<Slippi::SlippiGame> SlippiReplayComm::loadGame()
+ {
+   auto replay_file_path = getReplayPath();
+   INFO_LOG_FMT(EXPANSIONINTERFACE, "Attempting to load replay file {}", replay_file_path.c_str());
++  SLIPPI_PLAYBACK_LOG("loadGame path=%s", replay_file_path.c_str());
+   auto result = Slippi::SlippiGame::FromFile(replay_file_path);
+   if (result)
+   {
+@@ -136,6 +165,12 @@ std::unique_ptr<Slippi::SlippiGame> SlippiReplayComm::loadGame()
+     }
+ 
+     current = ws;
++    SLIPPI_PLAYBACK_LOG("loadGame success start=%d end=%d mode=%s", ws.start_frame, ws.end_frame,
++                        m_comm_file_settings.mode.c_str());
++  }
++  else
++  {
++    SLIPPI_PLAYBACK_LOG("loadGame failed path=%s", replay_file_path.c_str());
+   }
+ 
+   return std::move(result);
+@@ -188,6 +223,9 @@ void SlippiReplayComm::loadFile()
+     else
+     {
+       WARN_LOG_FMT(EXPANSIONINTERFACE, "Comm file load error detected. Check file format");
++      SLIPPI_PLAYBACK_LOG("comm parse failed path=%s size=%zu mod=%llu",
++                          m_config_file_path.c_str(), comm_file_contents.size(),
++                          static_cast<unsigned long long>(mod_time));
+ 
+       // Reset in the case of read error. this fixes a race condition where file mod time changes
+       // but the file is not readable yet?
+@@ -207,6 +245,11 @@ void SlippiReplayComm::loadFile()
+   m_comm_file_settings.is_real_time_mode = res.value("isRealTimeMode", false);
+   m_comm_file_settings.should_resync = res.value("shouldResync", true);
+   m_comm_file_settings.rollback_display_method = res.value("rollbackDisplayMethod", "off");
++  SLIPPI_PLAYBACK_LOG("comm loaded mode=%s replay=%s start=%d end=%d command=%s size=%zu mod=%llu",
++                      m_comm_file_settings.mode.c_str(), m_comm_file_settings.replay_path.c_str(),
++                      m_comm_file_settings.start_frame, m_comm_file_settings.end_frame,
++                      m_comm_file_settings.command_id.c_str(), comm_file_contents.size(),
++                      static_cast<unsigned long long>(mod_time));
+ 
+   if (m_comm_file_settings.mode == "queue")
+   {
 diff --git a/Source/Core/VideoBackends/Vulkan/VKSwapChain.cpp b/Source/Core/VideoBackends/Vulkan/VKSwapChain.cpp
-index 589d9a4..1196323 100644
+index 589d9a447ba176b6c6ca5f18ccf3ec7ba9d3af11..11963237121ed2e0f92cc797c5ad6cc0f9fe804f 100644
 --- a/Source/Core/VideoBackends/Vulkan/VKSwapChain.cpp
 +++ b/Source/Core/VideoBackends/Vulkan/VKSwapChain.cpp
 @@ -253,6 +253,17 @@ bool SwapChain::SelectPresentMode()

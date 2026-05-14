@@ -5,6 +5,7 @@ package org.dolphinemu.dolphinemu.replay;
 import android.content.Context;
 import android.util.Log;
 
+import org.dolphinemu.dolphinemu.MainlineCore;
 import org.dolphinemu.dolphinemu.UserDirectoryBootstrap;
 
 import java.io.File;
@@ -30,6 +31,11 @@ public final class ReplayConfig {
         return new File(UserDirectoryBootstrap.userDir(ctx), "Slippi/playback.json");
     }
 
+    /** Mainline runs with its own user dir, so keep its playback bridge there too. */
+    public static File mainlineCommFile(Context ctx) {
+        return new File(MainlineCore.userDir(ctx), "Slippi/playback.json");
+    }
+
     /** Where imported and auto-saved .slp files live. Flat directory (no month folders). */
     public static File replaysDir(Context ctx) {
         return new File(UserDirectoryBootstrap.userDir(ctx), "Slippi/Replays");
@@ -43,7 +49,11 @@ public final class ReplayConfig {
      * CEXISlippi construction).
      */
     public static boolean writeNormal(Context ctx, File slp) {
-        return write(ctx, buildNormalJson(slp.getAbsolutePath()));
+        return writeNormal(commFile(ctx), slp);
+    }
+
+    public static boolean writeNormal(File commFile, File slp) {
+        return write(commFile, buildNormalJson(slp.getAbsolutePath()));
     }
 
     /**
@@ -54,11 +64,14 @@ public final class ReplayConfig {
      * re-set the path.
      */
     public static boolean writeEmpty(Context ctx) {
-        return write(ctx, "{\"mode\":\"off\"}\n");
+        return writeEmpty(commFile(ctx));
     }
 
-    private static boolean write(Context ctx, String body) {
-        File f = commFile(ctx);
+    public static boolean writeEmpty(File commFile) {
+        return write(commFile, "{\"mode\":\"off\"}\n");
+    }
+
+    private static boolean write(File f, String body) {
         File parent = f.getParentFile();
         if (parent != null && !parent.exists() && !parent.mkdirs()) {
             Log.w(TAG, "could not create " + parent);

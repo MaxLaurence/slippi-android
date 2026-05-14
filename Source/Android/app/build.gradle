@@ -432,8 +432,10 @@ tasks.register('syncMainlineSlippiCore') {
         def generatedDir = mainlineGeneratedDir.get().asFile
         def jniDir = new File(generatedDir, 'jniLibs/arm64-v8a')
         def assetDir = new File(generatedDir, 'assets/MainlineSys')
+        def playbackAssetDir = new File(generatedDir, 'assets/MainlinePlaybackGeckoCodes')
         delete jniDir
         delete assetDir
+        delete playbackAssetDir
         jniDir.mkdirs()
         def libs = fileTree(mainlineCmakeBuildDir.get().asFile) {
             include '**/libmain.so'
@@ -449,6 +451,10 @@ tasks.register('syncMainlineSlippiCore') {
         copy {
             from new File(mainlineWorkDir.get().asFile, 'Data/Sys')
             into assetDir
+        }
+        copy {
+            from new File(mainlineWorkDir.get().asFile, 'Data/PlaybackGeckoCodes')
+            into playbackAssetDir
         }
     }
 }

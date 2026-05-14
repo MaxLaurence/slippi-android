@@ -31,9 +31,9 @@ import java.nio.charset.StandardCharsets;
  * default codes on name collisions and also enables bundled defaults.
  * So the generated override disables the bundled netplay defaults and
  * renames the playback "General Codes" block to make the playback boot
- * code set cleanly active. The {@code [Core]} section of the playback
- * ini is stripped — it sets {@code CPUThread=False} which we can't
- * afford on the Thor, and we only want the gecko overrides here.
+ * code set cleanly active. Android keeps only the gecko override data;
+ * the upstream playback {@code [Core]} section forces single-core
+ * emulation, which is too slow for this embedded Android path.
  */
 public final class GeckoOverride {
     private static final String TAG = "GeckoOverride";
@@ -63,19 +63,38 @@ public final class GeckoOverride {
 
     /** Copy the playback ini into the user dir so the next BootCore picks it up. */
     public static void applyReplayMode(Context ctx) {
-        File dir = overrideDir(ctx);
+        applyReplayMode(ctx, UserDirectoryBootstrap.userDir(ctx));
+    }
+
+    public static void applyReplayMode(Context ctx, File userDir) {
+        applyReplayMode(ctx, userDir, "PlaybackGeckoCodes", true);
+    }
+
+    /**
+     * Mainline has its own generated copy of upstream Data/PlaybackGeckoCodes
+     * so updating the embedded mainline checkout also updates replay boot
+     * codes. Keep the Android dual-core runtime by stripping [Core], same as
+     * the Ishiiruka replay path.
+     */
+    public static void applyMainlineReplayMode(Context ctx, File userDir) {
+        applyReplayMode(ctx, userDir, "MainlinePlaybackGeckoCodes", true);
+    }
+
+    private static void applyReplayMode(Context ctx, File userDir, String assetDir,
+                                        boolean stripCoreSection) {
+        File dir = overrideDir(userDir);
         if (!dir.exists() && !dir.mkdirs()) {
             Log.w(TAG, "could not create " + dir);
             return;
         }
         AssetManager am = ctx.getAssets();
         for (String name : INI_NAMES) {
-            String assetPath = "PlaybackGeckoCodes/" + name;
+            String assetPath = assetDir + "/" + name;
             File dst = new File(dir, name);
             try (InputStream in = am.open(assetPath);
                  BufferedReader r = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
                  FileWriter w = new FileWriter(dst)) {
-                writeReplayIni(r, w);
+                writeReplayIni(r, w, stripCoreSection);
             } catch (IOException e) {
                 Log.w(TAG, "apply " + assetPath + " -> " + dst + ": " + e);
             }
@@ -124,20 +143,21 @@ public final class GeckoOverride {
     }
 
     /**
-     * Copy the ini, dropping any {@code [Core]} section. Dolphin merges
+     * Copy the ini, optionally dropping the {@code [Core]} section. Dolphin merges
      * per-game ini's [Core] over the global Dolphin.ini, and the
-     * playback ini's [Core] disables CPUThread — a non-starter on
-     * Android where the emu thread already pins the big-core cluster.
-     * The Gecko sections are otherwise preserved, except for the replay
-     * launch fixes described in the class comment.
+     * playback ini's [Core] disables CPUThread. Android strips that for
+     * replay launches so playback can still use the embedded dual-core
+     * runtime. The Gecko sections are otherwise preserved, except for
+     * the replay launch fixes described in the class comment.
      */
-    private static void writeReplayIni(BufferedReader r, FileWriter w) throws IOException {
+    private static void writeReplayIni(BufferedReader r, FileWriter w, boolean stripCoreSection)
+            throws IOException {
         String line;
         boolean inCoreSection = false;
         while ((line = r.readLine()) != null) {
             String trimmed = line.trim();
             if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-                inCoreSection = trimmed.equalsIgnoreCase("[Core]");
+                inCoreSection = stripCoreSection && trimmed.equalsIgnoreCase("[Core]");
                 if (inCoreSection) {
                     continue;
                 }

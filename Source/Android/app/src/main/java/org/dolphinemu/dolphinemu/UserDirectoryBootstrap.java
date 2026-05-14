@@ -44,7 +44,7 @@ public final class UserDirectoryBootstrap {
      * we added.
      */
     private static final int SYS_VERSION = 3;
-    private static final int MAINLINE_SYS_VERSION = 1;
+    private static final int MAINLINE_SYS_VERSION = 2;
     private static final String SYS_VERSION_FILE = "sys_version";
 
     public static synchronized void ensureLayout(Context ctx) {
