@@ -23,7 +23,9 @@ This document is the build/dev/debug reference.
   rustup target add --toolchain 1.88.0 aarch64-linux-android
   ```
 - The submodules: `git submodule update --init --recursive` from the repo
-  root.
+  root. This includes `Externals/MainlineSlippiDolphin`, a shallow checkout
+  of Project Slippi Dolphin's `slippi` branch used for the embedded mainline
+  core.
 
 ## Build
 
@@ -31,10 +33,10 @@ From the repo root:
 
 ```sh
 export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
-export JAVA_HOME=/opt/homebrew/opt/openjdk@17
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
 export PATH=$HOME/.cargo/bin:/opt/homebrew/bin:$PATH
 
-# Iteration build:
+# Self-contained debug build with Ishiiruka + mainline Slippi cores:
 ./Source/Android/gradlew -p Source/Android :app:assembleDebug
 
 # Force the onscreen GameCube touch controls even when a built-in or
@@ -43,6 +45,9 @@ export PATH=$HOME/.cargo/bin:/opt/homebrew/bin:$PATH
 
 # Distributable build (signed):
 ./Source/Android/gradlew -p Source/Android :app:assembleRelease
+
+# Java/resource-only iteration when you do not need to rebuild/package mainline:
+./Source/Android/gradlew -p Source/Android :app:assembleDebug -PskipMainlineCoreBuild=true
 ```
 
 Output APKs:
@@ -65,8 +70,20 @@ in-place Android app update; the new package starts with its own private app
 data, so users may need to re-pick their ISO and sign in/import `user.json`
 again.
 
-A clean build is ~8 minutes (Rust crates + boost dominate). Incremental
-C++ rebuilds are ~10s; Java/AGP-only changes are sub-second.
+A clean build compiles both native cores. Ishiiruka uses this checkout's
+normal CMake path; mainline is built from `Externals/MainlineSlippiDolphin`
+into `app/build/generated/mainlineSlippi/jniLibs/arm64-v8a/libmainline_slippi.so`
+and packages `Data/Sys` as `assets/MainlineSys`. Use
+`-PskipMainlineCoreBuild=true` for Java/AGP-only iteration; it reuses any
+previously generated mainline output, and a clean tree without that output will
+show the Mainline option as missing.
+
+Before mainline CMake configure runs, Gradle copies the upstream checkout into
+`app/build/mainlineSlippi/source` and applies
+`Source/Android/mainline-patches/*.patch` in lexical order. Keep Android
+embedding changes there instead of leaving hidden edits in
+`Externals/MainlineSlippiDolphin`; the patch task reports upstream conflicts
+early and skips patches that are already present in a local development copy.
 
 ## Slippi sign-in
 
@@ -127,21 +144,23 @@ $ADB devices                   # confirm
 ## First-run flow (in the launcher)
 
 1. **Pick Melee ISO** — `ACTION_OPEN_DOCUMENT`. The picked file is
-   copied into app-private storage so the C++ side gets a real
-   `fopen`-able path.
+   copied into app-private storage so the built-in C++ side gets a
+   real `fopen`-able path.
 2. **Sign in via slippi.gg** — opens `SlippiLoginActivity`, an
    in-app `WebView` pointed at `https://slippi.gg/online/enable`.
    The user logs in there; on tapping **Download**, our blob
    interceptor captures the response and writes it to
    `<files>/dolphin/Slippi/user.json` directly. (Manual file-picker
    import is still available as a link.)
-3. **Pick backend** — Vulkan (default) or OpenGL ES.
-4. (Optional) **Calibrate sticks** + **Remap buttons** — both have
+3. **Pick emulator core** — built-in Ishiiruka (default) or an
+   embedded mainline Slippi Dolphin core.
+4. **Pick graphics backend** — Vulkan (default) or OpenGL ES.
+5. (Optional) **Calibrate sticks** + **Remap buttons** — both have
    their own activities reached from the launcher. Defaults are
    tuned to work without ever running the wizards.
-5. **Play** — launches `EmulationActivity`, which gives a
+6. **Play** — launches `EmulationActivity`, which gives a
    `SurfaceView` to the chosen backend and starts the emu thread.
-6. **Replays** — `▶ REPLAYS` opens `ReplayListActivity`. Netplay
+7. **Replays** — `▶ REPLAYS` opens `ReplayListActivity`. Netplay
    matches auto-save to `<files>/dolphin/Slippi/Replays/`; the same
    folder is the importer destination and the browser's source of
    truth. See **Replay playback** below.
@@ -378,6 +397,59 @@ mode — no virtual pad needed when you're just watching.
   re-tap rate.
 - The seek thread's pause/resume can cause brief OpenSLES audio
   underruns. Documented; tolerable on Thor.
+
+## Emulator core selection
+
+The launcher offers two built-in cores:
+
+- **Ishiiruka**: this checkout's Android native target, packaged as
+  `libmain.so`.
+- **Mainline**: Project Slippi Dolphin's Android native target from
+  `Externals/MainlineSlippiDolphin`, packaged as `libmainline_slippi.so`.
+
+The two cores are not loaded into the same process. Mainline runs through
+`MainlineEmulationActivity` in the `:mainline` Android process, where
+`NativeLibrary` loads `libmainline_slippi.so` and skips Ishiiruka's JNI cache
+bootstrap. This keeps both cores self-contained in one APK while isolating
+their `org.dolphinemu.dolphinemu.NativeLibrary` JNI symbols and large native
+singletons.
+
+On first mainline launch, `UserDirectoryBootstrap.ensureMainlineLayout()` copies
+`assets/MainlineSys` into `<files>/mainline_dolphin/Sys` and mirrors the
+Slippi login blob from `<files>/dolphin/Slippi/user.json` to
+`<files>/mainline_dolphin/Slippi/user.json`.
+
+## Updating the embedded mainline core
+
+Run the update helper from the repo root:
+
+```sh
+scripts/update-mainline-slippi.sh
+```
+
+By default this fetches `origin/slippi` inside
+`Externals/MainlineSlippiDolphin`, checks out the fetched commit, clears the
+generated mainline build copy, and runs `:app:assembleDebug`. The Gradle build
+then reapplies `Source/Android/mainline-patches` to the copied source, so patch
+conflicts fail during the update instead of surfacing later on-device.
+
+Useful variants:
+
+```sh
+scripts/update-mainline-slippi.sh --ref <commit-or-tag>
+scripts/update-mainline-slippi.sh --branch <branch-name>
+scripts/update-mainline-slippi.sh --no-build
+```
+
+The helper refuses to update a dirty mainline submodule. If you intentionally
+changed upstream files for Android embedding, refresh the patch queue first:
+
+```sh
+scripts/refresh-mainline-patches.sh
+```
+
+Then clean the submodule once you have confirmed the regenerated patch captures
+the intended delta, and rerun the update helper.
 
 ## Raw stick input providers
 

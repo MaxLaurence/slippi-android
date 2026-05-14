@@ -7,6 +7,12 @@ plugins {
 // SlippiLoginActivity) so we don't carry any Firebase / Slippi
 // credentials in the binary.
 def forceTouchControls = project.findProperty('forceTouchControls')?.toString()?.toBoolean() ?: false
+def skipMainlineCoreBuild = project.findProperty('skipMainlineCoreBuild')?.toString()?.toBoolean() ?: false
+def mainlineSlippiRoot = file("${rootDir}/../../Externals/MainlineSlippiDolphin")
+def mainlinePatchDir = file("${rootDir}/mainline-patches")
+def mainlineWorkDir = layout.buildDirectory.dir("mainlineSlippi/source")
+def mainlineCmakeBuildDir = layout.buildDirectory.dir("mainlineSlippi/cmake/arm64-v8a")
+def mainlineGeneratedDir = layout.buildDirectory.dir("generated/mainlineSlippi")
 
 android {
     namespace 'org.dolphinemu.dolphinemu'
@@ -102,7 +108,8 @@ android {
             // Mirror the Sys/ tree we populate from CMake — without an
             // explicit assets dir, AGP doesn't pick up the bundled
             // codehandler.bin / GameFiles / Slippi/InjectionLists / etc.
-            assets.srcDirs = ['src/main/assets']
+            assets.srcDirs = ['src/main/assets', "$buildDir/generated/mainlineSlippi/assets"]
+            jniLibs.srcDirs = ['src/main/jniLibs', "$buildDir/generated/mainlineSlippi/jniLibs"]
             manifest.srcFile 'src/main/AndroidManifest.xml'
         }
     }
@@ -177,4 +184,244 @@ dependencies {
     // is the latest published as of 2026-01; the stable 1.0.0 line still
     // works but uses the deprecated KeyGenParameterSpec helper.
     implementation 'androidx.security:security-crypto:1.1.0-alpha06'
+}
+
+def mainlineSubmodulePaths = [
+        'Externals/SlippiRustExtensions',
+        'Externals/corrosion',
+        'Externals/enet/enet',
+        'Externals/cubeb/cubeb',
+        'Externals/fmt/fmt',
+        'Externals/curl/curl',
+        'Externals/libusb/libusb',
+        'Externals/zlib-ng/zlib-ng',
+        'Externals/lz4/lz4',
+        'Externals/xxhash/xxHash',
+        'Externals/spirv_cross/SPIRV-Cross',
+        'Externals/Vulkan-Headers',
+        'Externals/VulkanMemoryAllocator',
+        'Externals/libspng/libspng',
+        'Externals/minizip-ng/minizip-ng',
+        'Externals/hidapi/hidapi-src',
+        'Externals/zstd/zstd',
+        'Externals/rcheevos/rcheevos',
+        'Externals/implot/implot',
+        'Externals/libadrenotools',
+        'Externals/SDL/SDL',
+        'Externals/SFML/SFML',
+        'Externals/mGBA/mgba',
+        'Externals/tinygltf/tinygltf'
+]
+
+tasks.register('initMainlineSlippiSubmodules', Exec) {
+    onlyIf { !skipMainlineCoreBuild && new File(mainlineSlippiRoot, 'CMakeLists.txt').isFile() }
+    workingDir mainlineSlippiRoot
+    commandLine(['git', 'submodule', 'update', '--init', '--recursive', '--depth', '1'] + mainlineSubmodulePaths)
+}
+
+tasks.register('verifyMainlineSlippiSource') {
+    dependsOn tasks.named('initMainlineSlippiSubmodules')
+    onlyIf { !skipMainlineCoreBuild }
+    doLast {
+        def required = [
+                new File(mainlineSlippiRoot, 'CMakeLists.txt'),
+                new File(mainlineSlippiRoot, 'Source/Android/jni/CMakeLists.txt'),
+                new File(mainlineSlippiRoot, 'Source/Core/Core/Slippi'),
+                new File(mainlineSlippiRoot, 'Data/Sys'),
+                new File(mainlineSlippiRoot, 'Externals/SlippiRustExtensions/Cargo.toml'),
+                new File(mainlineSlippiRoot, 'Externals/corrosion/CMakeLists.txt')
+        ]
+        def missing = required.findAll { !it.exists() }
+        if (!missing.empty) {
+            throw new GradleException(
+                    'Embedded mainline Slippi Dolphin source is incomplete. Run ' +
+                    '`git submodule update --init --recursive Externals/MainlineSlippiDolphin` ' +
+                    'from the repository root. Missing: ' +
+                    missing.collect { it.path }.join(', '))
+        }
+    }
+}
+
+tasks.register('prepareMainlineSlippiSource', Sync) {
+    dependsOn tasks.named('verifyMainlineSlippiSource')
+    onlyIf { !skipMainlineCoreBuild }
+    from(mainlineSlippiRoot) {
+        exclude '**/.git', '**/.git/**'
+        exclude 'Source/Android/app/build/**'
+        exclude 'Source/Android/.gradle/**'
+        exclude 'Build/**'
+        exclude 'Binary/**'
+        exclude 'Externals/SFML/SFML/test/**'
+        exclude 'Externals/SFML/SFML/examples/**'
+    }
+    into(mainlineWorkDir)
+}
+
+tasks.register('applyMainlineSlippiPatches') {
+    dependsOn tasks.named('prepareMainlineSlippiSource')
+    onlyIf { !skipMainlineCoreBuild }
+    inputs.dir(mainlinePatchDir).optional()
+    outputs.dir(mainlineWorkDir)
+    outputs.upToDateWhen { false }
+    doLast {
+        if (!mainlinePatchDir.isDirectory()) {
+            logger.lifecycle("No mainline Slippi patch directory found at ${mainlinePatchDir}")
+            return
+        }
+
+        def patches = fileTree(mainlinePatchDir) {
+            include '*.patch'
+            include '*.diff'
+        }.files.toList().sort { it.name }
+
+        if (patches.empty) {
+            logger.lifecycle("No mainline Slippi patches to apply")
+            return
+        }
+
+        def sourceDir = mainlineWorkDir.get().asFile
+        patches.each { patch ->
+            def reverseCheck = exec {
+                workingDir sourceDir
+                commandLine 'git', 'apply', '--reverse', '--check', patch.absolutePath
+                ignoreExitValue true
+            }
+            if (reverseCheck.exitValue == 0) {
+                logger.lifecycle("Mainline Slippi patch ${patch.name} is already applied")
+                return
+            }
+
+            def applyCheck = exec {
+                workingDir sourceDir
+                commandLine 'git', 'apply', '--check', patch.absolutePath
+                ignoreExitValue true
+            }
+            if (applyCheck.exitValue == 0) {
+                exec {
+                    workingDir sourceDir
+                    commandLine 'git', 'apply', patch.absolutePath
+                }
+                logger.lifecycle("Applied mainline Slippi patch ${patch.name}")
+                return
+            }
+
+            throw new GradleException(
+                    "Could not apply mainline Slippi patch ${patch.name}. " +
+                    "Upstream probably changed one of the patched files; refresh " +
+                    "Source/Android/mainline-patches before rebuilding.")
+        }
+    }
+}
+
+def rustToolchainArgsFor = { File sourceDir ->
+    def args = []
+    def homeDir = System.getProperty('user.home')
+    def rustToolchain = ''
+    try {
+        def tomlText = new File(sourceDir, 'Externals/SlippiRustExtensions/rust-toolchain.toml').text
+        def m = (tomlText =~ /channel\s*=\s*"([^"]+)"/)
+        if (m.find()) rustToolchain = m.group(1)
+    } catch (Exception ignored) {}
+    if (!rustToolchain) rustToolchain = '1.88.0'
+    def hostTriple = System.getProperty('os.arch') == 'aarch64'
+            ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin'
+    def rustupRoot = "${homeDir}/.rustup/toolchains/${rustToolchain}-${hostTriple}/bin"
+    def rustcPath = new File(rustupRoot, 'rustc')
+    def cargoPath = new File(rustupRoot, 'cargo')
+    def rustupPath = new File("${homeDir}/.cargo/bin/rustup")
+    if (rustcPath.exists()) args << "-DRust_COMPILER=${rustcPath.absolutePath}"
+    if (cargoPath.exists()) args << "-DRust_CARGO=${cargoPath.absolutePath}"
+    if (rustupPath.exists()) args << "-DRust_RUSTUP=${rustupPath.absolutePath}"
+    args << '-DRust_RESOLVE_RUSTUP_TOOLCHAINS=OFF'
+    return args
+}
+
+tasks.register('configureMainlineSlippiCore', Exec) {
+    dependsOn tasks.named('applyMainlineSlippiPatches')
+    onlyIf { !skipMainlineCoreBuild }
+    doFirst {
+        def sourceDir = mainlineWorkDir.get().asFile
+        def nativeBuildDir = mainlineCmakeBuildDir.get().asFile
+        nativeBuildDir.mkdirs()
+        def cmakeBinDir = new File(android.sdkDirectory, 'cmake/3.22.1/bin')
+        def cmake = new File(cmakeBinDir, 'cmake')
+        def ninja = new File(cmakeBinDir, 'ninja')
+        def ndkDir = android.ndkDirectory
+        if (!cmake.isFile() || !ninja.isFile()) {
+            throw new GradleException("Android CMake 3.22.1 is required at ${cmakeBinDir}")
+        }
+        if (ndkDir == null || !ndkDir.isDirectory()) {
+            throw new GradleException("Android NDK is required to build embedded mainline Slippi")
+        }
+        def cmakeArgs = [
+                cmake.absolutePath,
+                '-S', sourceDir.absolutePath,
+                '-B', nativeBuildDir.absolutePath,
+                '-G', 'Ninja',
+                "-DCMAKE_MAKE_PROGRAM=${ninja.absolutePath}",
+                "-DCMAKE_TOOLCHAIN_FILE=${new File(ndkDir, 'build/cmake/android.toolchain.cmake').absolutePath}",
+                '-DANDROID_ABI=arm64-v8a',
+                '-DANDROID_PLATFORM=android-29',
+                '-DANDROID_STL=c++_static',
+                '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON',
+                '-DCMAKE_CXX_FLAGS=-DDOLPHIN_DATA_DIR=\\"SlippiOnline\\"',
+                '-DCMAKE_BUILD_TYPE=RelWithDebInfo',
+                '-DENABLE_GENERIC=OFF',
+                '-DENABLE_HEADLESS=OFF',
+                '-DENABLE_NOGUI=OFF',
+                '-DENABLE_PCH=OFF',
+                '-DENABLE_QT=OFF',
+                '-DENABLE_TESTS=OFF',
+                '-DENABLE_VULKAN=ON',
+                '-DUSE_RETRO_ACHIEVEMENTS=ON',
+                '-DUSE_UPNP=OFF'
+        ] + rustToolchainArgsFor(sourceDir)
+        commandLine cmakeArgs
+        environment 'PATH', "${cmakeBinDir.absolutePath}:${System.getenv('PATH') ?: ''}"
+    }
+}
+
+tasks.register('buildMainlineSlippiCore', Exec) {
+    dependsOn tasks.named('configureMainlineSlippiCore')
+    onlyIf { !skipMainlineCoreBuild }
+    doFirst {
+        def cmake = new File(android.sdkDirectory, 'cmake/3.22.1/bin/cmake')
+        commandLine cmake.absolutePath, '--build', mainlineCmakeBuildDir.get().asFile.absolutePath,
+                '--target', 'main', '--parallel',
+                Integer.toString(Runtime.getRuntime().availableProcessors())
+    }
+}
+
+tasks.register('syncMainlineSlippiCore') {
+    dependsOn tasks.named('buildMainlineSlippiCore')
+    onlyIf { !skipMainlineCoreBuild }
+    doLast {
+        def generatedDir = mainlineGeneratedDir.get().asFile
+        def jniDir = new File(generatedDir, 'jniLibs/arm64-v8a')
+        def assetDir = new File(generatedDir, 'assets/MainlineSys')
+        delete jniDir
+        delete assetDir
+        jniDir.mkdirs()
+        def libs = fileTree(mainlineCmakeBuildDir.get().asFile) {
+            include '**/libmain.so'
+        }.files as List
+        if (libs.empty) {
+            throw new GradleException('Mainline Slippi native build did not produce libmain.so')
+        }
+        copy {
+            from libs.first()
+            into jniDir
+            rename { 'libmainline_slippi.so' }
+        }
+        copy {
+            from new File(mainlineWorkDir.get().asFile, 'Data/Sys')
+            into assetDir
+        }
+    }
+}
+
+if (!skipMainlineCoreBuild) {
+    tasks.named('preBuild') {
+        dependsOn tasks.named('syncMainlineSlippiCore')
+    }
 }

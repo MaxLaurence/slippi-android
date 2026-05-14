@@ -1,0 +1,526 @@
+diff --git a/Source/Android/jni/MainAndroid.cpp b/Source/Android/jni/MainAndroid.cpp
+index 973b492..155d398 100644
+--- a/Source/Android/jni/MainAndroid.cpp
++++ b/Source/Android/jni/MainAndroid.cpp
+@@ -2,21 +2,32 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ #include <condition_variable>
++#include <cerrno>
++#include <chrono>
++#include <cstdint>
+ #include <cstdio>
+ #include <cstdlib>
++#include <cstring>
++#include <dirent.h>
++#include <fcntl.h>
+ #include <memory>
+ #include <mutex>
+ #include <optional>
++#include <poll.h>
+ #include <string>
++#include <sys/ioctl.h>
+ #include <thread>
+ #include <utility>
+ #include <vector>
++#include <unistd.h>
+ 
+ #include <EGL/egl.h>
+ #include <android/log.h>
+ #include <android/native_window_jni.h>
+ #include <fmt/format.h>
+ #include <jni.h>
++#include <linux/input.h>
++#undef BRKINT
+ 
+ #include "Common/AndroidAnalytics.h"
+ #include "Common/Assert.h"
+@@ -43,6 +54,7 @@
+ #include "Core/DolphinAnalytics.h"
+ #include "Core/HW/DVD/DVDInterface.h"
+ #include "Core/HW/Wiimote.h"
++#include "Core/HW/SI/SI_DeviceGCController.h"
+ #include "Core/HW/WiimoteReal/WiimoteReal.h"
+ #include "Core/Host.h"
+ #include "Core/PowerPC/JitInterface.h"
+@@ -86,6 +98,275 @@ bool s_need_nonblocking_alert_msg;
+ 
+ Common::Flag s_is_booting;
+ bool s_game_metadata_is_valid = false;
++
++struct RawAxis
++{
++  int code = -1;
++  int minimum = 0;
++  int maximum = 0;
++  int value = 0;
++};
++
++struct RawGamepad
++{
++  int fd = -1;
++  std::string path;
++  std::string name;
++  RawAxis axes[4];
++  uint64_t next_scan_ms = 0;
++  bool logged_unavailable = false;
++};
++
++std::mutex s_raw_gamepad_mutex;
++RawGamepad s_raw_gamepad;
++
++uint64_t RawInputNowMs()
++{
++  return static_cast<uint64_t>(
++      std::chrono::duration_cast<std::chrono::milliseconds>(
++          std::chrono::steady_clock::now().time_since_epoch())
++          .count());
++}
++
++bool InitRawAxis(int fd, int code, RawAxis* out)
++{
++  input_absinfo info = {};
++  if (ioctl(fd, EVIOCGABS(code), &info) != 0)
++    return false;
++  if (info.maximum <= info.minimum)
++    return false;
++
++  out->code = code;
++  out->minimum = info.minimum;
++  out->maximum = info.maximum;
++  out->value = info.value;
++  return true;
++}
++
++std::string ReadInputDeviceName(int fd)
++{
++  char name[128] = {};
++  if (ioctl(fd, EVIOCGNAME(sizeof(name)), name) < 0)
++    return "";
++  return name;
++}
++
++bool TryOpenRawGamepadLocked(const char* path)
++{
++  const int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
++  if (fd < 0)
++  {
++    if (!s_raw_gamepad.logged_unavailable && (errno == EACCES || errno == EPERM))
++    {
++      s_raw_gamepad.logged_unavailable = true;
++      __android_log_print(ANDROID_LOG_WARN, "SlippiRawInput",
++                          "cannot open raw input device %s: %s; falling back to MotionEvent",
++                          path, strerror(errno));
++    }
++    return false;
++  }
++
++  RawAxis main_x;
++  RawAxis main_y;
++  RawAxis c_x;
++  RawAxis c_y;
++  if (!InitRawAxis(fd, ABS_X, &main_x) || !InitRawAxis(fd, ABS_Y, &main_y))
++  {
++    close(fd);
++    return false;
++  }
++
++  if (!(InitRawAxis(fd, ABS_RX, &c_x) && InitRawAxis(fd, ABS_RY, &c_y)) &&
++      !(InitRawAxis(fd, ABS_Z, &c_x) && InitRawAxis(fd, ABS_RZ, &c_y)))
++  {
++    close(fd);
++    return false;
++  }
++
++  s_raw_gamepad.fd = fd;
++  s_raw_gamepad.path = path;
++  s_raw_gamepad.name = ReadInputDeviceName(fd);
++  s_raw_gamepad.axes[0] = main_x;
++  s_raw_gamepad.axes[1] = main_y;
++  s_raw_gamepad.axes[2] = c_x;
++  s_raw_gamepad.axes[3] = c_y;
++  s_raw_gamepad.logged_unavailable = false;
++
++  __android_log_print(ANDROID_LOG_INFO, "SlippiRawInput",
++                      "using raw gamepad %s (%s), axes main=(%d,%d) c=(%d,%d)",
++                      s_raw_gamepad.path.c_str(), s_raw_gamepad.name.c_str(), main_x.code,
++                      main_y.code, c_x.code, c_y.code);
++  return true;
++}
++
++bool EnsureRawGamepadLocked()
++{
++  if (s_raw_gamepad.fd >= 0)
++    return true;
++
++  const uint64_t now = RawInputNowMs();
++  if (now < s_raw_gamepad.next_scan_ms)
++    return false;
++  s_raw_gamepad.next_scan_ms = now + 2000;
++
++  DIR* dir = opendir("/dev/input");
++  if (!dir)
++  {
++    if (!s_raw_gamepad.logged_unavailable)
++    {
++      s_raw_gamepad.logged_unavailable = true;
++      __android_log_print(ANDROID_LOG_WARN, "SlippiRawInput",
++                          "cannot open /dev/input: %s; falling back to MotionEvent",
++                          strerror(errno));
++    }
++    return false;
++  }
++
++  bool opened = false;
++  while (dirent* entry = readdir(dir))
++  {
++    if (strncmp(entry->d_name, "event", 5) != 0)
++      continue;
++
++    char path[64];
++    snprintf(path, sizeof(path), "/dev/input/%s", entry->d_name);
++    if (TryOpenRawGamepadLocked(path))
++    {
++      opened = true;
++      break;
++    }
++  }
++  closedir(dir);
++
++  if (!opened && !s_raw_gamepad.logged_unavailable)
++  {
++    s_raw_gamepad.logged_unavailable = true;
++    __android_log_print(ANDROID_LOG_WARN, "SlippiRawInput",
++                        "no readable raw gamepad with ABS_X/Y and ABS_RX/RY or ABS_Z/RZ; "
++                        "falling back to MotionEvent");
++  }
++  return opened;
++}
++
++float NormalizeRawAxis(const RawAxis& axis)
++{
++  const float center = (static_cast<float>(axis.minimum) + static_cast<float>(axis.maximum)) * 0.5f;
++  const float value = static_cast<float>(axis.value);
++  const float extent = value >= center ? static_cast<float>(axis.maximum) - center :
++                                         center - static_cast<float>(axis.minimum);
++  if (extent <= 0.0f)
++    return 0.0f;
++
++  float normalized = (value - center) / extent;
++  if (normalized > 1.0f)
++    normalized = 1.0f;
++  else if (normalized < -1.0f)
++    normalized = -1.0f;
++  return normalized;
++}
++
++bool DrainRawGamepadEventsLocked(bool* saw_event)
++{
++  input_event event = {};
++  while (true)
++  {
++    const ssize_t bytes = read(s_raw_gamepad.fd, &event, sizeof(event));
++    if (bytes == static_cast<ssize_t>(sizeof(event)))
++    {
++      if (saw_event)
++        *saw_event = true;
++      if (event.type == EV_ABS)
++      {
++        for (RawAxis& axis : s_raw_gamepad.axes)
++        {
++          if (axis.code == event.code)
++          {
++            axis.value = event.value;
++            break;
++          }
++        }
++      }
++      continue;
++    }
++
++    if (bytes < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
++      break;
++
++    __android_log_print(ANDROID_LOG_WARN, "SlippiRawInput",
++                        "lost raw gamepad %s: read returned %zd errno=%s",
++                        s_raw_gamepad.path.c_str(), bytes, strerror(errno));
++    close(s_raw_gamepad.fd);
++    s_raw_gamepad.fd = -1;
++    s_raw_gamepad.next_scan_ms = 0;
++    return false;
++  }
++
++  return true;
++}
++
++void FillRawGamepadAxesLocked(float out[4])
++{
++  for (int i = 0; i < 4; i++)
++    out[i] = NormalizeRawAxis(s_raw_gamepad.axes[i]);
++}
++
++bool PollRawGamepadAxes(float out[4])
++{
++  std::lock_guard<std::mutex> lock(s_raw_gamepad_mutex);
++  if (!EnsureRawGamepadLocked())
++    return false;
++
++  bool saw_event = false;
++  if (!DrainRawGamepadEventsLocked(&saw_event))
++    return false;
++
++  FillRawGamepadAxesLocked(out);
++  return true;
++}
++
++bool WaitRawGamepadAxes(int timeout_ms, float out[4])
++{
++  std::lock_guard<std::mutex> lock(s_raw_gamepad_mutex);
++  if (!EnsureRawGamepadLocked())
++    return false;
++
++  if (timeout_ms < 0)
++    timeout_ms = 0;
++  else if (timeout_ms > 100)
++    timeout_ms = 100;
++
++  pollfd pfd = {};
++  pfd.fd = s_raw_gamepad.fd;
++  pfd.events = POLLIN | POLLERR | POLLHUP | POLLNVAL;
++  const int poll_result = poll(&pfd, 1, timeout_ms);
++  if (poll_result < 0 && errno != EINTR)
++  {
++    __android_log_print(ANDROID_LOG_WARN, "SlippiRawInput",
++                        "raw gamepad poll failed for %s: %s",
++                        s_raw_gamepad.path.c_str(), strerror(errno));
++    close(s_raw_gamepad.fd);
++    s_raw_gamepad.fd = -1;
++    s_raw_gamepad.next_scan_ms = 0;
++    return false;
++  }
++  if (poll_result > 0 && (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)))
++  {
++    __android_log_print(ANDROID_LOG_WARN, "SlippiRawInput",
++                        "lost raw gamepad %s: poll revents=0x%x",
++                        s_raw_gamepad.path.c_str(), pfd.revents);
++    close(s_raw_gamepad.fd);
++    s_raw_gamepad.fd = -1;
++    s_raw_gamepad.next_scan_ms = 0;
++    return false;
++  }
++
++  bool saw_event = false;
++  if (poll_result > 0 && !DrainRawGamepadEventsLocked(&saw_event))
++    return false;
++
++  FillRawGamepadAxesLocked(out);
++  return true;
++}
+ }  // Anonymous namespace
+ 
+ void UpdatePointer()
+@@ -581,6 +862,59 @@ Java_org_dolphinemu_dolphinemu_NativeLibrary_UpdateGCAdapterScanThread(JNIEnv*,
+   }
+ }
+ 
++JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetPadOverride(
++    JNIEnv*, jclass, jint port, jint button, jint stick_x, jint stick_y, jint substick_x,
++    jint substick_y, jint trigger_left, jint trigger_right, jint analog_a, jint analog_b)
++{
++  SerialInterface::SI_PadOverride::Set(
++      port, static_cast<u16>(button), static_cast<u8>(stick_x), static_cast<u8>(stick_y),
++      static_cast<u8>(substick_x), static_cast<u8>(substick_y), static_cast<u8>(trigger_left),
++      static_cast<u8>(trigger_right), static_cast<u8>(analog_a), static_cast<u8>(analog_b));
++}
++
++JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_ClearPadOverride(JNIEnv*,
++                                                                                     jclass,
++                                                                                     jint port)
++{
++  SerialInterface::SI_PadOverride::Clear(port);
++}
++
++JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetMeleePadFloats(
++    JNIEnv*, jclass, jint, jfloat, jfloat, jfloat, jfloat)
++{
++  // The mainline embedded core consumes the calibrated byte-space pad override above.
++}
++
++JNIEXPORT jfloatArray JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_PollRawGamepadAxes(
++    JNIEnv* env, jclass)
++{
++  float axes[4];
++  if (!PollRawGamepadAxes(axes))
++    return nullptr;
++
++  jfloatArray arr = env->NewFloatArray(4);
++  if (!arr)
++    return nullptr;
++
++  env->SetFloatArrayRegion(arr, 0, 4, axes);
++  return arr;
++}
++
++JNIEXPORT jfloatArray JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_WaitRawGamepadAxes(
++    JNIEnv* env, jclass, jint timeout_ms)
++{
++  float axes[4];
++  if (!WaitRawGamepadAxes(static_cast<int>(timeout_ms), axes))
++    return nullptr;
++
++  jfloatArray arr = env->NewFloatArray(4);
++  if (!arr)
++    return nullptr;
++
++  env->SetFloatArrayRegion(arr, 0, 4, axes);
++  return arr;
++}
++
+ JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_Initialize(JNIEnv*, jclass)
+ {
+   HostThreadLock guard;
+diff --git a/Source/Core/Common/FileUtil.cpp b/Source/Core/Common/FileUtil.cpp
+index 10abba8..d42210b 100644
+--- a/Source/Core/Common/FileUtil.cpp
++++ b/Source/Core/Common/FileUtil.cpp
+@@ -837,7 +837,10 @@ std::string GetHomeDirectory()
+   homeDir = ReplaceAll(std::move(homeDir), "\\", DIR_SEP);
+ #else
+   const char* home = getenv("HOME");
+-  homeDir = std::string(home);
++  if (!home)
++    home = getenv("PWD");
++  if (home)
++    homeDir = std::string(home);
+ #endif
+ 
+   return homeDir;
+diff --git a/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp b/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp
+index beb633f..c3a29b2 100644
+--- a/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp
++++ b/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp
+@@ -3,6 +3,8 @@
+ 
+ #include "Core/HW/SI/SI_DeviceGCController.h"
+ 
++#include <array>
++#include <atomic>
+ #include <cstring>
+ 
+ #include "Common/ChunkFile.h"
+@@ -24,6 +26,77 @@
+ 
+ namespace SerialInterface
+ {
++namespace
++{
++struct PadOverride
++{
++  std::atomic<bool> active{false};
++  std::atomic<u16> button{0};
++  std::atomic<u8> stick_x{GCPadStatus::MAIN_STICK_CENTER_X};
++  std::atomic<u8> stick_y{GCPadStatus::MAIN_STICK_CENTER_Y};
++  std::atomic<u8> substick_x{GCPadStatus::C_STICK_CENTER_X};
++  std::atomic<u8> substick_y{GCPadStatus::C_STICK_CENTER_Y};
++  std::atomic<u8> trigger_left{0};
++  std::atomic<u8> trigger_right{0};
++  std::atomic<u8> analog_a{0};
++  std::atomic<u8> analog_b{0};
++};
++
++std::array<PadOverride, 4> s_pad_overrides;
++}  // namespace
++
++namespace SI_PadOverride
++{
++void Set(int port, u16 button, u8 stick_x, u8 stick_y, u8 substick_x, u8 substick_y,
++         u8 trigger_left, u8 trigger_right, u8 analog_a, u8 analog_b)
++{
++  if (port < 0 || port >= static_cast<int>(s_pad_overrides.size()))
++    return;
++
++  auto& pad_override = s_pad_overrides[port];
++  pad_override.button.store(button, std::memory_order_relaxed);
++  pad_override.stick_x.store(stick_x, std::memory_order_relaxed);
++  pad_override.stick_y.store(stick_y, std::memory_order_relaxed);
++  pad_override.substick_x.store(substick_x, std::memory_order_relaxed);
++  pad_override.substick_y.store(substick_y, std::memory_order_relaxed);
++  pad_override.trigger_left.store(trigger_left, std::memory_order_relaxed);
++  pad_override.trigger_right.store(trigger_right, std::memory_order_relaxed);
++  pad_override.analog_a.store(analog_a, std::memory_order_relaxed);
++  pad_override.analog_b.store(analog_b, std::memory_order_relaxed);
++  pad_override.active.store(true, std::memory_order_release);
++}
++
++void Clear(int port)
++{
++  if (port < 0 || port >= static_cast<int>(s_pad_overrides.size()))
++    return;
++
++  s_pad_overrides[port].active.store(false, std::memory_order_release);
++}
++
++bool Get(int port, GCPadStatus* out)
++{
++  if (port < 0 || port >= static_cast<int>(s_pad_overrides.size()) || out == nullptr)
++    return false;
++
++  auto& pad_override = s_pad_overrides[port];
++  if (!pad_override.active.load(std::memory_order_acquire))
++    return false;
++
++  out->button = pad_override.button.load(std::memory_order_relaxed);
++  out->stickX = pad_override.stick_x.load(std::memory_order_relaxed);
++  out->stickY = pad_override.stick_y.load(std::memory_order_relaxed);
++  out->substickX = pad_override.substick_x.load(std::memory_order_relaxed);
++  out->substickY = pad_override.substick_y.load(std::memory_order_relaxed);
++  out->triggerLeft = pad_override.trigger_left.load(std::memory_order_relaxed);
++  out->triggerRight = pad_override.trigger_right.load(std::memory_order_relaxed);
++  out->analogA = pad_override.analog_a.load(std::memory_order_relaxed);
++  out->analogB = pad_override.analog_b.load(std::memory_order_relaxed);
++  out->isConnected = true;
++  return true;
++}
++}  // namespace SI_PadOverride
++
+ // --- standard GameCube controller ---
+ CSIDevice_GCController::CSIDevice_GCController(Core::System& system, SIDevices device,
+                                                int device_number)
+@@ -147,11 +220,14 @@ GCPadStatus CSIDevice_GCController::GetPadStatus()
+ {
+   GCPadStatus pad_status = {};
+ 
+-  // For netplay, the local controllers are polled in GetNetPads(), and
+-  // the remote controllers receive their status there as well
+-  if (!NetPlay::IsNetPlayRunning())
++  if (!SI_PadOverride::Get(m_device_number, &pad_status))
+   {
+-    pad_status = Pad::GetStatus(m_device_number);
++    // For netplay, the local controllers are polled in GetNetPads(), and
++    // the remote controllers receive their status there as well
++    if (!NetPlay::IsNetPlayRunning())
++    {
++      pad_status = Pad::GetStatus(m_device_number);
++    }
+   }
+ 
+   HandleMoviePadStatus(m_system.GetMovie(), m_device_number, &pad_status);
+diff --git a/Source/Core/Core/HW/SI/SI_DeviceGCController.h b/Source/Core/Core/HW/SI/SI_DeviceGCController.h
+index 19b5bdb..d0bf154 100644
+--- a/Source/Core/Core/HW/SI/SI_DeviceGCController.h
++++ b/Source/Core/Core/HW/SI/SI_DeviceGCController.h
+@@ -16,6 +16,14 @@ class MovieManager;
+ 
+ namespace SerialInterface
+ {
++namespace SI_PadOverride
++{
++void Set(int port, u16 button, u8 stick_x, u8 stick_y, u8 substick_x, u8 substick_y,
++         u8 trigger_left, u8 trigger_right, u8 analog_a, u8 analog_b);
++void Clear(int port);
++bool Get(int port, GCPadStatus* out);
++}  // namespace SI_PadOverride
++
+ class CSIDevice_GCController : public ISIDevice
+ {
+ protected:

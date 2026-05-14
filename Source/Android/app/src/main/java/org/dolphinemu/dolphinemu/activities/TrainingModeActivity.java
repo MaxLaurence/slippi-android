@@ -20,6 +20,8 @@ import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.preference.PreferenceManager;
 
+import org.dolphinemu.dolphinemu.EmulatorCore;
+import org.dolphinemu.dolphinemu.MainlineCore;
 import org.dolphinemu.dolphinemu.NativeLibrary;
 import org.dolphinemu.dolphinemu.R;
 import org.dolphinemu.dolphinemu.UserDirectoryBootstrap;
@@ -404,6 +406,13 @@ public class TrainingModeActivity extends AppCompatActivity {
             refreshTrainingStatus();
             return;
         }
+        EmulatorCore core = EmulatorCore.fromPref(
+                prefs().getString(EmulatorCore.PREF_KEY, EmulatorCore.ISHIIRUKA.prefValue));
+        if (core == EmulatorCore.MAINLINE) {
+            launchMainlineTrainingMode(installedTraining.isoPath);
+            return;
+        }
+
         boolean useGcAdapter = applyTrainingRuntimeConfig();
         pushAdapterButtonMapsToNative();
         Intent it = new Intent(this, EmulationActivity.class);
@@ -411,6 +420,25 @@ public class TrainingModeActivity extends AppCompatActivity {
         it.putExtra(EmulationActivity.EXTRA_USE_GC_ADAPTER, useGcAdapter);
         it.putExtra(EmulationActivity.EXTRA_LAUNCH_MODE, EmulationActivity.LAUNCH_MODE_TRAINING);
         startActivity(it);
+    }
+
+    private void launchMainlineTrainingMode(String isoPath) {
+        if (!MainlineCore.isPackaged(this)) {
+            toast(getString(R.string.core_mainline_launch_failed));
+            return;
+        }
+
+        Intent it = new Intent(this, MainlineEmulationActivity.class);
+        it.putExtra(MainlineEmulationActivity.EXTRA_ISO_PATH, isoPath);
+        it.putExtra(MainlineEmulationActivity.EXTRA_USE_GC_ADAPTER, hasWiiUAdapter());
+        it.putExtra(MainlineEmulationActivity.EXTRA_LAUNCH_MODE,
+                MainlineEmulationActivity.LAUNCH_MODE_TRAINING);
+        try {
+            startActivity(it);
+        } catch (RuntimeException ex) {
+            Log.e(TAG, "Failed to launch mainline Training Mode", ex);
+            toast(getString(R.string.core_mainline_launch_failed));
+        }
     }
 
     private boolean applyTrainingRuntimeConfig() {

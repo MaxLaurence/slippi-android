@@ -253,6 +253,60 @@
         </LinearLayout>
     </com.google.android.material.card.MaterialCardView>
 
+    <!-- Emulator core toggle -->
+    <TextView
+        android:id="@+id/emulator_core_label"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:letterSpacing="0.1"
+        android:text="@string/emulator_core_label"
+        android:textAllCaps="true"
+        android:textColor="@color/text_secondary"
+        android:textSize="11sp"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/card_iso"/>
+
+    <com.google.android.material.button.MaterialButtonToggleGroup
+        android:id="@+id/emulator_core_toggle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/emulator_core_label"
+        app:selectionRequired="true"
+        app:singleSelection="true">
+
+        <Button
+            android:id="@+id/core_ishiiruka"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/core_ishiiruka"/>
+
+        <Button
+            android:id="@+id/core_mainline"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/core_mainline"/>
+    </com.google.android.material.button.MaterialButtonToggleGroup>
+
+    <TextView
+        android:id="@+id/emulator_core_status"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:text="@string/core_status_ishiiruka"
+        android:textColor="@color/text_secondary"
+        android:textSize="12sp"
+        app:layout_constraintBottom_toBottomOf="@id/emulator_core_toggle"
+        app:layout_constraintEnd_toStartOf="@id/bottom_actions_first"
+        app:layout_constraintStart_toEndOf="@id/emulator_core_toggle"
+        app:layout_constraintTop_toTopOf="@id/emulator_core_toggle"/>
+
     <!-- Graphics backend toggle -->
     <TextView
         android:id="@+id/graphics_label"
@@ -264,7 +318,7 @@
         android:textAllCaps="true"
         android:textColor="@color/text_secondary"
         android:textSize="11sp"
-        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintStart_toEndOf="@id/bottom_actions_first"
         app:layout_constraintTop_toBottomOf="@id/card_iso"/>
 
     <com.google.android.material.button.MaterialButtonToggleGroup
@@ -272,7 +326,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="6dp"
-        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintStart_toEndOf="@id/bottom_actions_first"
         app:layout_constraintTop_toBottomOf="@id/graphics_label"
         app:selectionRequired="true"
         app:singleSelection="true">

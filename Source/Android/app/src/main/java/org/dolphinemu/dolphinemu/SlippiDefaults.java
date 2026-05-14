@@ -2,6 +2,8 @@ package org.dolphinemu.dolphinemu;
 
 import android.content.Context;
 import android.util.Log;
+import android.view.InputDevice;
+import android.view.MotionEvent;
 
 import java.io.File;
 import java.io.FileWriter;
@@ -44,7 +46,9 @@ public final class SlippiDefaults {
     // below changes — users with hand-edited overrides keep theirs only
     // until the next bump.
     private static final int DEFAULTS_VERSION = 7;
+    private static final int MAINLINE_DEFAULTS_VERSION = 1;
     private static final String DEFAULTS_VERSION_FILE = "defaults_version";
+    private static final String MAINLINE_DEFAULTS_VERSION_FILE = "mainline_defaults_version";
 
     public static void writeIfMissing(File configDir) {
         writeIfMissing(configDir, null);
@@ -72,6 +76,80 @@ public final class SlippiDefaults {
         writeOrUpgrade(new File(configDir, "WiimoteNew.ini"), WIIMOTE_INI, force);
         writeOrUpgrade(new File(configDir, "Logger.ini"), LOGGER_INI, force);
         if (force) writeVersion(versionFile, DEFAULTS_VERSION);
+    }
+
+    public static void writeMainlineIfMissing(File configDir, Context ctx) {
+        if (!configDir.exists() && !configDir.mkdirs()) {
+            Log.w(TAG, "Could not create " + configDir);
+            return;
+        }
+
+        File versionFile = new File(configDir, MAINLINE_DEFAULTS_VERSION_FILE);
+        File gcPadFile = new File(configDir, "GCPadNew.ini");
+        boolean force = readVersion(versionFile) < MAINLINE_DEFAULTS_VERSION || isEmpty(gcPadFile);
+        writeOrUpgrade(gcPadFile, buildMainlineGcPadIni(ctx), force);
+        writeOrUpgrade(new File(configDir, "WiimoteNew.ini"), WIIMOTE_INI, force);
+        if (force) writeVersion(versionFile, MAINLINE_DEFAULTS_VERSION);
+    }
+
+    private static boolean isEmpty(File f) {
+        return !f.exists() || f.length() == 0;
+    }
+
+    private static String buildMainlineGcPadIni(Context ctx) {
+        String device = findMainlineGamepadDevice();
+        Log.i(TAG, "Mainline Player 1 input device: " + device);
+        return ""
+                + "[GCPad1]\n"
+                + "Device = " + device + "\n"
+                + "Buttons/A = `Button A`\n"
+                + "Buttons/B = `Button B`\n"
+                + "Buttons/X = `Button X`\n"
+                + "Buttons/Y = `Button Y`\n"
+                + "Buttons/Z = `Button R1`\n"
+                + "Buttons/Start = `Start`\n"
+                + "Main Stick/Up = `" + axis(MotionEvent.AXIS_Y, false) + "`\n"
+                + "Main Stick/Down = `" + axis(MotionEvent.AXIS_Y, true) + "`\n"
+                + "Main Stick/Left = `" + axis(MotionEvent.AXIS_X, false) + "`\n"
+                + "Main Stick/Right = `" + axis(MotionEvent.AXIS_X, true) + "`\n"
+                + "C-Stick/Up = `" + axis(MotionEvent.AXIS_RZ, false) + "`\n"
+                + "C-Stick/Down = `" + axis(MotionEvent.AXIS_RZ, true) + "`\n"
+                + "C-Stick/Left = `" + axis(MotionEvent.AXIS_Z, false) + "`\n"
+                + "C-Stick/Right = `" + axis(MotionEvent.AXIS_Z, true) + "`\n"
+                + "Triggers/L = `Button L1`\n"
+                + "Triggers/R = `Button R2`\n"
+                + "Triggers/L-Analog = `" + axis(MotionEvent.AXIS_BRAKE, true) + "`\n"
+                + "Triggers/R-Analog = `" + axis(MotionEvent.AXIS_GAS, true) + "`\n"
+                + "D-Pad/Up = `" + axis(MotionEvent.AXIS_HAT_Y, false) + "`\n"
+                + "D-Pad/Down = `" + axis(MotionEvent.AXIS_HAT_Y, true) + "`\n"
+                + "D-Pad/Left = `" + axis(MotionEvent.AXIS_HAT_X, false) + "`\n"
+                + "D-Pad/Right = `" + axis(MotionEvent.AXIS_HAT_X, true) + "`\n"
+                + "[GCPad2]\nDevice = \n"
+                + "[GCPad3]\nDevice = \n"
+                + "[GCPad4]\nDevice = \n";
+    }
+
+    private static String findMainlineGamepadDevice() {
+        String fallback = "Android/0/Virtual";
+        for (int id : InputDevice.getDeviceIds()) {
+            InputDevice device = InputDevice.getDevice(id);
+            if (device == null || device.isVirtual()) continue;
+
+            int sources = device.getSources();
+            boolean gamepad = (sources & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD;
+            boolean joystick =
+                    (sources & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
+            if (!gamepad && !joystick) continue;
+
+            int controllerNumber = device.getControllerNumber();
+            int dolphinId = controllerNumber != 0 ? controllerNumber : 0;
+            return "Android/" + dolphinId + "/" + device.getName();
+        }
+        return fallback;
+    }
+
+    private static String axis(int axis, boolean positive) {
+        return "Axis " + axis + (positive ? "+" : "-");
     }
 
     private static void writeOrUpgrade(File f, String content, boolean force) {

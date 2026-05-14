@@ -54,7 +54,11 @@ public final class GeckoOverride {
     private GeckoOverride() {}
 
     private static File overrideDir(Context ctx) {
-        return new File(UserDirectoryBootstrap.userDir(ctx), "GameSettings");
+        return overrideDir(UserDirectoryBootstrap.userDir(ctx));
+    }
+
+    private static File overrideDir(File userDir) {
+        return new File(userDir, "GameSettings");
     }
 
     /** Copy the playback ini into the user dir so the next BootCore picks it up. */
@@ -80,7 +84,11 @@ public final class GeckoOverride {
 
     /** Remove the override so live launches use the bundled netplay ini. */
     public static void applyLiveMode(Context ctx) {
-        File dir = overrideDir(ctx);
+        applyLiveMode(UserDirectoryBootstrap.userDir(ctx));
+    }
+
+    public static void applyLiveMode(File userDir) {
+        File dir = overrideDir(userDir);
         for (String name : INI_NAMES) {
             File f = new File(dir, name);
             if (f.exists() && !f.delete()) {
@@ -96,7 +104,11 @@ public final class GeckoOverride {
      * bundled defaults while leaving the Training Mode DOL/files alone.
      */
     public static void applyTrainingMode(Context ctx) {
-        File dir = overrideDir(ctx);
+        applyTrainingMode(UserDirectoryBootstrap.userDir(ctx));
+    }
+
+    public static void applyTrainingMode(File userDir) {
+        File dir = overrideDir(userDir);
         if (!dir.exists() && !dir.mkdirs()) {
             Log.w(TAG, "could not create " + dir);
             return;

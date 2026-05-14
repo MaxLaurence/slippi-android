@@ -8,3 +8,8 @@
 [submodule "Externals/corrosion"]
 	path = Externals/corrosion
 	url = https://github.com/corrosion-rs/corrosion
+[submodule "Externals/MainlineSlippiDolphin"]
+	path = Externals/MainlineSlippiDolphin
+	url = https://github.com/project-slippi/dolphin.git
+	branch = slippi
+	shallow = true

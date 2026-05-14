@@ -59,6 +59,14 @@
             android:theme="@style/Theme.SlippiDolphin.Emulation" />
 
         <activity
+            android:name="org.dolphinemu.dolphinemu.activities.MainlineEmulationActivity"
+            android:exported="false"
+            android:process=":mainline"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|keyboardHidden|keyboard"
+            android:theme="@style/Theme.SlippiDolphin.Emulation" />
+
+        <activity
             android:name="org.dolphinemu.dolphinemu.activities.TrainingModeActivity"
             android:exported="false"
             android:label="@string/training_screen_title"

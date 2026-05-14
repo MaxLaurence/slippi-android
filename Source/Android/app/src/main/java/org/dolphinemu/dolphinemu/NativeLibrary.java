@@ -3,10 +3,21 @@
 
 package org.dolphinemu.dolphinemu;
 
+import android.app.Activity;
+import android.app.Application;
+import android.os.Build;
 import android.util.Log;
 import android.view.Surface;
+import android.widget.Toast;
 
 import org.dolphinemu.dolphinemu.activities.EmulationActivity;
+import org.dolphinemu.dolphinemu.activities.MainlineEmulationActivity;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.lang.ref.WeakReference;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.Semaphore;
 
 /**
  * JNI bridge to the native Dolphin/Slippi core. Method signatures here must
@@ -16,6 +27,11 @@ public final class NativeLibrary {
     private static final String TAG = "DolphinJNI";
     public static volatile EmulationActivity sEmulationActivity;
     public static final String TouchScreenDevice = "Touchscreen";
+    private static final Semaphore sAlertSemaphore = new Semaphore(0);
+    private static volatile boolean sNativeLibraryLoaded;
+    private static volatile boolean sShowingAlertMessage;
+    private static volatile WeakReference<Activity> sCurrentActivity =
+            new WeakReference<>(null);
 
     public static final class ButtonType {
         public static final int BUTTON_A = 0;
@@ -166,6 +182,11 @@ public final class NativeLibrary {
     public static native void CreateUserFolders();
     public static native void SetUserDirectory(String directory);
     public static native String GetUserDirectory();
+    public static native void SetCacheDirectory(String directory);
+    public static native String GetCacheDirectory();
+    public static native void Initialize();
+    public static native String GetGitRevision();
+    public static native void UpdateGCAdapterScanThread();
 
     /**
      * Point SlippiReplayComm at a JSON playback config file. Must be
@@ -188,25 +209,42 @@ public final class NativeLibrary {
     public static native void SetReplaySpeedMode(int mode);
 
     public static native void Run();
+    public static native void Run(String[] paths, boolean riivolution);
+    public static native void Run(
+            String[] paths, boolean riivolution, String savestatePath, boolean deleteSavestate);
     public static native void SurfaceChanged(Surface surface);
     public static native void SurfaceDestroyed();
+    public static native boolean HasSurface();
     public static native void UnPauseEmulation();
     public static native void PauseEmulation();
+    public static native void PauseEmulation(boolean overrideAchievementRestrictions);
     public static native void StopEmulation();
+    public static native void SetIsBooting();
+    public static native boolean IsRunning();
+    public static native boolean IsRunningAndUnpaused();
+    public static native boolean IsUninitialized();
     public static native void SetProfiling(boolean enable);
     public static native void WriteProfileResults();
     public static native void eglBindAPI(int api);
+    public static native void SaveState(int slot, boolean wait);
+    public static native void SaveStateAs(String path, boolean wait);
+    public static native void LoadStateAs(String path);
+    public static native float GetGameAspectRatio();
     /** Linux TID of the running emulation thread, or 0 if not started. */
     public static native int GetEmuThreadTid();
     private static native void CacheClassesAndMethods();
 
     static {
+        boolean mainlineProcess = isMainlineProcess();
         try {
-            System.loadLibrary("main");
+            System.loadLibrary(mainlineProcess ? MainlineCore.LIBRARY_NAME : "main");
+            sNativeLibraryLoaded = true;
         } catch (UnsatisfiedLinkError ex) {
             Log.e(TAG, "Failed to load native library: " + ex);
         }
-        CacheClassesAndMethods();
+        if (!mainlineProcess && sNativeLibraryLoaded) {
+            CacheClassesAndMethods();
+        }
     }
 
     public static void displayAlertMsg(final String alert) {
@@ -215,6 +253,38 @@ public final class NativeLibrary {
         if (activity != null) {
             activity.showToast(alert);
         }
+    }
+
+    public static void displayToastMsg(final String text, final boolean longLength) {
+        final Activity activity = sCurrentActivity.get();
+        final android.content.Context context = activity != null
+                ? activity : DolphinApplication.getAppContext();
+        if (context == null) {
+            Log.i(TAG, "Native toast with no context: " + text);
+            return;
+        }
+        final int length = longLength ? Toast.LENGTH_LONG : Toast.LENGTH_SHORT;
+        if (activity != null) {
+            activity.runOnUiThread(() -> Toast.makeText(context, text, length).show());
+        } else {
+            Toast.makeText(context, text, length).show();
+        }
+    }
+
+    public static boolean displayAlertMsg(
+            String caption, String text, boolean yesNo, boolean isWarning, boolean nonBlocking) {
+        Log.e(TAG, "Native alert: " + caption + ": " + text);
+        displayToastMsg(text, true);
+        sShowingAlertMessage = false;
+        return false;
+    }
+
+    public static boolean IsShowingAlertMessage() {
+        return sShowingAlertMessage;
+    }
+
+    public static void NotifyAlertMessageLock() {
+        sAlertSemaphore.release();
     }
 
     public static void endEmulationActivity() {
@@ -227,5 +297,72 @@ public final class NativeLibrary {
 
     public static void setEmulationActivity(EmulationActivity activity) {
         sEmulationActivity = activity;
+        sCurrentActivity = new WeakReference<>(activity);
+    }
+
+    public static void setMainlineEmulationActivity(MainlineEmulationActivity activity) {
+        sCurrentActivity = new WeakReference<>(activity);
+    }
+
+    public static void clearEmulationActivity() {
+        sCurrentActivity.clear();
+        sEmulationActivity = null;
+    }
+
+    public static void finishEmulationActivity() {
+        final Activity activity = sCurrentActivity.get();
+        if (activity != null) {
+            activity.runOnUiThread(() -> {
+                if (!activity.isFinishing() && !activity.isDestroyed()) {
+                    activity.finish();
+                }
+            });
+        }
+    }
+
+    public static void updateTouchPointer() {
+        final Activity activity = sCurrentActivity.get();
+        if (activity instanceof MainlineEmulationActivity) {
+            ((MainlineEmulationActivity) activity).initInputPointer();
+        }
+    }
+
+    public static void onTitleChanged() {
+        final Activity activity = sCurrentActivity.get();
+        if (activity instanceof MainlineEmulationActivity) {
+            ((MainlineEmulationActivity) activity).onTitleChangedFromNative();
+        }
+    }
+
+    public static float getRenderSurfaceScale() {
+        final Activity activity = sCurrentActivity.get();
+        return activity == null
+                ? android.content.res.Resources.getSystem().getDisplayMetrics().scaledDensity
+                : activity.getResources().getDisplayMetrics().scaledDensity;
+    }
+
+    public static boolean isNativeLibraryLoaded() {
+        return sNativeLibraryLoaded;
+    }
+
+    private static boolean isMainlineProcess() {
+        String processName = currentProcessName();
+        return processName != null && processName.endsWith(MainlineCore.PROCESS_SUFFIX);
+    }
+
+    private static String currentProcessName() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            return Application.getProcessName();
+        }
+        try (FileInputStream in = new FileInputStream("/proc/self/cmdline")) {
+            byte[] buffer = new byte[256];
+            int count = in.read(buffer);
+            if (count <= 0) return null;
+            int end = 0;
+            while (end < count && buffer[end] != 0) end++;
+            return new String(buffer, 0, end, StandardCharsets.UTF_8);
+        } catch (IOException ignored) {
+            return null;
+        }
     }
 }

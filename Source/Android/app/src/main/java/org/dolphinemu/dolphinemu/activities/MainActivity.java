@@ -22,6 +22,8 @@ import androidx.preference.PreferenceManager;
 
 import com.google.android.material.button.MaterialButtonToggleGroup;
 
+import org.dolphinemu.dolphinemu.EmulatorCore;
+import org.dolphinemu.dolphinemu.MainlineCore;
 import org.dolphinemu.dolphinemu.NativeLibrary;
 import org.dolphinemu.dolphinemu.R;
 import org.dolphinemu.dolphinemu.UserDirectoryBootstrap;
@@ -47,13 +49,14 @@ import java.io.OutputStream;
 
 /**
  * One-screen launcher: pick an ISO, sign into Slippi (or drop in a
- * user.json), pick a graphics backend, hit Play. All heavy lifting is in
- * the C++/Rust core; this Activity just sets the dial.
+ * user.json), choose an emulator core and graphics backend, hit Play.
+ * All heavy lifting is in the native core; this Activity just sets the dial.
  */
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "MainActivity";
     private static final String PREF_KEY_ISO_URI = "iso_uri";
+    private static final String PREF_KEY_EMULATOR_CORE = EmulatorCore.PREF_KEY;
     private static final String PREF_KEY_BACKEND = "backend";
     private static final String PREF_KEY_AUDIO_BACKEND = "audio_backend";
     private static final String PREF_KEY_AUDIO_BUFFER_BURSTS = "audio_buffer_bursts";
@@ -83,6 +86,8 @@ public class MainActivity extends AppCompatActivity {
     private TextView isoStatus;
     private TextView adapterStatus;
     private TextView audioSettingsLink;
+    private TextView emulatorCoreStatus;
+    private MaterialButtonToggleGroup emulatorCoreToggle;
     private MaterialButtonToggleGroup backendToggle;
 
     // Auth UI: three sibling containers, exactly one visible at a time.
@@ -116,7 +121,9 @@ public class MainActivity extends AppCompatActivity {
                 } catch (SecurityException ignored) {}
                 File copied = copyContentToCache(uri, "rom.iso");
                 if (copied != null) {
-                    prefs().edit().putString(PREF_KEY_ISO_URI, copied.getAbsolutePath()).apply();
+                    prefs().edit()
+                            .putString(PREF_KEY_ISO_URI, copied.getAbsolutePath())
+                            .apply();
                     refresh();
                 } else {
                     toast("Failed to import ISO");
@@ -145,6 +152,8 @@ public class MainActivity extends AppCompatActivity {
         isoStatus = findViewById(R.id.iso_status);
         adapterStatus = findViewById(R.id.adapter_status);
         audioSettingsLink = findViewById(R.id.audio_settings_link);
+        emulatorCoreStatus = findViewById(R.id.emulator_core_status);
+        emulatorCoreToggle = findViewById(R.id.emulator_core_toggle);
         backendToggle = findViewById(R.id.backend_toggle);
 
         authLoading = findViewById(R.id.auth_loading);
@@ -192,6 +201,18 @@ public class MainActivity extends AppCompatActivity {
                 startActivity(new Intent(this, TrainingModeActivity.class)));
         findViewById(R.id.replays_button).setOnClickListener(v ->
                 startActivity(new Intent(this, ReplayListActivity.class)));
+
+        EmulatorCore savedCore = EmulatorCore.fromPref(
+                prefs().getString(PREF_KEY_EMULATOR_CORE, EmulatorCore.ISHIIRUKA.prefValue));
+        emulatorCoreToggle.check(savedCore == EmulatorCore.MAINLINE
+                ? R.id.core_mainline : R.id.core_ishiiruka);
+        emulatorCoreToggle.addOnButtonCheckedListener((group, checkedId, isChecked) -> {
+            if (!isChecked) return;
+            EmulatorCore value = checkedId == R.id.core_mainline
+                    ? EmulatorCore.MAINLINE : EmulatorCore.ISHIIRUKA;
+            prefs().edit().putString(PREF_KEY_EMULATOR_CORE, value.prefValue).apply();
+            refreshCoreStatus();
+        });
 
         // Restore the saved backend selection (defaults to Vulkan —
         // lower CPU overhead, better frame pacing on Adreno; OGL is
@@ -299,12 +320,19 @@ public class MainActivity extends AppCompatActivity {
         AudioPreset audioPreset = currentAudioPreset();
         audioSettingsLink.setText(getString(R.string.audio_status_format,
                 audioPreset.backend, audioPreset.bursts));
+        refreshCoreStatus();
     }
 
     private void launchEmulation(File replayOrNull) {
         String isoPath = prefs().getString(PREF_KEY_ISO_URI, null);
         if (TextUtils.isEmpty(isoPath) || !new File(isoPath).exists()) {
             toast("Pick an ISO first");
+            return;
+        }
+        EmulatorCore core = EmulatorCore.fromPref(
+                prefs().getString(PREF_KEY_EMULATOR_CORE, EmulatorCore.ISHIIRUKA.prefValue));
+        if (core == EmulatorCore.MAINLINE) {
+            launchMainlineDolphin(replayOrNull != null);
             return;
         }
         boolean useGcAdapter = applyRuntimeConfig();
@@ -319,6 +347,30 @@ public class MainActivity extends AppCompatActivity {
             it.putExtra(EmulationActivity.EXTRA_LAUNCH_MODE, EmulationActivity.LAUNCH_MODE_LIVE);
         }
         startActivity(it);
+    }
+
+    private void launchMainlineDolphin(boolean replayLaunch) {
+        if (replayLaunch) {
+            toast("Replay playback uses the built-in Ishiiruka core for now");
+            return;
+        }
+        if (!MainlineCore.isPackaged(this)) {
+            showMainlineMissingDialog();
+            return;
+        }
+
+        String isoPath = prefs().getString(PREF_KEY_ISO_URI, null);
+        Intent it = new Intent(this, MainlineEmulationActivity.class);
+        it.putExtra(MainlineEmulationActivity.EXTRA_ISO_PATH, isoPath);
+        it.putExtra(MainlineEmulationActivity.EXTRA_USE_GC_ADAPTER, hasWiiUAdapter());
+        it.putExtra(MainlineEmulationActivity.EXTRA_LAUNCH_MODE,
+                MainlineEmulationActivity.LAUNCH_MODE_LIVE);
+        try {
+            startActivity(it);
+        } catch (RuntimeException ex) {
+            Log.e(TAG, "Failed to launch embedded mainline Dolphin: " + ex);
+            toast(getString(R.string.core_mainline_launch_failed));
+        }
     }
 
     /**
@@ -472,6 +524,26 @@ public class MainActivity extends AppCompatActivity {
             if (d.getVendorId() == 0x057E && d.getProductId() == 0x0337) return true;
         }
         return false;
+    }
+
+    private void refreshCoreStatus() {
+        EmulatorCore core = EmulatorCore.fromPref(
+                prefs().getString(PREF_KEY_EMULATOR_CORE, EmulatorCore.ISHIIRUKA.prefValue));
+        if (core == EmulatorCore.ISHIIRUKA) {
+            emulatorCoreStatus.setText(R.string.core_status_ishiiruka);
+            return;
+        }
+        emulatorCoreStatus.setText(!MainlineCore.isPackaged(this)
+                ? R.string.core_status_mainline_missing
+                : R.string.core_status_mainline_available);
+    }
+
+    private void showMainlineMissingDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.core_mainline_missing_title)
+                .setMessage(R.string.core_mainline_missing_body)
+                .setPositiveButton(android.R.string.ok, null)
+                .show();
     }
 
     private SharedPreferences prefs() {

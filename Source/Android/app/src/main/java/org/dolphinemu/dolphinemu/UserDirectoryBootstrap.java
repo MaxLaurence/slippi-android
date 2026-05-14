@@ -44,6 +44,7 @@ public final class UserDirectoryBootstrap {
      * we added.
      */
     private static final int SYS_VERSION = 3;
+    private static final int MAINLINE_SYS_VERSION = 1;
     private static final String SYS_VERSION_FILE = "sys_version";
 
     public static synchronized void ensureLayout(Context ctx) {
@@ -69,6 +70,57 @@ public final class UserDirectoryBootstrap {
         copyAssetDirIfMissing(ctx, SYS_DIR_NAME, sysDir);
         writeVersion(versionFile, SYS_VERSION);
         SlippiDefaults.writeIfMissing(new File(root, "Config"), ctx);
+    }
+
+    public static synchronized void ensureMainlineLayout(Context ctx) {
+        File root = MainlineCore.userDir(ctx);
+        for (String sub : new String[]{
+                "Config", "Cache", "GC", "Load", "Logs",
+                "ScreenShots", "StateSaves", "Wii", "Dump",
+                "Slippi", "Slippi/Replays"
+        }) {
+            File d = new File(root, sub);
+            if (!d.exists() && !d.mkdirs()) {
+                Log.w(TAG, "could not create " + d);
+            }
+        }
+
+        File sysDir = MainlineCore.sysDir(ctx);
+        File versionFile = new File(root, SYS_VERSION_FILE);
+        int existingVersion = readVersion(versionFile);
+        if (existingVersion < MAINLINE_SYS_VERSION) {
+            Log.i(TAG, "Mainline Sys/ extract version=" + existingVersion
+                    + " < " + MAINLINE_SYS_VERSION + " — re-extracting");
+            deleteRecursive(sysDir);
+        }
+        copyAssetDirIfMissing(ctx, "MainlineSys", sysDir);
+        writeVersion(versionFile, MAINLINE_SYS_VERSION);
+        SlippiDefaults.writeMainlineIfMissing(new File(root, "Config"), ctx);
+        syncSlippiUserJsonToMainline(ctx);
+    }
+
+    private static void syncSlippiUserJsonToMainline(Context ctx) {
+        File source = slippiUserJson(ctx);
+        if (!source.isFile()) return;
+        File destination = new File(MainlineCore.userDir(ctx), "Slippi/user.json");
+        if (destination.isFile()
+                && destination.length() == source.length()
+                && destination.lastModified() >= source.lastModified()) {
+            return;
+        }
+        File parent = destination.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            Log.w(TAG, "could not create " + parent);
+            return;
+        }
+        try (InputStream in = new java.io.FileInputStream(source);
+             OutputStream out = new FileOutputStream(destination)) {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        } catch (IOException ex) {
+            Log.w(TAG, "sync mainline user.json failed: " + ex);
+        }
     }
 
     private static int readVersion(File f) {

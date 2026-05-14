@@ -24,6 +24,15 @@
     <string name="training_mode_button">TRAINING MODE</string>
     <string name="settings_section">Launch settings</string>
     <string name="settings_status_title">Live play defaults</string>
+    <string name="emulator_core_label">Emulator core</string>
+    <string name="core_ishiiruka">Ishiiruka</string>
+    <string name="core_mainline">Mainline</string>
+    <string name="core_status_ishiiruka">Built in</string>
+    <string name="core_status_mainline_available">Built in</string>
+    <string name="core_status_mainline_missing">Mainline core missing from this APK</string>
+    <string name="core_mainline_missing_title">Mainline core missing</string>
+    <string name="core_mainline_missing_body">This APK was built without the embedded mainline Slippi Dolphin core. Rebuild with the MainlineSlippiDolphin submodule initialized.</string>
+    <string name="core_mainline_launch_failed">Couldn\'t launch embedded Mainline Dolphin</string>
     <string name="graphics_label">Graphics backend</string>
     <string name="backend_vulkan">Vulkan</string>
     <string name="backend_ogl">OpenGL</string>
