@@ -7,6 +7,9 @@
         android:id="@+id/menu_launcher_gpu_driver"
         android:title="@string/launcher_settings_gpu_driver"/>
     <item
+        android:id="@+id/menu_launcher_display_latency"
+        android:title="@string/launcher_settings_display_latency"/>
+    <item
         android:id="@+id/menu_launcher_calibrate"
         android:title="@string/launcher_settings_calibrate"/>
     <item

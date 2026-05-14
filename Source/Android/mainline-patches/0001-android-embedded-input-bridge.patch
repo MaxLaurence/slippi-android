@@ -378,7 +378,7 @@ index 973b49233021e48b559230ee8981576b6181b1b0..5c1e717cfb3fa243160ceb08d43ac6fe
  }  // Anonymous namespace
  
  void UpdatePointer()
-@@ -581,6 +910,120 @@ Java_org_dolphinemu_dolphinemu_NativeLibrary_UpdateGCAdapterScanThread(JNIEnv*,
+@@ -581,6 +910,127 @@ Java_org_dolphinemu_dolphinemu_NativeLibrary_UpdateGCAdapterScanThread(JNIEnv*,
    }
  }
  
@@ -397,6 +397,13 @@ index 973b49233021e48b559230ee8981576b6181b1b0..5c1e717cfb3fa243160ceb08d43ac6fe
 +                                                                                     jint port)
 +{
 +  SerialInterface::SI_PadOverride::Clear(port);
++}
++
++JNIEXPORT jlong JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetPadOverrideAgeUs(JNIEnv*,
++                                                                                         jclass,
++                                                                                         jint port)
++{
++  return static_cast<jlong>(SerialInterface::SI_PadOverride::LatestSetAgeUs(port));
 +}
 +
 +JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetMeleePadFloats(
@@ -1349,16 +1356,17 @@ diff --git a/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp b/Source/Core/Core
 index beb633f499294f27b910d1b493027e43e9f4832d..c3a29b20ad6114ab53d1862ba387eaf77fe41219 100644
 --- a/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp
 +++ b/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp
-@@ -3,6 +3,8 @@
+@@ -3,6 +3,9 @@
  
  #include "Core/HW/SI/SI_DeviceGCController.h"
  
 +#include <array>
 +#include <atomic>
++#include <chrono>
  #include <cstring>
  
  #include "Common/ChunkFile.h"
-@@ -24,6 +26,77 @@
+@@ -24,6 +27,104 @@
  
  namespace SerialInterface
  {
@@ -1376,9 +1384,17 @@ index beb633f499294f27b910d1b493027e43e9f4832d..c3a29b20ad6114ab53d1862ba387eaf7
 +  std::atomic<u8> trigger_right{0};
 +  std::atomic<u8> analog_a{0};
 +  std::atomic<u8> analog_b{0};
++  std::atomic<u64> set_time_us{0};
 +};
 +
 +std::array<PadOverride, 4> s_pad_overrides;
++
++u64 PadOverrideNowUs()
++{
++  return static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
++                              std::chrono::steady_clock::now().time_since_epoch())
++                              .count());
++}
 +}  // namespace
 +
 +namespace SI_PadOverride
@@ -1399,6 +1415,7 @@ index beb633f499294f27b910d1b493027e43e9f4832d..c3a29b20ad6114ab53d1862ba387eaf7
 +  pad_override.trigger_right.store(trigger_right, std::memory_order_relaxed);
 +  pad_override.analog_a.store(analog_a, std::memory_order_relaxed);
 +  pad_override.analog_b.store(analog_b, std::memory_order_relaxed);
++  pad_override.set_time_us.store(PadOverrideNowUs(), std::memory_order_release);
 +  pad_override.active.store(true, std::memory_order_release);
 +}
 +
@@ -1431,12 +1448,30 @@ index beb633f499294f27b910d1b493027e43e9f4832d..c3a29b20ad6114ab53d1862ba387eaf7
 +  out->isConnected = true;
 +  return true;
 +}
++
++u64 LatestSetTimeUs(int port)
++{
++  if (port < 0 || port >= static_cast<int>(s_pad_overrides.size()))
++    return 0;
++
++  return s_pad_overrides[port].set_time_us.load(std::memory_order_acquire);
++}
++
++u64 LatestSetAgeUs(int port)
++{
++  const u64 set_time_us = LatestSetTimeUs(port);
++  if (set_time_us == 0)
++    return 0;
++
++  const u64 now_us = PadOverrideNowUs();
++  return now_us >= set_time_us ? now_us - set_time_us : 0;
++}
 +}  // namespace SI_PadOverride
 +
  // --- standard GameCube controller ---
  CSIDevice_GCController::CSIDevice_GCController(Core::System& system, SIDevices device,
                                                 int device_number)
-@@ -147,11 +220,14 @@ GCPadStatus CSIDevice_GCController::GetPadStatus()
+@@ -147,11 +247,14 @@ GCPadStatus CSIDevice_GCController::GetPadStatus()
  {
    GCPadStatus pad_status = {};
  
@@ -1459,7 +1494,7 @@ diff --git a/Source/Core/Core/HW/SI/SI_DeviceGCController.h b/Source/Core/Core/H
 index 19b5bdb14b21ae7042f6d9cfb6e843467810c9fe..d0bf1542ea1e3343286c177dc73ac12eaa055a6c 100644
 --- a/Source/Core/Core/HW/SI/SI_DeviceGCController.h
 +++ b/Source/Core/Core/HW/SI/SI_DeviceGCController.h
-@@ -16,6 +16,14 @@ class MovieManager;
+@@ -16,6 +16,16 @@ class MovieManager;
  
  namespace SerialInterface
  {
@@ -1469,6 +1504,8 @@ index 19b5bdb14b21ae7042f6d9cfb6e843467810c9fe..d0bf1542ea1e3343286c177dc73ac12e
 +         u8 trigger_left, u8 trigger_right, u8 analog_a, u8 analog_b);
 +void Clear(int port);
 +bool Get(int port, GCPadStatus* out);
++u64 LatestSetTimeUs(int port);
++u64 LatestSetAgeUs(int port);
 +}  // namespace SI_PadOverride
 +
  class CSIDevice_GCController : public ISIDevice
@@ -1623,15 +1660,52 @@ diff --git a/Source/Core/VideoBackends/Vulkan/VKSwapChain.cpp b/Source/Core/Vide
 index 589d9a447ba176b6c6ca5f18ccf3ec7ba9d3af11..11963237121ed2e0f92cc797c5ad6cc0f9fe804f 100644
 --- a/Source/Core/VideoBackends/Vulkan/VKSwapChain.cpp
 +++ b/Source/Core/VideoBackends/Vulkan/VKSwapChain.cpp
-@@ -253,6 +253,17 @@ bool SwapChain::SelectPresentMode()
+@@ -9,6 +9,9 @@
+ #include "Common/Assert.h"
+ #include "Common/CommonFuncs.h"
++#include "Common/CommonPaths.h"
+ #include "Common/Contains.h"
++#include "Common/FileUtil.h"
++#include "Common/IniFile.h"
+ #include "Common/Logging/Log.h"
+ #include "Common/MsgHandler.h"
+ 
+@@ -21,9 +24,25 @@
+ #if defined(VK_USE_PLATFORM_XLIB_KHR)
+ #include <X11/Xlib.h>
+ #endif
+ 
+ namespace Vulkan
+ {
++#if defined(VK_USE_PLATFORM_ANDROID_KHR)
++namespace
++{
++bool AndroidPrefersImmediatePresent()
++{
++  std::string mode;
++  Common::IniFile ini;
++  if (!ini.Load(File::GetUserPath(D_CONFIG_IDX) + "GFX.ini"))
++    return false;
++
++  ini.GetIfExists("Settings", "AndroidPresentMode", &mode, std::string("smooth"));
++  return mode == "fastest";
++}
++}  // namespace
++#endif
++
+ SwapChain::SwapChain(const WindowSystemInfo& wsi, VkSurfaceKHR surface, bool vsync)
+     : m_wsi(wsi), m_surface(surface), m_vsync_enabled(vsync),
+       m_fullscreen_supported(g_vulkan_context->SupportsExclusiveFullscreen(wsi, surface))
+@@ -250,12 +270,21 @@ bool SwapChain::SelectPresentMode()
+   if (m_vsync_enabled && Common::Contains(present_modes, VK_PRESENT_MODE_FIFO_KHR))
+   {
+     m_present_mode = VK_PRESENT_MODE_FIFO_KHR;
      return true;
    }
  
 +#if defined(VK_USE_PLATFORM_ANDROID_KHR)
-+  // Android's compositor can still keep an immediate producer behind BLAST
-+  // buffering. Prefer MAILBOX when available so it keeps the newest completed
-+  // frame instead of scanning out an older queued one.
-+  if (!m_vsync_enabled && Common::Contains(present_modes, VK_PRESENT_MODE_MAILBOX_KHR))
++  if (!m_vsync_enabled && !AndroidPrefersImmediatePresent() &&
++      Common::Contains(present_modes, VK_PRESENT_MODE_MAILBOX_KHR))
 +  {
 +    m_present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
 +    return true;
@@ -1639,8 +1713,12 @@ index 589d9a447ba176b6c6ca5f18ccf3ec7ba9d3af11..11963237121ed2e0f92cc797c5ad6cc0
 +#endif
 +
    // Prefer screen-tearing, if possible, for lowest latency.
-   if (Common::Contains(present_modes, VK_PRESENT_MODE_IMMEDIATE_KHR))
+-  if (Common::Contains(present_modes, VK_PRESENT_MODE_IMMEDIATE_KHR))
++  if (!m_vsync_enabled && Common::Contains(present_modes, VK_PRESENT_MODE_IMMEDIATE_KHR))
    {
+     m_present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+     return true;
+   }
 @@ -288,13 +299,29 @@ bool SwapChain::CreateSwapChain()
    if (!SelectSurfaceFormat() || !SelectPresentMode())
      return false;

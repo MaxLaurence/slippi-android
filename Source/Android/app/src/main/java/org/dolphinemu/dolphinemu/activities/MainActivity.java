@@ -65,15 +65,21 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREF_KEY_BACKEND = "backend";
     private static final String PREF_KEY_AUDIO_BACKEND = "audio_backend";
     private static final String PREF_KEY_AUDIO_BUFFER_BURSTS = "audio_buffer_bursts";
+    private static final String PREF_KEY_DISPLAY_LATENCY_MODE = "display_latency_mode";
     private static final String BACKEND_VULKAN = "Vulkan";
     private static final String BACKEND_OGL = "OGL";
+    private static final String DISPLAY_LATENCY_SMOOTH = "smooth";
+    private static final String DISPLAY_LATENCY_FASTEST = "fastest";
     private static final String AUDIO_BACKEND_OBOE = "Oboe";
     private static final String AUDIO_BACKEND_AAUDIO = "AAudio";
     private static final String AUDIO_BACKEND_OPENSLES = "OpenSLES";
     private static final int AUDIO_BURSTS_LOW = 2;
+    private static final int AUDIO_BURSTS_ULTRA_LOW = 1;
     private static final int AUDIO_BURSTS_BALANCED = 4;
     private static final int AUDIO_BURSTS_STABLE = 8;
     private static final AudioPreset[] AUDIO_PRESETS = {
+            new AudioPreset(AUDIO_BACKEND_OBOE, AUDIO_BURSTS_ULTRA_LOW,
+                    R.string.audio_preset_oboe_ultra_low),
             new AudioPreset(AUDIO_BACKEND_OBOE, AUDIO_BURSTS_LOW,
                     R.string.audio_preset_oboe_low),
             new AudioPreset(AUDIO_BACKEND_OBOE, AUDIO_BURSTS_BALANCED,
@@ -86,6 +92,12 @@ public class MainActivity extends AppCompatActivity {
                     R.string.audio_preset_opensles_stable),
             new AudioPreset(AUDIO_BACKEND_AAUDIO, AUDIO_BURSTS_BALANCED,
                     R.string.audio_preset_aaudio_balanced),
+            new AudioPreset(AUDIO_BACKEND_AAUDIO, AUDIO_BURSTS_ULTRA_LOW,
+                    R.string.audio_preset_aaudio_ultra_low),
+    };
+    private static final DisplayLatencyMode[] DISPLAY_LATENCY_MODES = {
+            new DisplayLatencyMode(DISPLAY_LATENCY_SMOOTH, R.string.display_latency_smooth),
+            new DisplayLatencyMode(DISPLAY_LATENCY_FASTEST, R.string.display_latency_fastest),
     };
 
     private TextView isoStatus;
@@ -451,6 +463,31 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
+    private void showDisplayLatencyChooser() {
+        CharSequence[] labels = new CharSequence[DISPLAY_LATENCY_MODES.length];
+        int checked = -1;
+        DisplayLatencyMode current = currentDisplayLatencyMode();
+        for (int i = 0; i < DISPLAY_LATENCY_MODES.length; i++) {
+            DisplayLatencyMode mode = DISPLAY_LATENCY_MODES[i];
+            labels[i] = getString(mode.labelResId);
+            if (mode.equals(current)) checked = i;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.display_latency_title)
+                .setSingleChoiceItems(labels, checked, (d, which) -> {
+                    DisplayLatencyMode mode = DISPLAY_LATENCY_MODES[which];
+                    prefs().edit()
+                            .putString(PREF_KEY_DISPLAY_LATENCY_MODE, mode.configValue)
+                            .apply();
+                    NativeLibrary.SetConfig("GFX.ini", "Settings",
+                            "AndroidPresentMode", mode.configValue);
+                    toast(getString(R.string.launcher_settings_display_latency_current,
+                            getString(mode.labelResId)));
+                    d.dismiss();
+                })
+                .show();
+    }
+
     private void showGpuDriverChooser() {
         if (!GpuDriverManager.canAttemptCustomDriverLoading()) {
             new AlertDialog.Builder(this)
@@ -649,6 +686,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void showLauncherSettingsMenu(View anchor) {
         AudioPreset audioPreset = currentAudioPreset();
+        DisplayLatencyMode displayLatencyMode = currentDisplayLatencyMode();
         PopupMenu menu = new PopupMenu(this, anchor);
         menu.getMenuInflater().inflate(R.menu.menu_launcher_settings, menu.getMenu());
         menu.getMenu().findItem(R.id.menu_launcher_audio).setTitle(
@@ -657,6 +695,9 @@ public class MainActivity extends AppCompatActivity {
         menu.getMenu().findItem(R.id.menu_launcher_gpu_driver).setTitle(
                 getString(R.string.launcher_settings_gpu_driver_current,
                         GpuDriverManager.currentLabel(this)));
+        menu.getMenu().findItem(R.id.menu_launcher_display_latency).setTitle(
+                getString(R.string.launcher_settings_display_latency_current,
+                        getString(displayLatencyMode.labelResId)));
         menu.setOnMenuItemClickListener(item -> {
             int id = item.getItemId();
             if (id == R.id.menu_launcher_audio) {
@@ -665,6 +706,10 @@ public class MainActivity extends AppCompatActivity {
             }
             if (id == R.id.menu_launcher_gpu_driver) {
                 showGpuDriverChooser();
+                return true;
+            }
+            if (id == R.id.menu_launcher_display_latency) {
+                showDisplayLatencyChooser();
                 return true;
             }
             if (id == R.id.menu_launcher_calibrate) {
@@ -740,6 +785,8 @@ public class MainActivity extends AppCompatActivity {
         String backend = prefs().getString(PREF_KEY_BACKEND, BACKEND_VULKAN);
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "GFXBackend", backend);
         applyGpuDriverConfig(backend);
+        NativeLibrary.SetConfig("GFX.ini", "Settings", "AndroidPresentMode",
+                currentDisplayLatencyMode().configValue);
 
         AudioPreset audioPreset = currentAudioPreset();
         NativeLibrary.SetConfig("Dolphin.ini", "DSP", "Backend", audioPreset.backend);
@@ -767,6 +814,14 @@ public class MainActivity extends AppCompatActivity {
             if (preset.equals(candidate)) return preset;
         }
         return candidate;
+    }
+
+    private DisplayLatencyMode currentDisplayLatencyMode() {
+        String value = prefs().getString(PREF_KEY_DISPLAY_LATENCY_MODE, DISPLAY_LATENCY_SMOOTH);
+        for (DisplayLatencyMode mode : DISPLAY_LATENCY_MODES) {
+            if (mode.configValue.equals(value)) return mode;
+        }
+        return DISPLAY_LATENCY_MODES[0];
     }
 
     private boolean hasWiiUAdapter() {
@@ -846,6 +901,28 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public int hashCode() {
             return 31 * backend.hashCode() + bursts;
+        }
+    }
+
+    private static final class DisplayLatencyMode {
+        final String configValue;
+        final int labelResId;
+
+        DisplayLatencyMode(String configValue, int labelResId) {
+            this.configValue = configValue;
+            this.labelResId = labelResId;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            if (!(other instanceof DisplayLatencyMode)) return false;
+            DisplayLatencyMode that = (DisplayLatencyMode) other;
+            return configValue.equals(that.configValue);
+        }
+
+        @Override
+        public int hashCode() {
+            return configValue.hashCode();
         }
     }
 }

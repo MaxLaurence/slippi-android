@@ -9,6 +9,9 @@
 
 #include "Common/Assert.h"
 #include "Common/CommonFuncs.h"
+#include "Common/CommonPaths.h"
+#include "Common/FileUtil.h"
+#include "Common/IniFile.h"
 #include "Common/Logging/Log.h"
 #include "Common/MsgHandler.h"
 
@@ -17,6 +20,7 @@
 
 #if defined(VK_USE_PLATFORM_ANDROID_KHR)
 #include <android/log.h>
+#include <sys/system_properties.h>
 #endif
 
 #if defined(VK_USE_PLATFORM_XLIB_KHR)
@@ -30,6 +34,34 @@
 
 namespace Vulkan
 {
+namespace
+{
+#if defined(VK_USE_PLATFORM_ANDROID_KHR)
+bool AndroidDebugPropertyEnabled(const char* name)
+{
+	char value[PROP_VALUE_MAX] = {};
+	if (__system_property_get(name, value) <= 0)
+		return false;
+	return value[0] == '1' || value[0] == 'y' || value[0] == 'Y' ||
+	       value[0] == 't' || value[0] == 'T';
+}
+
+bool AndroidPrefersImmediatePresent()
+{
+	if (AndroidDebugPropertyEnabled("debug.slippi.vulkan_immediate"))
+		return true;
+
+	std::string mode;
+	IniFile ini;
+	if (!ini.Load(File::GetUserPath(D_CONFIG_IDX) + "GFX.ini"))
+		return false;
+
+	ini.GetIfExists("Settings", "AndroidPresentMode", &mode, std::string("smooth"));
+	return mode == "fastest";
+}
+#endif
+}  // namespace
+
 SwapChain::SwapChain(void* native_handle, VkSurfaceKHR surface, bool vsync)
 	: m_native_handle(native_handle), m_surface(surface), m_vsync_enabled(vsync)
 {
@@ -235,6 +267,15 @@ bool SwapChain::SelectPresentMode()
 	}
 
 #if defined(VK_USE_PLATFORM_ANDROID_KHR)
+	if (!m_vsync_enabled && AndroidPrefersImmediatePresent() &&
+		CheckForMode(VK_PRESENT_MODE_IMMEDIATE_KHR))
+	{
+		m_present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+		__android_log_print(ANDROID_LOG_INFO, "SlippiVulkan",
+			"AndroidPresentMode=fastest selecting IMMEDIATE over Android MAILBOX");
+		return true;
+	}
+
 	// Android's compositor can still put an "immediate" producer behind BLAST
 	// buffering. Prefer MAILBOX when available so SurfaceFlinger/HWC keeps the
 	// latest completed frame instead of scanning out older queued frames.

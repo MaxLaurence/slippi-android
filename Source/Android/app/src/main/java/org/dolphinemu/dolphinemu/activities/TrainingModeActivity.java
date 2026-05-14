@@ -45,8 +45,10 @@ public class TrainingModeActivity extends AppCompatActivity {
     private static final String PREF_KEY_BACKEND = "backend";
     private static final String PREF_KEY_AUDIO_BACKEND = "audio_backend";
     private static final String PREF_KEY_AUDIO_BUFFER_BURSTS = "audio_buffer_bursts";
+    private static final String PREF_KEY_DISPLAY_LATENCY_MODE = "display_latency_mode";
     private static final String PREF_KEY_TRAINING_LAST_CHECK_MS = "training_latest_checked_ms";
     private static final String BACKEND_VULKAN = "Vulkan";
+    private static final String DISPLAY_LATENCY_SMOOTH = "smooth";
     private static final String AUDIO_BACKEND_OBOE = "Oboe";
     private static final int AUDIO_BURSTS_BALANCED = 4;
     private static final long TRAINING_UPDATE_INTERVAL_MS = TimeUnit.HOURS.toMillis(6);
@@ -462,6 +464,8 @@ public class TrainingModeActivity extends AppCompatActivity {
         GpuDriverManager.prepareNativeDirectoriesForBackend(this, backend);
         NativeLibrary.SetConfig("GFX.ini", "Settings", "DriverLibName",
                 GpuDriverManager.selectedLibraryNameForBackend(this, backend));
+        NativeLibrary.SetConfig("GFX.ini", "Settings", "AndroidPresentMode",
+                prefs().getString(PREF_KEY_DISPLAY_LATENCY_MODE, DISPLAY_LATENCY_SMOOTH));
 
         String audioBackend = prefs().getString(PREF_KEY_AUDIO_BACKEND, AUDIO_BACKEND_OBOE);
         int bursts = prefs().getInt(PREF_KEY_AUDIO_BUFFER_BURSTS, AUDIO_BURSTS_BALANCED);
