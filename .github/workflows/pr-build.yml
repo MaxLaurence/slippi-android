@@ -95,7 +95,11 @@ jobs:
         shell: bash
         if: success()
         run: |
-          git fetch --prune --tags --force
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --prune --tags --force --unshallow
+          else
+            git fetch --prune --tags --force
+          fi
           echo "GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_ENV
           echo "GIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "GIT_TAG=$(git describe --tags --abbrev=0)" >> $GITHUB_ENV
@@ -181,7 +185,11 @@ jobs:
       - name: 'Fetch Git Tags'
         if: success()
         run: |
-          git fetch --prune --tags --force
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --prune --tags --force --unshallow
+          else
+            git fetch --prune --tags --force
+          fi
           echo "GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_ENV
           echo "GIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "GIT_TAG=$(git describe --tags --abbrev=0)" >> $GITHUB_ENV
@@ -294,7 +302,11 @@ jobs:
       - name: 'Fetch Git Tags'
         if: success()
         run: |
-          git fetch --prune --tags --force
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --prune --tags --force --unshallow
+          else
+            git fetch --prune --tags --force
+          fi
           echo "GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_ENV
           echo "GIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "GIT_TAG=$(git describe --tags --abbrev=0)" >> $GITHUB_ENV
