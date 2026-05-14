@@ -28,6 +28,7 @@ import org.dolphinemu.dolphinemu.UserDirectoryBootstrap;
 import org.dolphinemu.dolphinemu.controller.ButtonMap;
 import org.dolphinemu.dolphinemu.controller.ControllerProfile;
 import org.dolphinemu.dolphinemu.gpu.GpuDriverManager;
+import org.dolphinemu.dolphinemu.settings.DolphinSettings;
 import org.dolphinemu.dolphinemu.training.TrainingModeManager;
 
 import java.io.File;
@@ -466,6 +467,7 @@ public class TrainingModeActivity extends AppCompatActivity {
                 GpuDriverManager.selectedLibraryNameForBackend(this, backend));
         NativeLibrary.SetConfig("GFX.ini", "Settings", "AndroidPresentMode",
                 prefs().getString(PREF_KEY_DISPLAY_LATENCY_MODE, DISPLAY_LATENCY_SMOOTH));
+        DolphinSettings.applyIshiirukaGraphicsConfig(this);
 
         String audioBackend = prefs().getString(PREF_KEY_AUDIO_BACKEND, AUDIO_BACKEND_OBOE);
         int bursts = prefs().getInt(PREF_KEY_AUDIO_BUFFER_BURSTS, AUDIO_BURSTS_BALANCED);

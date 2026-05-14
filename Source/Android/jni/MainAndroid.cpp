@@ -760,6 +760,8 @@ JNIEXPORT jstring JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetConfig
     JNIEnv* env, jobject obj, jstring jFile, jstring jSection, jstring jKey, jstring jDefault);
 JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetConfig(
     JNIEnv* env, jobject obj, jstring jFile, jstring jSection, jstring jKey, jstring jValue);
+JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetMeleeForceWidescreen(
+    JNIEnv* env, jobject obj, jboolean enabled);
 JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetEXIDeviceOverride(
     JNIEnv* env, jobject obj, jint slot, jint device);
 JNIEXPORT void JNICALL
@@ -1173,6 +1175,12 @@ JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetConfig(
 
   ini.GetOrCreateSection(section)->Set(key, value);
   ini.Save(File::GetUserPath(D_CONFIG_IDX) + std::string(file));
+}
+
+JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetMeleeForceWidescreen(
+    JNIEnv* env, jobject obj, jboolean enabled)
+{
+  SConfig::GetInstance().bMeleeForceWidescreen = enabled == JNI_TRUE;
 }
 
 JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetEXIDeviceOverride(

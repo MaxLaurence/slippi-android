@@ -158,6 +158,7 @@ public final class NativeLibrary {
 
     public static native String GetConfig(String configFile, String section, String key, String defaultValue);
     public static native void SetConfig(String configFile, String section, String key, String value);
+    public static native void SetMeleeForceWidescreen(boolean enabled);
     public static native void SetEXIDeviceOverride(int slot, int device);
     public static native void ClearEXIDeviceOverrides();
     public static native int ApplyXdeltaPatch(String sourcePath, String patchPath, String outputPath);

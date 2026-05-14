@@ -52,6 +52,14 @@
         </activity>
 
         <activity
+            android:name="org.dolphinemu.dolphinemu.activities.SettingsActivity"
+            android:exported="false"
+            android:label="@string/settings_screen_title"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@style/Theme.SlippiDolphin"
+            android:configChanges="orientation|screenSize|keyboardHidden|keyboard" />
+
+        <activity
             android:name="org.dolphinemu.dolphinemu.activities.EmulationActivity"
             android:exported="false"
             android:screenOrientation="sensorLandscape"

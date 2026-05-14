@@ -7,6 +7,7 @@ import android.content.res.AssetManager;
 import android.util.Log;
 
 import org.dolphinemu.dolphinemu.UserDirectoryBootstrap;
+import org.dolphinemu.dolphinemu.settings.GameSettingsOverride;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -99,16 +100,21 @@ public final class GeckoOverride {
                 Log.w(TAG, "apply " + assetPath + " -> " + dst + ": " + e);
             }
         }
+        GameSettingsOverride.applyUserChoices(ctx, userDir, GameSettingsOverride.MELEE_INI_NAMES);
     }
 
     /** Remove the override so live launches use the bundled netplay ini. */
     public static void applyLiveMode(Context ctx) {
-        applyLiveMode(UserDirectoryBootstrap.userDir(ctx));
+        applyLiveMode(ctx, UserDirectoryBootstrap.userDir(ctx));
+    }
+
+    public static void applyLiveMode(Context ctx, File userDir) {
+        GameSettingsOverride.applyLiveMode(ctx, userDir);
     }
 
     public static void applyLiveMode(File userDir) {
         File dir = overrideDir(userDir);
-        for (String name : INI_NAMES) {
+        for (String name : GameSettingsOverride.MELEE_INI_NAMES) {
             File f = new File(dir, name);
             if (f.exists() && !f.delete()) {
                 Log.w(TAG, "could not delete " + f);
@@ -123,7 +129,12 @@ public final class GeckoOverride {
      * bundled defaults while leaving the Training Mode DOL/files alone.
      */
     public static void applyTrainingMode(Context ctx) {
-        applyTrainingMode(UserDirectoryBootstrap.userDir(ctx));
+        applyTrainingMode(ctx, UserDirectoryBootstrap.userDir(ctx));
+    }
+
+    public static void applyTrainingMode(Context ctx, File userDir) {
+        applyTrainingMode(userDir);
+        GameSettingsOverride.applyUserChoices(ctx, userDir, GameSettingsOverride.MELEE_INI_NAMES);
     }
 
     public static void applyTrainingMode(File userDir) {

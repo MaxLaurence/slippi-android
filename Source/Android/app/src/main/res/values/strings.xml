@@ -24,6 +24,7 @@
     <string name="training_mode_button">TRAINING MODE</string>
     <string name="settings_section">Launch settings</string>
     <string name="settings_status_title">Live play defaults</string>
+    <string name="settings_screen_title">Settings</string>
     <string name="launcher_settings_content_description">Settings</string>
     <string name="launcher_settings_audio">Audio configuration</string>
     <string name="launcher_settings_audio_current">Audio: %1$s/%2$d</string>

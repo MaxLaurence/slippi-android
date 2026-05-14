@@ -30,6 +30,7 @@ import org.dolphinemu.dolphinemu.NativeLibrary;
 import org.dolphinemu.dolphinemu.R;
 import org.dolphinemu.dolphinemu.UserDirectoryBootstrap;
 import org.dolphinemu.dolphinemu.gpu.GpuDriverManager;
+import org.dolphinemu.dolphinemu.settings.DolphinSettings;
 // SlippiAuthClient / SlippiSession (Firebase-based) intentionally removed
 // — the Slippi team prefers users go through their slippi.gg login flow
 // in a WebView (SlippiLoginActivity), which we trigger from the auth card
@@ -214,7 +215,8 @@ public class MainActivity extends AppCompatActivity {
         });
         authImportLink.setOnClickListener(v ->
                 pickUserJson.launch(new String[]{"application/json", "*/*"}));
-        findViewById(R.id.launcher_settings).setOnClickListener(this::showLauncherSettingsMenu);
+        findViewById(R.id.launcher_settings).setOnClickListener(v ->
+                startActivity(new Intent(this, SettingsActivity.class)));
         findViewById(R.id.play).setOnClickListener(v -> launchEmulation(null));
         findViewById(R.id.training_mode_button).setOnClickListener(v ->
                 startActivity(new Intent(this, TrainingModeActivity.class)));
@@ -787,6 +789,7 @@ public class MainActivity extends AppCompatActivity {
         applyGpuDriverConfig(backend);
         NativeLibrary.SetConfig("GFX.ini", "Settings", "AndroidPresentMode",
                 currentDisplayLatencyMode().configValue);
+        DolphinSettings.applyIshiirukaGraphicsConfig(this);
 
         AudioPreset audioPreset = currentAudioPreset();
         NativeLibrary.SetConfig("Dolphin.ini", "DSP", "Backend", audioPreset.backend);

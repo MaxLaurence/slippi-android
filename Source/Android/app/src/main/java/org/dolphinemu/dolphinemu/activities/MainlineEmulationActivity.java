@@ -44,6 +44,8 @@ import org.dolphinemu.dolphinemu.features.settings.model.NativeConfig;
 import org.dolphinemu.dolphinemu.gpu.GpuDriverManager;
 import org.dolphinemu.dolphinemu.replay.GeckoOverride;
 import org.dolphinemu.dolphinemu.replay.ReplayConfig;
+import org.dolphinemu.dolphinemu.settings.DolphinSettings;
+import org.dolphinemu.dolphinemu.settings.GameSettingsOverride;
 import org.dolphinemu.dolphinemu.utils.DirectoryInitialization;
 import org.dolphinemu.dolphinemu.utils.PhysicalControllerDetector;
 import org.dolphinemu.dolphinemu.utils.RawStickInputProvider;
@@ -55,9 +57,12 @@ import org.dolphinemu.dolphinemu.views.TouchControlOverlayView;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
@@ -270,6 +275,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
 
         try {
             configureMainlineDirectories();
+            applyMainlineStartupConfigFiles();
             NativeLibrary.Initialize();
             applyMainlineRuntimeConfig();
             if (!useGcAdapter && !isReplayMode) {
@@ -489,6 +495,123 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         }
     }
 
+    private void applyMainlineStartupConfigFiles() {
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+        String backend = prefs.getString(PREF_KEY_BACKEND, BACKEND_VULKAN);
+        String audioBackend = sanitizeAudioBackend(prefs.getString(PREF_KEY_AUDIO_BACKEND,
+                AUDIO_BACKEND_OBOE));
+        int audioBursts = prefs.getInt(PREF_KEY_AUDIO_BUFFER_BURSTS, AUDIO_BURSTS_BALANCED);
+        String displayLatencyMode =
+                prefs.getString(PREF_KEY_DISPLAY_LATENCY_MODE, DISPLAY_LATENCY_SMOOTH);
+        int port0 = useGcAdapter ? SI_WIIU_ADAPTER : SI_GC_CONTROLLER;
+        int portN = useGcAdapter ? SI_WIIU_ADAPTER : SI_NONE;
+        int efbScale = DolphinSettings.getEfbScale(this);
+        boolean meleeWidescreen = GameSettingsOverride.isMeleeWidescreenEnabled(this);
+
+        File configDir = new File(MainlineCore.userDir(this), "Config");
+        File dolphinIni = new File(configDir, "Dolphin.ini");
+        writeIniValue(dolphinIni, "Core", "GFXBackend", backend);
+        writeIniValue(dolphinIni, "Core", "MeleeForceWidescreen",
+                meleeWidescreen ? "True" : "False");
+        writeIniValue(dolphinIni, "Core", "SIDevice0", Integer.toString(port0));
+        writeIniValue(dolphinIni, "Core", "SIDevice1", Integer.toString(portN));
+        writeIniValue(dolphinIni, "Core", "SIDevice2", Integer.toString(portN));
+        writeIniValue(dolphinIni, "Core", "SIDevice3", Integer.toString(portN));
+        writeIniValue(dolphinIni, "DSP", "Backend", audioBackend);
+        writeIniValue(dolphinIni, "DSP", "AndroidAudioBufferBursts",
+                Integer.toString(audioBursts));
+        writeIniValue(dolphinIni, "Slippi", "EnableJukebox", "False");
+
+        File gfxIni = new File(configDir, "GFX.ini");
+        writeIniValue(gfxIni, "Settings", "DriverLibName",
+                GpuDriverManager.selectedLibraryNameForBackend(this, backend));
+        writeIniValue(gfxIni, "Settings", "AndroidPresentMode", displayLatencyMode);
+        writeIniValue(gfxIni, "Settings", "BackendMultithreading", "False");
+        writeIniValue(gfxIni, "Settings", "ShaderCompilationMode", "0");
+        writeIniValue(gfxIni, "Settings", "WaitForShadersBeforeStarting", "True");
+        writeIniValue(gfxIni, "Settings", "PreferVSForLinePointExpansion", "True");
+        writeIniValue(gfxIni, "Settings", "AspectRatio",
+                Integer.toString(DolphinSettings.mainlineAspectRatioForLaunch(this)));
+        writeIniValue(gfxIni, "Settings", "EFBScale", Integer.toString(efbScale));
+        writeIniValue(gfxIni, "Settings", "InternalResolution",
+                Integer.toString(DolphinSettings.legacyInternalResolutionForEfbScale(efbScale)));
+        writeIniValue(gfxIni, "Settings", "wideScreenHack",
+                DolphinSettings.isWidescreenHackEnabled(this) ? "True" : "False");
+        writeIniValue(gfxIni, "Hacks", "ImmediateXFBEnable", "True");
+        writeIniValue(gfxIni, "Hacks", "XFBToTextureEnable", "True");
+        writeIniValue(gfxIni, "Hacks", "SkipDuplicateXFBs", "True");
+    }
+
+    private void writeIniValue(File file, String section, String key, String value) {
+        try {
+            List<String> lines = readLines(file);
+            upsertIniValue(lines, section, key, value);
+            File parent = file.getParentFile();
+            if (parent != null && !parent.exists() && !parent.mkdirs()) {
+                Log.w(TAG, "could not create " + parent);
+                return;
+            }
+            try (FileWriter writer = new FileWriter(file)) {
+                for (String line : lines) {
+                    writer.write(line);
+                    writer.write('\n');
+                }
+            }
+        } catch (IOException ex) {
+            Log.w(TAG, "could not write " + file, ex);
+        }
+    }
+
+    private List<String> readLines(File file) throws IOException {
+        List<String> lines = new ArrayList<>();
+        if (!file.isFile()) return lines;
+        try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                lines.add(line);
+            }
+        }
+        return lines;
+    }
+
+    private void upsertIniValue(List<String> lines, String section, String key, String value) {
+        String sectionHeader = "[" + section + "]";
+        int sectionStart = -1;
+        int nextSection = lines.size();
+        for (int i = 0; i < lines.size(); i++) {
+            String trimmed = lines.get(i).trim();
+            if (sectionHeader.equals(trimmed)) {
+                sectionStart = i;
+                continue;
+            }
+            if (sectionStart >= 0 && i > sectionStart
+                    && trimmed.startsWith("[") && trimmed.endsWith("]")) {
+                nextSection = i;
+                break;
+            }
+        }
+
+        if (sectionStart < 0) {
+            if (!lines.isEmpty() && !lines.get(lines.size() - 1).isEmpty()) {
+                lines.add("");
+            }
+            lines.add(sectionHeader);
+            lines.add(key + " = " + value);
+            return;
+        }
+
+        for (int i = sectionStart + 1; i < nextSection; i++) {
+            String trimmed = lines.get(i).trim();
+            int separator = trimmed.indexOf('=');
+            if (separator < 0) continue;
+            if (key.equals(trimmed.substring(0, separator).trim())) {
+                lines.set(i, key + " = " + value);
+                return;
+            }
+        }
+        lines.add(nextSection, key + " = " + value);
+    }
+
     private void applyMainlineGraphicsStabilityConfig() {
         NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
                 "BackendMultithreading", false);
@@ -498,6 +621,18 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
                 "WaitForShadersBeforeStarting", true);
         NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
                 "PreferVSForLinePointExpansion", true);
+        NativeConfig.setInt(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "AspectRatio", DolphinSettings.mainlineAspectRatioForLaunch(this));
+        int efbScale = DolphinSettings.getEfbScale(this);
+        NativeConfig.setInt(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "EFBScale", efbScale);
+        NativeConfig.setInt(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "InternalResolution",
+                DolphinSettings.legacyInternalResolutionForEfbScale(efbScale));
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "wideScreenHack", DolphinSettings.isWidescreenHackEnabled(this));
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "MeleeForceWidescreen", GameSettingsOverride.isMeleeWidescreenEnabled(this));
         NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Hacks",
                 "ImmediateXFBEnable", true);
         NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Hacks",
@@ -532,7 +667,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
                     "SlotB", EXI_DEVICE_NONE);
             NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core",
                     "SerialPort1", EXI_DEVICE_NONE);
-            GeckoOverride.applyTrainingMode(userDir);
+            GeckoOverride.applyTrainingMode(this, userDir);
             return;
         }
 
@@ -551,7 +686,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             return;
         }
         ReplayConfig.writeEmpty(playbackConfig);
-        GeckoOverride.applyLiveMode(userDir);
+        GeckoOverride.applyLiveMode(this, userDir);
         NativeLibrary.SetSlippiInputPath(playbackConfig.getAbsolutePath());
     }
 

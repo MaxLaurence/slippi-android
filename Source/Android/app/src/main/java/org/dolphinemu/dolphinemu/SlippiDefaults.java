@@ -204,6 +204,7 @@ public final class SlippiDefaults {
             + "OverrideGCLang = False\n"
             + "DPL2Decoder = False\n"
             + "Latency = 2\n"
+            + "MeleeForceWidescreen = False\n"
             + "SlippiOnlineDelay = 2\n"
             // Match desktop Slippi: SlotA = 255 (NONE). The Slippi EXI device
             // is hardcoded into SlotB via the default of

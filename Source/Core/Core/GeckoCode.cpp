@@ -63,7 +63,8 @@ static std::mutex active_codes_lock;
 
 static bool IsEnabledMeleeCode(const GeckoCode& code)
 {
-    if(SConfig::GetInstance().bMeleeForceWidescreen && code.name == "Widescreen 16:9")
+    if(SConfig::GetInstance().bMeleeForceWidescreen &&
+        (code.name == "Widescreen 16:9" || code.name == "Optional: Widescreen 16:9"))
         return true;
         
     if(NetPlay::IsNetPlayRunning() && SConfig::GetInstance().iLagReductionCode != MELEE_LAG_REDUCTION_CODE_UNSET)
