@@ -26,6 +26,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           submodules: recursive
 
       - name: Set up Java 17
@@ -36,6 +37,15 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+
+      - name: Check out embedded mainline Slippi Dolphin
+        run: |
+          if [ ! -e Externals/MainlineSlippiDolphin/CMakeLists.txt ]; then
+            rm -rf Externals/MainlineSlippiDolphin
+            git clone --depth=1 --branch slippi \
+              https://github.com/project-slippi/dolphin.git \
+              Externals/MainlineSlippiDolphin
+          fi
 
       - name: Install Android packages
         run: sdkmanager 'ndk;27.1.12297006' 'build-tools;34.0.0' 'platforms;android-34' 'cmake;3.22.1'
@@ -57,14 +67,15 @@ jobs:
             version="${tag#v}"
           fi
 
+          IFS=. read -r major minor patch extra <<< "$version"
           case "$version" in
-            *[!0-9.]*|*.*.*.*|'')
-              echo "Version must be numeric semver like 3.6.1" >&2
-              exit 1
-              ;;
+            *[!0-9.]*|'') extra=invalid ;;
           esac
+          if [ -z "$major" ] || [ -z "$minor" ] || [ -z "$patch" ] || [ -n "$extra" ]; then
+            echo "Version must be numeric semver like 3.6.1" >&2
+            exit 1
+          fi
 
-          IFS=. read -r major minor patch <<< "$version"
           code=$((major * 10000 + minor * 100 + patch))
 
           echo "tag=$tag" >> "$GITHUB_OUTPUT"

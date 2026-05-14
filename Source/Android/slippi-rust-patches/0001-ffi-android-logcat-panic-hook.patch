@@ -1,0 +1,52 @@
+diff --git a/ffi/src/logger.rs b/ffi/src/logger.rs
+index 96598c0..4dc9d40 100644
+--- a/ffi/src/logger.rs
++++ b/ffi/src/logger.rs
+@@ -15,3 +15,4 @@ use std::ffi::{c_char, c_int};
+ pub extern "C" fn slprs_logging_init(logger_fn: unsafe extern "C" fn(c_int, c_int, *const c_char)) {
+     dolphin_integrations::ffi::logger::init(logger_fn);
++    install_panic_hook();
+ }
+@@ -19,3 +20,42 @@ pub extern "C" fn slprs_logging_init(logger_fn: unsafe extern "C" fn(c_int, c_in
++/// Install a Rust panic hook that prints the panic message + location to
++/// Android logcat via `__android_log_write`. Without this, Rust panics
++/// only go to stderr (which is invisible on Android) and we just see a
++/// SIGABRT with no message — making it nearly impossible to diagnose
++/// which Slippi extension function panicked.
++#[cfg(target_os = "android")]
++fn install_panic_hook() {
++    use std::panic;
++    use std::ffi::CString;
++
++    unsafe extern "C" {
++        // android/log.h: int __android_log_write(int prio, const char *tag, const char *text)
++        fn __android_log_write(prio: c_int, tag: *const c_char, text: *const c_char) -> c_int;
++    }
++    const ANDROID_LOG_FATAL: c_int = 7;
++
++    panic::set_hook(Box::new(|info| {
++        let location = info
++            .location()
++            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
++            .unwrap_or_else(|| "<unknown>".into());
++        let payload = info
++            .payload()
++            .downcast_ref::<&str>()
++            .map(|s| s.to_string())
++            .or_else(|| info.payload().downcast_ref::<String>().cloned())
++            .unwrap_or_else(|| "<non-string panic payload>".into());
++        let msg = format!("Rust panic at {location}: {payload}");
++        if let (Ok(tag), Ok(text)) = (CString::new("SlippiRust"), CString::new(msg)) {
++            unsafe {
++                __android_log_write(ANDROID_LOG_FATAL, tag.as_ptr(), text.as_ptr());
++            }
++        }
++    }));
++}
++
++#[cfg(not(target_os = "android"))]
++fn install_panic_hook() {}
++
+ /// Registers a log container, which mirrors a Dolphin `LogContainer` (`RustLogContainer`).
+ ///
+ /// See `dolphin_logger::register_container` for more information.
