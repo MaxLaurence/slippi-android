@@ -282,6 +282,15 @@ class SlippiNetplayClient
 	FrameOffsetData frameOffsetData[SLIPPI_REMOTE_PLAYER_MAX];
 	FrameTiming lastFrameTiming[SLIPPI_REMOTE_PLAYER_MAX];
 	std::array<Common::FifoQueue<FrameTiming, false>, SLIPPI_REMOTE_PLAYER_MAX> ackTimers;
+	std::atomic<int> m_async_queue_depth{0};
+#ifdef __ANDROID__
+	uint64_t m_pad_send_count = 0;
+	uint64_t m_total_pad_override_age_us = 0;
+	uint64_t m_max_pad_override_age_us = 0;
+	uint64_t m_ack_count = 0;
+	uint64_t m_total_ack_us = 0;
+	uint64_t m_max_ack_us = 0;
+#endif
 
 	std::atomic<SlippiConnectStatus> slippiConnectStatus{SlippiConnectStatus::NET_CONNECT_STATUS_UNSET};
 	std::vector<int> failedConnections;

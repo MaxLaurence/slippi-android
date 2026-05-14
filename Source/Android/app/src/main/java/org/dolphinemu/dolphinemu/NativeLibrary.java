@@ -143,6 +143,7 @@ public final class NativeLibrary {
             int triggerL, int triggerR, int analogA, int analogB);
 
     public static native void ClearPadOverride(int port);
+    public static native long GetPadOverrideAgeUs(int port);
 
     /**
      * Write calibrated stick floats DIRECTLY into Melee's per-port

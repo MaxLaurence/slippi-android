@@ -10,15 +10,19 @@
 #include "Common/Timer.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
+#include "Core/HW/SI_DeviceGCController.h"
 #include "SlippiPremadeText.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/VideoConfig.h"
 #include <algorithm>
 #include <climits>
+#include <cinttypes>
 #include <fstream>
 #include <memory>
 #include <thread>
 #ifdef __ANDROID__
+#include <android/log.h>
+#include <sys/system_properties.h>
 #include <sys/resource.h>
 #endif
 
@@ -41,6 +45,52 @@ static std::mutex pad_mutex;
 static std::mutex ack_mutex;
 
 SlippiNetplayClient *SLIPPI_NETPLAY = nullptr;
+
+namespace
+{
+#ifdef __ANDROID__
+constexpr const char* LATENCY_TAG = "SlippiLatency";
+
+bool AndroidDebugPropertyEnabled(const char* name)
+{
+	char value[PROP_VALUE_MAX] = {};
+	if (__system_property_get(name, value) <= 0)
+		return false;
+	return value[0] == '1' || value[0] == 'y' || value[0] == 'Y' ||
+	       value[0] == 't' || value[0] == 'T';
+}
+
+bool AndroidLatencyTraceEnabled()
+{
+	static const bool enabled = AndroidDebugPropertyEnabled("debug.slippi.latency_trace");
+	return enabled;
+}
+
+void ConfigureAndroidLowLatencySocket(ENetHost* host)
+{
+	if (!host)
+		return;
+
+	// UDP sockets ignore TCP_NODELAY, but ENet exposes buffer sizing and Android/Linux
+	// accept DSCP and socket priority when permissions allow it. Failures are logged only
+	// when explicit tracing is enabled because some OEM kernels reject these knobs.
+	enet_socket_set_option(host->socket, ENET_SOCKOPT_SNDBUF, 64 * 1024);
+	enet_socket_set_option(host->socket, ENET_SOCKOPT_RCVBUF, 64 * 1024);
+
+	int priority = 7;
+	int priority_result = setsockopt(host->socket, SOL_SOCKET, SO_PRIORITY,
+	                                 &priority, sizeof(priority));
+	int tos_val = 0xb8;
+	int tos_result = setsockopt(host->socket, IPPROTO_IP, IP_TOS, &tos_val, sizeof(tos_val));
+	if (AndroidLatencyTraceEnabled())
+	{
+		__android_log_print(ANDROID_LOG_INFO, LATENCY_TAG,
+		                    "net socket low-latency sndbuf=64k rcvbuf=64k priorityResult=%d tosResult=%d",
+		                    priority_result, tos_result);
+	}
+}
+#endif
+}  // namespace
 
 // called from ---GUI--- thread
 SlippiNetplayClient::~SlippiNetplayClient()
@@ -125,6 +175,9 @@ SlippiNetplayClient::SlippiNetplayClient(std::vector<std::string> addrs, std::ve
 	{
 		PanicAlertT("Couldn't Create Client");
 	}
+#ifdef __ANDROID__
+	ConfigureAndroidLowLatencySocket(m_client);
+#endif
 
 	for (int i = 0; i < remotePlayerCount; i++)
 	{
@@ -417,6 +470,24 @@ unsigned int SlippiNetplayClient::OnData(sf::Packet &packet, ENetPeer *peer)
 		ackTimers[pIdx].Pop();
 
 		pingUs[pIdx] = Common::Timer::GetTimeUs() - sendTime;
+#ifdef __ANDROID__
+		if (AndroidLatencyTraceEnabled())
+		{
+			m_ack_count++;
+			m_total_ack_us += pingUs[pIdx];
+			if (pingUs[pIdx] > m_max_ack_us)
+				m_max_ack_us = pingUs[pIdx];
+			if (m_ack_count == 1 || m_ack_count % 120 == 0)
+			{
+				__android_log_print(ANDROID_LOG_INFO, LATENCY_TAG,
+				                    "ack frame=%d player=%d rttUs=%" PRIu64
+				                    " avgRttUs=%" PRIu64 " maxRttUs=%" PRIu64,
+				                    frame, pIdx, pingUs[pIdx], m_total_ack_us / m_ack_count,
+				                    m_max_ack_us);
+				m_max_ack_us = 0;
+			}
+		}
+#endif
 		if (g_ActiveConfig.bShowNetPlayPing && frame % SLIPPI_PING_DISPLAY_INTERVAL == 0 && pIdx == 0)
 		{
 			std::stringstream pingDisplay;
@@ -749,6 +820,7 @@ void SlippiNetplayClient::SendAsync(std::unique_ptr<sf::Packet> packet)
 	{
 		std::lock_guard<std::recursive_mutex> lkq(m_crit.async_queue_write);
 		m_async_queue.Push(std::move(packet));
+		m_async_queue_depth.fetch_add(1, std::memory_order_relaxed);
 	}
 	ENetUtil::WakeupThread(m_client);
 }
@@ -1023,9 +1095,10 @@ void SlippiNetplayClient::ThreadFunc()
 
 		ENetEvent netEvent;
 		int net;
-		net = enet_host_service(m_client, &netEvent, 250);
+		net = enet_host_service(m_client, &netEvent, 4);
 		while (!m_async_queue.Empty())
 		{
+			m_async_queue_depth.fetch_sub(1, std::memory_order_relaxed);
 			Send(*(m_async_queue.Front().get()));
 			m_async_queue.Pop();
 		}
@@ -1220,6 +1293,14 @@ void SlippiNetplayClient::SendSlippiPad(std::unique_ptr<SlippiPad> pad)
 	if (pad)
 	{
 		// Add latest local pad report to queue
+#ifdef __ANDROID__
+		if (AndroidLatencyTraceEnabled())
+		{
+			const uint64_t age_us = SI_PadOverride::LatestSetAgeUs(playerIdx);
+			if (age_us > m_max_pad_override_age_us)
+				m_max_pad_override_age_us = age_us;
+		}
+#endif
 		localPadQueue.push_front(std::move(pad));
 	}
 
@@ -1281,6 +1362,27 @@ void SlippiNetplayClient::SendSlippiPad(std::unique_ptr<SlippiPad> pad)
 	SendAsync(std::move(spac));
 
 	u64 time = Common::Timer::GetTimeUs();
+#ifdef __ANDROID__
+	if (AndroidLatencyTraceEnabled())
+	{
+		m_pad_send_count++;
+		const uint64_t age_us = SI_PadOverride::LatestSetAgeUs(playerIdx);
+		m_total_pad_override_age_us += age_us;
+		if (age_us > m_max_pad_override_age_us)
+			m_max_pad_override_age_us = age_us;
+		if (m_pad_send_count == 1 || m_pad_send_count % 120 == 0)
+		{
+			__android_log_print(ANDROID_LOG_INFO, LATENCY_TAG,
+			                    "sendPad frame=%d queue=%zu asyncDepth=%d padAgeUs=%" PRIu64
+			                    " avgPadAgeUs=%" PRIu64 " maxPadAgeUs=%" PRIu64,
+			                    frame, localPadQueue.size(),
+			                    m_async_queue_depth.load(std::memory_order_relaxed), age_us,
+			                    m_total_pad_override_age_us / m_pad_send_count,
+			                    m_max_pad_override_age_us);
+			m_max_pad_override_age_us = 0;
+		}
+	}
+#endif
 
 	hasGameStarted = true;
 

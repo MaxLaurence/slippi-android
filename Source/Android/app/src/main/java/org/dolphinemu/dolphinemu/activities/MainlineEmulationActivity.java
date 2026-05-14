@@ -9,9 +9,12 @@ import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.PerformanceHintManager;
 import android.os.Process;
+import android.os.SystemClock;
+import android.os.Trace;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.Log;
+import android.view.Choreographer;
 import android.view.Display;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -53,6 +56,7 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Set;
@@ -69,7 +73,9 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     private static final String PREF_KEY_BACKEND = "backend";
     private static final String PREF_KEY_AUDIO_BACKEND = "audio_backend";
     private static final String PREF_KEY_AUDIO_BUFFER_BURSTS = "audio_buffer_bursts";
+    private static final String PREF_KEY_DISPLAY_LATENCY_MODE = "display_latency_mode";
     private static final String BACKEND_VULKAN = "Vulkan";
+    private static final String DISPLAY_LATENCY_SMOOTH = "smooth";
     private static final String AUDIO_BACKEND_OBOE = "Oboe";
     private static final String AUDIO_BACKEND_AAUDIO = "AAudio";
     private static final String AUDIO_BACKEND_OPENSLES = "OpenSLES";
@@ -91,6 +97,9 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     private static final int SI_WIIU_ADAPTER = 12;
     private static final long RAW_INPUT_FALLBACK_POLL_MS = 4L;
     private static final int RAW_INPUT_WAIT_MS = 16;
+    private static final boolean LATENCY_TRACE = BuildConfig.DEBUG;
+    private static final long INPUT_LATENCY_LOG_INTERVAL_MS = 1000L;
+    private static final long FRAME_LATENCY_LOG_INTERVAL_MS = 2000L;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final StickCalibration.Out stickOut = new StickCalibration.Out();
@@ -118,6 +127,24 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     private boolean refreshRateSettingsOverridden;
     private String previousPeakRefreshRate;
     private String previousMinRefreshRate;
+    private long lastInputLatencyLogMs;
+    private long lastFrameLatencyLogMs;
+    private long previousFrameTimeNs;
+    private final ArrayList<Long> frameDeltasUs = new ArrayList<>();
+    private final Choreographer.FrameCallback frameLatencyCallback = new Choreographer.FrameCallback() {
+        @Override
+        public void doFrame(long frameTimeNanos) {
+            if (!LATENCY_TRACE || !emuStarted) {
+                previousFrameTimeNs = 0L;
+                return;
+            }
+            if (previousFrameTimeNs != 0L) {
+                recordFrameDelta((frameTimeNanos - previousFrameTimeNs) / 1000L);
+            }
+            previousFrameTimeNs = frameTimeNanos;
+            Choreographer.getInstance().postFrameCallback(this);
+        }
+    };
     private final Runnable controllerDetectorPoll = new Runnable() {
         @Override
         public void run() {
@@ -130,12 +157,14 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             new TouchControlOverlayView.Listener() {
                 @Override
                 public void onOverlayButton(int gcBit, boolean pressed) {
+                    traceInputEvent("touch_button", SystemClock.uptimeMillis(), 0);
                     padState.setButton(gcBit, pressed);
                     pushPad();
                 }
 
                 @Override
                 public void onOverlayStick(String stickId, float x, float y) {
+                    traceInputEvent("touch_stick", SystemClock.uptimeMillis(), 0);
                     if (TouchOverlayLayoutStore.MAIN_STICK.equals(stickId)) {
                         padState.setMainStick(x, y);
                     } else if (TouchOverlayLayoutStore.C_STICK.equals(stickId)) {
@@ -146,6 +175,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
 
                 @Override
                 public void onOverlayDpad(boolean up, boolean down, boolean left, boolean right) {
+                    traceInputEvent("touch_dpad", SystemClock.uptimeMillis(), 0);
                     padState.setDirectionalButtons(up, down, left, right);
                     pushPad();
                 }
@@ -169,6 +199,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
                     ? rawStickInput.waitForSnapshot(RAW_INPUT_WAIT_MS)
                     : (rawStickInput == null ? null : rawStickInput.snapshot());
             if (feedRawStickState(state)) {
+                traceInputEvent("raw:" + rawSourceLabel(), SystemClock.uptimeMillis(), 0);
                 pushPad();
                 postRawInputPoll();
                 return;
@@ -341,6 +372,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         applyLowLatencySurfaceConfig(holder);
         NativeLibrary.SurfaceChanged(holder.getSurface());
         startEmulationIfNeeded();
+        startFrameLatencyTrace();
     }
 
     @Override
@@ -351,6 +383,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
 
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
+        stopFrameLatencyTrace();
         NativeLibrary.SurfaceDestroyed();
     }
 
@@ -365,6 +398,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         if (action != KeyEvent.ACTION_DOWN && action != KeyEvent.ACTION_UP) {
             return super.dispatchKeyEvent(event);
         }
+        traceInputEvent("key", event.getEventTime(), event.getRepeatCount());
         padState.setButton(bit, action == KeyEvent.ACTION_DOWN);
         pushPad();
         return true;
@@ -385,6 +419,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             feedStickPairToBytes(event.getAxisValue(MotionEvent.AXIS_Z),
                     event.getAxisValue(MotionEvent.AXIS_RZ), cStickCal, true, false);
         }
+        traceInputEvent("motion", event.getEventTime(), event.getHistorySize());
 
         float lt = event.getAxisValue(MotionEvent.AXIS_LTRIGGER);
         float rt = event.getAxisValue(MotionEvent.AXIS_RTRIGGER);
@@ -424,18 +459,23 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         String audioBackend = sanitizeAudioBackend(prefs.getString(PREF_KEY_AUDIO_BACKEND,
                 AUDIO_BACKEND_OBOE));
         int audioBursts = prefs.getInt(PREF_KEY_AUDIO_BUFFER_BURSTS, AUDIO_BURSTS_BALANCED);
+        String displayLatencyMode =
+                prefs.getString(PREF_KEY_DISPLAY_LATENCY_MODE, DISPLAY_LATENCY_SMOOTH);
         int port0 = useGcAdapter ? SI_WIIU_ADAPTER : SI_GC_CONTROLLER;
         int portN = useGcAdapter ? SI_WIIU_ADAPTER : SI_NONE;
 
         NativeConfig.setString(NativeConfig.LAYER_BASE, "Dolphin", "Core", "GFXBackend", backend);
         NativeConfig.setString(NativeConfig.LAYER_BASE, "GFX", "Settings", "DriverLibName",
                 GpuDriverManager.selectedLibraryNameForBackend(this, backend));
+        NativeConfig.setString(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "AndroidPresentMode", displayLatencyMode);
         applyMainlineGraphicsStabilityConfig();
         NativeConfig.setString(NativeConfig.LAYER_BASE, "Dolphin", "DSP", "Backend", audioBackend);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "DSP",
                 "AndroidAudioBufferBursts", audioBursts);
         Log.i(TAG, "mainline runtime config gfx=" + backend
-                + " audio=" + audioBackend + "/" + audioBursts);
+                + " audio=" + audioBackend + "/" + audioBursts
+                + " displayLatency=" + displayLatencyMode);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core", "SIDevice0", port0);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core", "SIDevice1", portN);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core", "SIDevice2", portN);
@@ -552,7 +592,13 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     }
 
     private synchronized void pushPad() {
+        if (LATENCY_TRACE) {
+            Trace.beginSection("MainlineSetPadOverride");
+        }
         padState.pushToNative();
+        if (LATENCY_TRACE) {
+            Trace.endSection();
+        }
     }
 
     private synchronized void feedStickPairToBytes(float rawX, float rawY,
@@ -675,6 +721,76 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     private String rawSourceLabel() {
         if (rawStickInput != null) return rawStickInput.label();
         return "Android MotionEvent fallback";
+    }
+
+    private void traceInputEvent(String source, long eventTimeMs, int historySize) {
+        if (!LATENCY_TRACE) {
+            return;
+        }
+        long now = SystemClock.uptimeMillis();
+        if (now - lastInputLatencyLogMs < INPUT_LATENCY_LOG_INTERVAL_MS) {
+            return;
+        }
+        lastInputLatencyLogMs = now;
+        Log.i(TAG, "inputTrace source=" + source
+                + " eventAgeMs=" + Math.max(0L, now - eventTimeMs)
+                + " history=" + historySize
+                + " rawPolling=" + rawInputPolling
+                + " rawSource=" + rawSourceLabel()
+                + " padOverrideAgeUs=" + NativeLibrary.GetPadOverrideAgeUs(0));
+    }
+
+    private void startFrameLatencyTrace() {
+        if (!LATENCY_TRACE) {
+            return;
+        }
+        Choreographer.getInstance().removeFrameCallback(frameLatencyCallback);
+        Choreographer.getInstance().postFrameCallback(frameLatencyCallback);
+    }
+
+    private void stopFrameLatencyTrace() {
+        Choreographer.getInstance().removeFrameCallback(frameLatencyCallback);
+        previousFrameTimeNs = 0L;
+        frameDeltasUs.clear();
+    }
+
+    private void recordFrameDelta(long deltaUs) {
+        frameDeltasUs.add(deltaUs);
+        if (frameDeltasUs.size() > 360) {
+            frameDeltasUs.remove(0);
+        }
+        long now = SystemClock.uptimeMillis();
+        if (now - lastFrameLatencyLogMs < FRAME_LATENCY_LOG_INTERVAL_MS
+                || frameDeltasUs.size() < 60) {
+            return;
+        }
+        lastFrameLatencyLogMs = now;
+        ArrayList<Long> sorted = new ArrayList<>(frameDeltasUs);
+        Collections.sort(sorted);
+        long p50 = percentile(sorted, 0.50f);
+        long p95 = percentile(sorted, 0.95f);
+        long p99 = percentile(sorted, 0.99f);
+        int jank = 0;
+        for (long sample : frameDeltasUs) {
+            if (sample > 20_000L) {
+                jank++;
+            }
+        }
+        Log.i(TAG, "frameTrace samples=" + frameDeltasUs.size()
+                + " p50Us=" + p50
+                + " p95Us=" + p95
+                + " p99Us=" + p99
+                + " jankPct=" + String.format(Locale.US, "%.1f",
+                frameDeltasUs.isEmpty() ? 0f : (jank * 100f / frameDeltasUs.size())));
+    }
+
+    private long percentile(ArrayList<Long> sorted, float p) {
+        if (sorted.isEmpty()) {
+            return 0L;
+        }
+        int index = Math.min(sorted.size() - 1, Math.max(0,
+                Math.round((sorted.size() - 1) * p)));
+        return sorted.get(index);
     }
 
     private void updateTouchOverlayVisibility() {

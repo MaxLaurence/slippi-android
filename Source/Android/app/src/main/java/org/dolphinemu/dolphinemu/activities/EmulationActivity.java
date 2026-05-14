@@ -10,9 +10,11 @@ import android.os.Looper;
 import android.os.PerformanceHintManager;
 import android.os.Process;
 import android.os.SystemClock;
+import android.os.Trace;
 import android.provider.Settings;
 import android.util.Log;
 import android.view.Display;
+import android.view.Choreographer;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.Surface;
@@ -48,6 +50,7 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Set;
@@ -71,6 +74,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     private static final long RAW_INPUT_FALLBACK_POLL_MS = 4L;
     private static final int RAW_INPUT_WAIT_MS = 16;
     private static final long INPUT_LATENCY_LOG_INTERVAL_MS = 2000L;
+    private static final long FRAME_LATENCY_LOG_INTERVAL_MS = 5000L;
     private static final String SETTING_PEAK_REFRESH_RATE = "peak_refresh_rate";
     private static final String SETTING_MIN_REFRESH_RATE = "min_refresh_rate";
     private static final String[] PERF_HINT_THREAD_NAMES = {
@@ -90,6 +94,24 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     private volatile boolean rawInputPolling;
     private volatile int rawInputThreadTid = -1;
     private long lastInputLatencyLogMs;
+    private long lastFrameLatencyLogMs;
+    private long previousFrameTimeNs;
+    private final ArrayList<Long> frameDeltasUs = new ArrayList<>(360);
+    private final Choreographer.FrameCallback frameLatencyCallback = new Choreographer.FrameCallback() {
+        @Override
+        public void doFrame(long frameTimeNanos) {
+            if (!emuStarted) {
+                previousFrameTimeNs = 0L;
+                return;
+            }
+            if (previousFrameTimeNs > 0L) {
+                long deltaUs = Math.max(0L, (frameTimeNanos - previousFrameTimeNs) / 1000L);
+                recordFrameDelta(deltaUs);
+            }
+            previousFrameTimeNs = frameTimeNanos;
+            Choreographer.getInstance().postFrameCallback(this);
+        }
+    };
 
     // Loaded once at activity create from ControllerProfile. Identity by
     // default until the user runs the calibration wizard from the
@@ -119,11 +141,13 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         public void run() {
             if (!rawInputPolling || !shouldPollRawStickSource()) return;
 
+            long rawWaitStartMs = SystemClock.uptimeMillis();
             RawStickState state = rawStickInput != null && rawStickInput.supportsBlockingWait()
                     ? rawStickInput.waitForSnapshot(RAW_INPUT_WAIT_MS)
                     : (rawStickInput == null ? null : rawStickInput.snapshot());
             if (feedRawStickState(state)) {
                 pushPad();
+                traceInputEvent("raw", rawWaitStartMs, 0);
                 postRawInputPoll();
                 return;
             }
@@ -389,6 +413,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         if (emuStarted) {
             try { NativeLibrary.UnPauseEmulation(); } catch (Throwable ignored) {}
         }
+        startFrameLatencyTrace();
         updateTouchOverlayVisibility();
         ui.post(controllerDetectorPoll);
         logGameMode();
@@ -402,6 +427,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     @Override
     protected void onPause() {
         stopRawInputPolling();
+        stopFrameLatencyTrace();
         ui.removeCallbacks(controllerDetectorPoll);
         if (replayHud != null) replayHud.stopPolling();
         super.onPause();
@@ -419,6 +445,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
             emuThread = new Thread(NativeLibrary::Run, "DolphinEmuMain");
             emuThread.start();
             registerPerfHintWhenReady();
+            startFrameLatencyTrace();
         }
     }
 
@@ -475,6 +502,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     }
 
     private void applyLowLatencySurfaceConfig(SurfaceHolder holder) {
+        Trace.beginSection("SlippiSurfaceLowLatency");
         // Melee is a fixed 60Hz workload. Ask SurfaceFlinger to move the
         // display immediately instead of waiting for a seamless transition.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -491,6 +519,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
             }
         }
         preferLowLatencyDisplayMode();
+        Trace.endSection();
     }
 
     private void preferLowLatencyDisplayMode() {
@@ -951,7 +980,61 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
                 + " eventAgeMs=" + Math.max(0L, now - eventTimeMs)
                 + " history=" + historySize
                 + " rawPolling=" + rawInputPolling
-                + " rawSource=" + rawSourceLabel());
+                + " rawSource=" + rawSourceLabel()
+                + " padOverrideAgeUs=" + NativeLibrary.GetPadOverrideAgeUs(0));
+    }
+
+    private void startFrameLatencyTrace() {
+        if (!LATENCY_TRACE) {
+            return;
+        }
+        Choreographer.getInstance().removeFrameCallback(frameLatencyCallback);
+        Choreographer.getInstance().postFrameCallback(frameLatencyCallback);
+    }
+
+    private void stopFrameLatencyTrace() {
+        Choreographer.getInstance().removeFrameCallback(frameLatencyCallback);
+        previousFrameTimeNs = 0L;
+        frameDeltasUs.clear();
+    }
+
+    private void recordFrameDelta(long deltaUs) {
+        frameDeltasUs.add(deltaUs);
+        if (frameDeltasUs.size() > 360) {
+            frameDeltasUs.remove(0);
+        }
+        long now = SystemClock.uptimeMillis();
+        if (now - lastFrameLatencyLogMs < FRAME_LATENCY_LOG_INTERVAL_MS
+                || frameDeltasUs.size() < 60) {
+            return;
+        }
+        lastFrameLatencyLogMs = now;
+        ArrayList<Long> sorted = new ArrayList<>(frameDeltasUs);
+        Collections.sort(sorted);
+        long p50 = percentile(sorted, 0.50f);
+        long p95 = percentile(sorted, 0.95f);
+        long p99 = percentile(sorted, 0.99f);
+        int jank = 0;
+        for (long sample : frameDeltasUs) {
+            if (sample > 20_000L) {
+                jank++;
+            }
+        }
+        Log.i(TAG, "frameTrace samples=" + frameDeltasUs.size()
+                + " p50Us=" + p50
+                + " p95Us=" + p95
+                + " p99Us=" + p99
+                + " jankPct=" + String.format(Locale.US, "%.1f",
+                frameDeltasUs.isEmpty() ? 0f : (jank * 100f / frameDeltasUs.size())));
+    }
+
+    private long percentile(ArrayList<Long> sorted, float p) {
+        if (sorted.isEmpty()) {
+            return 0L;
+        }
+        int index = Math.min(sorted.size() - 1, Math.max(0,
+                Math.round((sorted.size() - 1) * p)));
+        return sorted.get(index);
     }
 
     private void updateTouchOverlayVisibility() {

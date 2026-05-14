@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -42,8 +43,17 @@ struct PadOverride
 	std::atomic<uint8_t>  substickX{128}, substickY{128};
 	std::atomic<uint8_t>  triggerLeft{0}, triggerRight{0};
 	std::atomic<uint8_t>  analogA{0}, analogB{0};
+	std::atomic<uint64_t> setTimeUs{0};
 };
 static PadOverride s_pad_overrides[4];
+
+uint64_t NowUs()
+{
+	return static_cast<uint64_t>(
+	    std::chrono::duration_cast<std::chrono::microseconds>(
+	        std::chrono::steady_clock::now().time_since_epoch())
+	        .count());
+}
 }  // namespace
 
 namespace SI_PadOverride
@@ -68,6 +78,7 @@ void Set(int port, uint16_t button,
 	o.triggerRight.store(triggerRight);
 	o.analogA.store(analogA);
 	o.analogB.store(analogB);
+	o.setTimeUs.store(NowUs(), std::memory_order_release);
 	o.active.store(true);
 
 	if (kPadOverrideDiagnostics)
@@ -132,6 +143,20 @@ bool Get(int port, GCPadStatus* out)
 	out->analogA      = o.analogA.load();
 	out->analogB      = o.analogB.load();
 	return true;
+}
+
+uint64_t LatestSetTimeUs(int port)
+{
+	if (port < 0 || port >= 4) return 0;
+	return s_pad_overrides[port].setTimeUs.load(std::memory_order_acquire);
+}
+
+uint64_t LatestSetAgeUs(int port)
+{
+	const uint64_t set_time = LatestSetTimeUs(port);
+	if (set_time == 0) return 0;
+	const uint64_t now = NowUs();
+	return now > set_time ? now - set_time : 0;
 }
 }  // namespace SI_PadOverride
 

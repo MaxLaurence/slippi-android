@@ -1,0 +1,173 @@
+diff --git a/Source/Core/Core/Slippi/SlippiNetplay.cpp b/Source/Core/Core/Slippi/SlippiNetplay.cpp
+index 1f996b9db246e70df621c9e5f3b76b3b9a8ffb1d..8c0cbeef6e232b789c850992f47b4b0f4ab12e41 100644
+--- a/Source/Core/Core/Slippi/SlippiNetplay.cpp
++++ b/Source/Core/Core/Slippi/SlippiNetplay.cpp
+@@ -7,9 +7,17 @@
+ #include <fstream>
+ #include <memory>
+ #include <thread>
+ #ifdef __ANDROID__
++#include <android/log.h>
++#include <cstdlib>
++#include <cstring>
++#include <netinet/in.h>
++#include <netinet/ip.h>
++#include <sys/socket.h>
+ #include <sys/resource.h>
++#include <sys/system_properties.h>
++#include <unistd.h>
+ #endif
+ 
+ #include "Common/CommonTypes.h"
+ #include "Common/Config/Config.h"
+@@ -22,12 +30,100 @@
+ #include "Core/ConfigManager.h"
+ #include "Core/Core.h"
+ #include "Core/NetPlayProto.h"
++#ifdef __ANDROID__
++#include "Core/HW/SI/SI_DeviceGCController.h"
++#endif
+ #include "Core/Slippi/SlippiGame.h"
+ #include "Core/Slippi/SlippiNetplay.h"
+ #include "Core/Slippi/SlippiPremadeText.h"
+ #include "VideoCommon/OnScreenDisplay.h"
+ #include "VideoCommon/VideoConfig.h"
+ 
++#ifdef __ANDROID__
++namespace
++{
++constexpr const char* LATENCY_TAG = "SlippiLatency";
++
++bool AndroidPropertyEnabled(const char* name)
++{
++  char value[PROP_VALUE_MAX] = {};
++  if (__system_property_get(name, value) <= 0)
++    return false;
++  return std::strcmp(value, "1") == 0 || std::strcmp(value, "true") == 0 ||
++         std::strcmp(value, "TRUE") == 0;
++}
++
++int AndroidPropertyInt(const char* name, int fallback, int minimum, int maximum)
++{
++  char value[PROP_VALUE_MAX] = {};
++  if (__system_property_get(name, value) <= 0)
++    return fallback;
++
++  char* end = nullptr;
++  const long parsed = std::strtol(value, &end, 10);
++  if (end == value)
++    return fallback;
++
++  return std::min(maximum, std::max(minimum, static_cast<int>(parsed)));
++}
++
++bool AndroidLatencyTraceEnabled()
++{
++  static const bool enabled = AndroidPropertyEnabled("debug.slippi.latency_trace");
++  return enabled;
++}
++
++int AndroidActiveServiceTimeoutMs()
++{
++  // Keep the default much lower than upstream's 250 ms wake latency without forcing
++  // the more aggressive 4 ms experiment on every device. Testers can set:
++  // adb shell setprop debug.slippi.netplay_service_timeout_ms 4
++  static const int timeout_ms =
++      AndroidPropertyInt("debug.slippi.netplay_service_timeout_ms", 16, 1, 250);
++  return timeout_ms;
++}
++
++void ConfigureAndroidNetplaySocket(ENetHost* host)
++{
++  if (!host)
++    return;
++
++  const int socket_fd = static_cast<int>(host->socket);
++  if (socket_fd < 0)
++    return;
++
++  int tos = IPTOS_LOWDELAY;
++  int tos_result = setsockopt(socket_fd, IPPROTO_IP, IP_TOS, &tos, sizeof(tos));
++  if (AndroidLatencyTraceEnabled())
++  {
++    __android_log_print(ANDROID_LOG_INFO, LATENCY_TAG,
++                        "mainline netplay socket fd=%d ip_tos_lowdelay=%s activeTimeoutMs=%d",
++                        socket_fd, tos_result == 0 ? "ok" : "failed",
++                        AndroidActiveServiceTimeoutMs());
++  }
++}
++
++void AndroidLogPadSend(int frame, std::size_t queue_size, std::size_t packet_size)
++{
++  if (!AndroidLatencyTraceEnabled())
++    return;
++
++  static u64 s_last_log_us = 0;
++  const u64 now_us = Common::Timer::NowUs();
++  if (s_last_log_us != 0 && now_us - s_last_log_us < 1000000)
++    return;
++  s_last_log_us = now_us;
++
++  __android_log_print(ANDROID_LOG_INFO, LATENCY_TAG,
++                      "mainline padSend frame=%d padOverrideAgeUs=%llu localQueue=%zu packetBytes=%zu",
++                      frame,
++                      static_cast<unsigned long long>(
++                          SerialInterface::SI_PadOverride::LatestSetAgeUs(0)),
++                      queue_size, packet_size);
++}
++}  // namespace
++#endif
++
+ static std::mutex pad_mutex;
+ static std::mutex ack_mutex;
+ 
+@@ -119,6 +216,10 @@ SlippiNetplayClient::SlippiNetplayClient(std::vector<std::string> addrs, std::ve
+     PanicAlertFmtT("Couldn't Create Client");
+   }
+ 
++#ifdef __ANDROID__
++  ConfigureAndroidNetplaySocket(m_client);
++#endif
++
+   for (int i = 0; i < remote_player_count; i++)
+   {
+     ENetAddress addr;
+@@ -1029,13 +1130,25 @@ void SlippiNetplayClient::ThreadFunc()
+     }
+ 
+     ENetEvent net_event;
+-    int net;
+-    net = enet_host_service(m_client, &net_event, 250);
++#ifdef __ANDROID__
++    int net = enet_host_service(m_client, &net_event, AndroidActiveServiceTimeoutMs());
++#else
++    int net = enet_host_service(m_client, &net_event, 250);
++#endif
++    int drained_async_packets = 0;
+     while (!m_async_queue.Empty())
+     {
+       Send(*(m_async_queue.Front().get()));
+       m_async_queue.Pop();
++      drained_async_packets++;
+     }
++#ifdef __ANDROID__
++    if (AndroidLatencyTraceEnabled() && drained_async_packets > 0)
++    {
++      __android_log_print(ANDROID_LOG_INFO, LATENCY_TAG,
++                          "mainline asyncDrain packets=%d", drained_async_packets);
++    }
++#endif
+     if (net > 0)
+     {
+       sf::Packet rpac;
+@@ -1281,6 +1393,10 @@ void SlippiNetplayClient::SendSlippiPad(std::unique_ptr<SlippiPad> pad)
+   for (auto it = m_local_pad_queue.begin(); it != m_local_pad_queue.end(); ++it)
+     spac->append((*it)->pad_buf, SLIPPI_PAD_DATA_SIZE);  // only transfer 8 bytes per pad
+ 
++#ifdef __ANDROID__
++  AndroidLogPadSend(frame, m_local_pad_queue.size(), spac->getDataSize());
++#endif
++
+   SendAsync(std::move(spac));
+   u64 time = Common::Timer::NowUs();
+ 

@@ -23,6 +23,8 @@ void Set(int port, uint16_t button,
          uint8_t analogA, uint8_t analogB);
 void Clear(int port);
 bool Get(int port, GCPadStatus* out);
+uint64_t LatestSetAgeUs(int port);
+uint64_t LatestSetTimeUs(int port);
 }  // namespace SI_PadOverride
 
 class CSIDevice_GCController : public ISIDevice

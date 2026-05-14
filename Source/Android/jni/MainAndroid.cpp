@@ -795,6 +795,8 @@ JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SurfaceDestr
 
 JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetSlippiInputPath(
     JNIEnv* env, jobject obj, jstring jPath);
+JNIEXPORT jlong JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetPadOverrideAgeUs(
+    JNIEnv* env, jobject obj, jint port);
 JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_ClearSlippiInputPath(
     JNIEnv* env, jobject obj);
 JNIEXPORT jint JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetReplayLatestFrame(
@@ -954,6 +956,12 @@ JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_ClearPadOver
     JNIEnv* env, jobject obj, jint port)
 {
   SI_PadOverride::Clear(port);
+}
+
+JNIEXPORT jlong JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetPadOverrideAgeUs(
+    JNIEnv* env, jobject obj, jint port)
+{
+  return static_cast<jlong>(SI_PadOverride::LatestSetAgeUs(port));
 }
 
 // ─── Gecko-style direct write into Melee's HSDPad array ───
