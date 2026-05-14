@@ -8,8 +8,8 @@ plugins {
 // credentials in the binary.
 def forceTouchControls = project.findProperty('forceTouchControls')?.toString()?.toBoolean() ?: false
 def skipMainlineCoreBuild = project.findProperty('skipMainlineCoreBuild')?.toString()?.toBoolean() ?: false
-def androidVersionCode = (project.findProperty('androidVersionCode') ?: '30600').toString().toInteger()
-def androidVersionName = (project.findProperty('androidVersionName') ?: '3.6.0').toString()
+def androidVersionCode = (project.findProperty('androidVersionCode') ?: '3060005').toString().toInteger()
+def androidVersionName = (project.findProperty('androidVersionName') ?: '3.6.0-android-r5').toString()
 def slippiRustPatchDir = file("${rootDir}/slippi-rust-patches")
 def mainlineSlippiRoot = file("${rootDir}/../../Externals/MainlineSlippiDolphin")
 def mainlinePatchDir = file("${rootDir}/mainline-patches")

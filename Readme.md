@@ -28,7 +28,7 @@ For the official desktop launcher, go to https://slippi.gg.
 
 ## Install
 
-1. Download `slippi-android-vX.Y.Z.apk` from the
+1. Download `slippi-android-vX.Y.Z-android-rN.apk` from the
    [Releases](../../releases) page.
 2. On the Android device, enable installs from the file manager /
    browser you'll use ("Install unknown apps" → that app → toggle on).

@@ -3,11 +3,11 @@ name: Android Release
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v*-android-r*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version without the leading v, for example 3.6.1'
+        description: 'Release version without the leading v, for example 3.6.0-android-r5'
         required: true
         type: string
 
@@ -67,16 +67,16 @@ jobs:
             version="${tag#v}"
           fi
 
-          IFS=. read -r major minor patch extra <<< "$version"
-          case "$version" in
-            *[!0-9.]*|'') extra=invalid ;;
-          esac
-          if [ -z "$major" ] || [ -z "$minor" ] || [ -z "$patch" ] || [ -n "$extra" ]; then
-            echo "Version must be numeric semver like 3.6.1" >&2
+          if [[ ! "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)-android-r([0-9]+)$ ]]; then
+            echo "Version must look like 3.6.0-android-r5" >&2
             exit 1
           fi
 
-          code=$((major * 10000 + minor * 100 + patch))
+          major="${BASH_REMATCH[1]}"
+          minor="${BASH_REMATCH[2]}"
+          patch="${BASH_REMATCH[3]}"
+          android_release="${BASH_REMATCH[4]}"
+          code=$((major * 1000000 + minor * 10000 + patch * 100 + android_release))
 
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "name=$version" >> "$GITHUB_OUTPUT"
