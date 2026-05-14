@@ -407,7 +407,7 @@ public class TrainingModeActivity extends AppCompatActivity {
             return;
         }
         EmulatorCore core = EmulatorCore.fromPref(
-                prefs().getString(EmulatorCore.PREF_KEY, EmulatorCore.ISHIIRUKA.prefValue));
+                prefs().getString(EmulatorCore.PREF_KEY, EmulatorCore.DEFAULT.prefValue));
         if (core == EmulatorCore.MAINLINE) {
             launchMainlineTrainingMode(installedTraining.isoPath);
             return;

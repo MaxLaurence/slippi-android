@@ -200,7 +200,7 @@ public class MainActivity extends AppCompatActivity {
                 startActivity(new Intent(this, ReplayListActivity.class)));
 
         EmulatorCore savedCore = EmulatorCore.fromPref(
-                prefs().getString(PREF_KEY_EMULATOR_CORE, EmulatorCore.ISHIIRUKA.prefValue));
+                prefs().getString(PREF_KEY_EMULATOR_CORE, EmulatorCore.DEFAULT.prefValue));
         emulatorCoreToggle.check(savedCore == EmulatorCore.MAINLINE
                 ? R.id.core_mainline : R.id.core_ishiiruka);
         emulatorCoreToggle.addOnButtonCheckedListener((group, checkedId, isChecked) -> {
@@ -327,7 +327,7 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         EmulatorCore core = EmulatorCore.fromPref(
-                prefs().getString(PREF_KEY_EMULATOR_CORE, EmulatorCore.ISHIIRUKA.prefValue));
+                prefs().getString(PREF_KEY_EMULATOR_CORE, EmulatorCore.DEFAULT.prefValue));
         if (core == EmulatorCore.MAINLINE) {
             launchMainlineDolphin(replayOrNull != null);
             return;
@@ -555,7 +555,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void refreshCoreStatus() {
         EmulatorCore core = EmulatorCore.fromPref(
-                prefs().getString(PREF_KEY_EMULATOR_CORE, EmulatorCore.ISHIIRUKA.prefValue));
+                prefs().getString(PREF_KEY_EMULATOR_CORE, EmulatorCore.DEFAULT.prefValue));
         if (core == EmulatorCore.ISHIIRUKA) {
             emulatorCoreStatus.setText(R.string.core_status_ishiiruka);
             return;

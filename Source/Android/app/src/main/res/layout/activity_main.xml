@@ -309,18 +309,18 @@
                         app:singleSelection="true">
 
                         <Button
-                            android:id="@+id/core_ishiiruka"
-                            style="?attr/materialButtonOutlinedStyle"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="@string/core_ishiiruka"/>
-
-                        <Button
                             android:id="@+id/core_mainline"
                             style="?attr/materialButtonOutlinedStyle"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="@string/core_mainline"/>
+
+                        <Button
+                            android:id="@+id/core_ishiiruka"
+                            style="?attr/materialButtonOutlinedStyle"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/core_ishiiruka"/>
                     </com.google.android.material.button.MaterialButtonToggleGroup>
 
                     <TextView

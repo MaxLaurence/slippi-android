@@ -1,10 +1,11 @@
 package org.dolphinemu.dolphinemu;
 
 public enum EmulatorCore {
-    ISHIIRUKA("ishiiruka"),
-    MAINLINE("mainline");
+    MAINLINE("mainline"),
+    ISHIIRUKA("ishiiruka");
 
     public static final String PREF_KEY = "emulator_core";
+    public static final EmulatorCore DEFAULT = MAINLINE;
     public final String prefValue;
 
     EmulatorCore(String prefValue) {
@@ -13,6 +14,7 @@ public enum EmulatorCore {
 
     public static EmulatorCore fromPref(String value) {
         if (MAINLINE.prefValue.equals(value)) return MAINLINE;
-        return ISHIIRUKA;
+        if (ISHIIRUKA.prefValue.equals(value)) return ISHIIRUKA;
+        return DEFAULT;
     }
 }
