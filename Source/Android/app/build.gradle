@@ -8,6 +8,8 @@ plugins {
 // credentials in the binary.
 def forceTouchControls = project.findProperty('forceTouchControls')?.toString()?.toBoolean() ?: false
 def skipMainlineCoreBuild = project.findProperty('skipMainlineCoreBuild')?.toString()?.toBoolean() ?: false
+def androidVersionCode = (project.findProperty('androidVersionCode') ?: '30600').toString().toInteger()
+def androidVersionName = (project.findProperty('androidVersionName') ?: '3.6.0').toString()
 def mainlineSlippiRoot = file("${rootDir}/../../Externals/MainlineSlippiDolphin")
 def mainlinePatchDir = file("${rootDir}/mainline-patches")
 def mainlineWorkDir = layout.buildDirectory.dir("mainlineSlippi/source")
@@ -24,8 +26,8 @@ android {
         applicationId 'org.ishiiruka.slippidolphin'
         minSdk 29
         targetSdk 34
-        versionCode 1
-        versionName '3.6.0-android'
+        versionCode androidVersionCode
+        versionName androidVersionName
         buildConfigField 'boolean', 'FORCE_TOUCH_CONTROLS', forceTouchControls ? 'true' : 'false'
 
         externalNativeBuild {

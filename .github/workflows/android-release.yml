@@ -1,0 +1,117 @@
+name: Android Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version without the leading v, for example 3.6.1'
+        required: true
+        type: string
+
+jobs:
+  build:
+    name: Build Android release APK
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_KEYSTORE_PATH: ${{ github.workspace }}/android-release.jks
+      RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+      RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+      RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android packages
+        run: sdkmanager 'ndk;27.1.12297006' 'build-tools;34.0.0' 'platforms;android-34' 'cmake;3.22.1'
+
+      - name: Set up Rust
+        run: |
+          rust_version="$(sed -n 's/^channel = "\(.*\)"/\1/p' Externals/SlippiRustExtensions/rust-toolchain.toml)"
+          rustup toolchain install "$rust_version"
+          rustup target add --toolchain "$rust_version" aarch64-linux-android
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ inputs.version }}"
+            tag="v${version}"
+          else
+            tag="${GITHUB_REF_NAME}"
+            version="${tag#v}"
+          fi
+
+          case "$version" in
+            *[!0-9.]*|*.*.*.*|'')
+              echo "Version must be numeric semver like 3.6.1" >&2
+              exit 1
+              ;;
+          esac
+
+          IFS=. read -r major minor patch <<< "$version"
+          code=$((major * 10000 + minor * 100 + patch))
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "name=$version" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+      - name: Decode release keystore
+        run: |
+          if [ -z "${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}" ]; then
+            echo "ANDROID_RELEASE_KEYSTORE_BASE64 is required for release builds" >&2
+            exit 1
+          fi
+          python3 - <<'PY'
+          import base64
+          import os
+
+          data = os.environ["ANDROID_RELEASE_KEYSTORE_BASE64"]
+          path = os.environ["RELEASE_KEYSTORE_PATH"]
+          with open(path, "wb") as f:
+              f.write(base64.b64decode(data))
+          PY
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+
+      - name: Build release APK
+        run: |
+          ./Source/Android/gradlew -p Source/Android :app:assembleRelease \
+            -PandroidVersionName='${{ steps.version.outputs.name }}' \
+            -PandroidVersionCode='${{ steps.version.outputs.code }}'
+
+      - name: Package APK
+        run: |
+          mkdir -p android-release
+          cp Source/Android/app/build/outputs/apk/release/app-release.apk \
+            "android-release/slippi-android-${{ steps.version.outputs.tag }}.apk"
+          shasum -a 256 "android-release/slippi-android-${{ steps.version.outputs.tag }}.apk" \
+            > "android-release/slippi-android-${{ steps.version.outputs.tag }}.apk.sha256"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: slippi-android-${{ steps.version.outputs.tag }}
+          path: android-release/*
+
+      - name: Upload APK to GitHub release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          files: android-release/*

@@ -21,8 +21,7 @@ recent aarch64 Android devices with Adreno or comparable GPUs.
 > audio (Oboe / AAudio with selectable buffer presets) and a
 > refresh-rate-cap-lift during emulation round out the latency story.
 >
-> This is a personal / hobbyist port — no warranty, no auto-update
-> channel; treat it as such.
+> This is a personal / hobbyist port — no warranty; treat it as such.
 
 Not affiliated with Project Slippi; it builds on top of their work.
 For the official desktop launcher, go to https://slippi.gg.
@@ -68,6 +67,20 @@ For the official desktop launcher, go to https://slippi.gg.
      straight into training. When a new Training Mode version drops,
      tap "Check updates" → "Update". Tap "Remove" to free the storage
      back up.
+
+### Install with Obtainium
+
+1. Install [Obtainium](https://obtainium.imranr.dev/).
+2. Add this app with the GitHub source URL:
+   `https://github.com/MaxLaurence/slippi-android`
+3. If Obtainium asks for an APK filter, use:
+   `slippi-android-v.*\.apk`
+4. Install the latest release.
+
+The release package ID is `org.ishiiruka.slippidolphin`. In-place
+updates require every published APK to be signed with the same release
+key, so builds from other sources may need to be uninstalled before
+switching to this update channel.
 
 ## What works
 

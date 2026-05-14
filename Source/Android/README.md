@@ -46,6 +46,11 @@ export PATH=$HOME/.cargo/bin:/opt/homebrew/bin:$PATH
 # Distributable build (signed):
 ./Source/Android/gradlew -p Source/Android :app:assembleRelease
 
+# Distributable build with an explicit Obtainium/GitHub release version:
+./Source/Android/gradlew -p Source/Android :app:assembleRelease \
+  -PandroidVersionName=3.6.1 \
+  -PandroidVersionCode=30601
+
 # Java/resource-only iteration when you do not need to rebuild/package mainline:
 ./Source/Android/gradlew -p Source/Android :app:assembleDebug -PskipMainlineCoreBuild=true
 ```
@@ -133,6 +138,28 @@ the launcher's account card for users who already have one on disk.
    Keep the `.jks` and password offline; never commit them. If you
    lose either, you cannot publish updates that upgrade existing
    installs in-place.
+
+## GitHub / Obtainium releases
+
+Obtainium users can subscribe to the GitHub releases for the Android
+APK. Publish Android builds with a numeric semver tag such as `v3.6.1`
+and a matching Android `versionName` such as `3.6.1`; this keeps
+Obtainium's source version and Android's installed version comparable.
+The `versionCode` must increase every release.
+
+The Android release workflow expects these repository secrets:
+
+- `ANDROID_RELEASE_KEYSTORE_BASE64` — base64-encoded `.jks` file.
+- `ANDROID_RELEASE_KEYSTORE_PASSWORD`
+- `ANDROID_RELEASE_KEY_ALIAS`
+- `ANDROID_RELEASE_KEY_PASSWORD`
+
+Create a release by pushing a tag like `v3.6.1`. The workflow builds
+`app-release.apk`, renames it to `slippi-android-v3.6.1.apk`, uploads a
+`.sha256` file, and attaches both to the GitHub Release. Keep one
+Android APK asset per release when possible; if desktop assets also
+share the release, tell Obtainium users to filter APKs with
+`slippi-android-v.*\.apk`.
 
 ## Install + run
 
