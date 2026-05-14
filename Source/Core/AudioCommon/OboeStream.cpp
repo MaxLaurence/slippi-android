@@ -20,6 +20,7 @@ namespace
 constexpr const char* TAG = "SlippiAudio";
 constexpr int kMinBufferBursts = 1;
 constexpr int kMaxBufferBursts = 12;
+constexpr int kStableFallbackBursts = 4;
 
 int ConfiguredBufferBursts()
 {
@@ -119,6 +120,16 @@ oboe::DataCallbackResult OboeSoundStream::onAudioReady(oboe::AudioStream* stream
   {
     __android_log_print(ANDROID_LOG_WARN, TAG, "Oboe xruns=%d", xrun_result.value());
     m_last_xruns.store(xrun_result.value());
+    const int32_t frames_per_burst = stream->getFramesPerBurst();
+    if (ConfiguredBufferBursts() < kStableFallbackBursts && frames_per_burst > 0)
+    {
+      const int32_t target_frames = frames_per_burst * kStableFallbackBursts;
+      oboe::ResultWithValue<int32_t> fallback_result =
+          stream->setBufferSizeInFrames(target_frames);
+      __android_log_print(ANDROID_LOG_WARN, TAG,
+                          "Oboe xrun fallback targetBuffer=%d actualBuffer=%d",
+                          target_frames, fallback_result ? fallback_result.value() : -1);
+    }
   }
 
   return oboe::DataCallbackResult::Continue;

@@ -9,6 +9,7 @@
 #include <aaudio/AAudio.h>
 #include <android/log.h>
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 
 #include "AudioCommon/Mixer.h"
@@ -20,6 +21,8 @@ namespace
 constexpr const char* TAG = "SlippiAudio";
 constexpr int kMinBufferBursts = 1;
 constexpr int kMaxBufferBursts = 12;
+constexpr int kStableFallbackBursts = 4;
+std::atomic<int32_t> s_last_xruns{0};
 
 int ConfiguredBufferBursts()
 {
@@ -39,6 +42,21 @@ aaudio_data_callback_result_t DataCallback(AAudioStream* stream, void* user_data
   }
 
   mixer->Mix(static_cast<s16*>(audio_data), static_cast<unsigned int>(num_frames));
+  int32_t xruns = AAudioStream_getXRunCount(stream);
+  int32_t previous = s_last_xruns.load();
+  if (xruns > previous && s_last_xruns.compare_exchange_strong(previous, xruns))
+  {
+    __android_log_print(ANDROID_LOG_WARN, TAG, "AAudio xruns=%d", xruns);
+    const int32_t frames_per_burst = AAudioStream_getFramesPerBurst(stream);
+    if (ConfiguredBufferBursts() < kStableFallbackBursts && frames_per_burst > 0)
+    {
+      const int32_t target_frames = frames_per_burst * kStableFallbackBursts;
+      const int32_t actual_frames = AAudioStream_setBufferSizeInFrames(stream, target_frames);
+      __android_log_print(ANDROID_LOG_WARN, TAG,
+                          "AAudio xrun fallback targetBuffer=%d actualBuffer=%d",
+                          target_frames, actual_frames);
+    }
+  }
   return AAUDIO_CALLBACK_RESULT_CONTINUE;
 }
 
@@ -107,6 +125,7 @@ bool AAudioSoundStream::Start()
                         AAudioStream_getBufferCapacityInFrames(stream),
                         AAudioStream_getSampleRate(stream), AAudioStream_getSharingMode(stream));
   }
+  s_last_xruns.store(AAudioStream_getXRunCount(stream));
 
   result = AAudioStream_requestStart(stream);
   if (result != AAUDIO_OK)
