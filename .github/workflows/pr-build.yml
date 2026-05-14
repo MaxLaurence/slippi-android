@@ -2,8 +2,8 @@ name: Builds
 
 on:
   push:
-    branches:
-        - "**"
+    branches-ignore:
+        - android-port
   pull_request:
     branches:
       - slippi
@@ -95,11 +95,7 @@ jobs:
         shell: bash
         if: success()
         run: |
-          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
-            git fetch --prune --tags --force --unshallow
-          else
-            git fetch --prune --tags --force
-          fi
+          git fetch --prune --unshallow
           echo "GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_ENV
           echo "GIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "GIT_TAG=$(git describe --tags --abbrev=0)" >> $GITHUB_ENV
@@ -185,11 +181,7 @@ jobs:
       - name: 'Fetch Git Tags'
         if: success()
         run: |
-          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
-            git fetch --prune --tags --force --unshallow
-          else
-            git fetch --prune --tags --force
-          fi
+          git fetch --prune --unshallow
           echo "GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_ENV
           echo "GIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "GIT_TAG=$(git describe --tags --abbrev=0)" >> $GITHUB_ENV
@@ -302,11 +294,7 @@ jobs:
       - name: 'Fetch Git Tags'
         if: success()
         run: |
-          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
-            git fetch --prune --tags --force --unshallow
-          else
-            git fetch --prune --tags --force
-          fi
+          git fetch --prune --unshallow
           echo "GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_ENV
           echo "GIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "GIT_TAG=$(git describe --tags --abbrev=0)" >> $GITHUB_ENV
