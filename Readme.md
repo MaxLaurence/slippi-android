@@ -182,6 +182,9 @@ Output APKs land at `Source/Android/app/build/outputs/apk/{debug,release}/`.
 
 - [Project Slippi](https://github.com/project-slippi) — the netplay,
   matchmaking and replay stack this port depends on.
+- [Training Mode Community Edition](https://github.com/AlexanderHarrison/TrainingMode-CommunityEdition) —
+  the Melee training-mode patchset this Android port can download,
+  patch and launch on-device.
 - [connoranastasio/Ishiiruka-rocknix](https://github.com/connoranastasio/Ishiiruka-rocknix) —
   the ROCKNIX port that was a useful reference for the JitArm64
   emitter patches and several CMake-side build fixes.
