@@ -1,11 +1,12 @@
 diff --git a/Source/Android/jni/MainAndroid.cpp b/Source/Android/jni/MainAndroid.cpp
-index 973b492..155d398 100644
+index 973b492..4211b82 100644
 --- a/Source/Android/jni/MainAndroid.cpp
 +++ b/Source/Android/jni/MainAndroid.cpp
-@@ -2,21 +2,32 @@
+@@ -2,21 +2,36 @@
  // SPDX-License-Identifier: GPL-2.0-or-later
  
  #include <condition_variable>
++#include <atomic>
 +#include <cerrno>
 +#include <chrono>
 +#include <cstdint>
@@ -18,8 +19,11 @@ index 973b492..155d398 100644
  #include <mutex>
  #include <optional>
 +#include <poll.h>
++#include <sched.h>
  #include <string>
 +#include <sys/ioctl.h>
++#include <sys/resource.h>
++#include <sys/syscall.h>
  #include <thread>
  #include <utility>
  #include <vector>
@@ -35,7 +39,7 @@ index 973b492..155d398 100644
  
  #include "Common/AndroidAnalytics.h"
  #include "Common/Assert.h"
-@@ -43,6 +54,7 @@
+@@ -43,6 +58,7 @@
  #include "Core/DolphinAnalytics.h"
  #include "Core/HW/DVD/DVDInterface.h"
  #include "Core/HW/Wiimote.h"
@@ -43,10 +47,11 @@ index 973b492..155d398 100644
  #include "Core/HW/WiimoteReal/WiimoteReal.h"
  #include "Core/Host.h"
  #include "Core/PowerPC/JitInterface.h"
-@@ -86,6 +98,275 @@ bool s_need_nonblocking_alert_msg;
+@@ -86,6 +102,314 @@ bool s_need_nonblocking_alert_msg;
  
  Common::Flag s_is_booting;
  bool s_game_metadata_is_valid = false;
++std::atomic<int> s_emu_thread_tid{0};
 +
 +struct RawAxis
 +{
@@ -316,10 +321,48 @@ index 973b492..155d398 100644
 +  FillRawGamepadAxesLocked(out);
 +  return true;
 +}
++
++// Keep the single-hot emulation thread on the faster part of typical ARM SoCs.
++// Android usually numbers efficiency cores first and performance cores last, so
++// the upper half of the current affinity mask is a good broad-device heuristic.
++void PinEmuThreadToPerformanceCores()
++{
++  if (setpriority(PRIO_PROCESS, 0, -8) != 0)
++  {
++    __android_log_print(ANDROID_LOG_WARN, DOLPHIN_TAG, "setpriority(-8) failed: %d", errno);
++  }
++
++  cpu_set_t mask;
++  CPU_ZERO(&mask);
++  if (sched_getaffinity(0, sizeof(mask), &mask) != 0)
++    return;
++
++  const int total = CPU_COUNT(&mask);
++  if (total <= 1)
++    return;
++
++  cpu_set_t pinned;
++  CPU_ZERO(&pinned);
++  int kept = 0;
++  const int want = total / 2;
++  for (int cpu = CPU_SETSIZE - 1; cpu >= 0 && kept < want; --cpu)
++  {
++    if (CPU_ISSET(cpu, &mask))
++    {
++      CPU_SET(cpu, &pinned);
++      ++kept;
++    }
++  }
++
++  if (kept > 0 && sched_setaffinity(0, sizeof(pinned), &pinned) != 0)
++  {
++    __android_log_print(ANDROID_LOG_WARN, DOLPHIN_TAG, "sched_setaffinity failed: %d", errno);
++  }
++}
  }  // Anonymous namespace
  
  void UpdatePointer()
-@@ -581,6 +862,59 @@ Java_org_dolphinemu_dolphinemu_NativeLibrary_UpdateGCAdapterScanThread(JNIEnv*,
+@@ -581,6 +905,64 @@ Java_org_dolphinemu_dolphinemu_NativeLibrary_UpdateGCAdapterScanThread(JNIEnv*,
    }
  }
  
@@ -376,9 +419,661 @@ index 973b492..155d398 100644
 +  return arr;
 +}
 +
++JNIEXPORT jint JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetEmuThreadTid(JNIEnv*, jclass)
++{
++  return s_emu_thread_tid.load();
++}
++
  JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_Initialize(JNIEnv*, jclass)
  {
    HostThreadLock guard;
+@@ -619,6 +1001,9 @@ static float GetRenderSurfaceScale(JNIEnv* env)
+ 
+ static void Run(JNIEnv* env, std::unique_ptr<BootParameters>&& boot, bool riivolution)
+ {
++  s_emu_thread_tid.store(static_cast<int>(syscall(SYS_gettid)));
++  PinEmuThreadToPerformanceCores();
++
+   HostThreadLock host_identity_guard;
+ 
+   if (riivolution && std::holds_alternative<BootParameters::Disc>(boot->parameters))
+@@ -660,6 +1045,7 @@ static void Run(JNIEnv* env, std::unique_ptr<BootParameters>&& boot, bool riivol
+ 
+   s_game_metadata_is_valid = false;
+   Core::Shutdown(Core::System::GetInstance());
++  s_emu_thread_tid.store(0);
+   host_identity_guard.Unlock();
+ 
+   env->CallStaticVoidMethod(IDCache::GetNativeLibraryClass(),
+diff --git a/Source/Core/AudioCommon/AAudioStream.cpp b/Source/Core/AudioCommon/AAudioStream.cpp
+new file mode 100644
+index 0000000..5c6cfa0
+--- /dev/null
++++ b/Source/Core/AudioCommon/AAudioStream.cpp
+@@ -0,0 +1,138 @@
++// Copyright 2026 Dolphin Emulator Project
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#ifdef HAVE_AAUDIO
++
++#include "AudioCommon/AAudioStream.h"
++
++#include <aaudio/AAudio.h>
++#include <android/log.h>
++
++#include <algorithm>
++#include <cstring>
++
++#include "AudioCommon/Mixer.h"
++#include "Common/CommonTypes.h"
++#include "Core/Config/MainSettings.h"
++
++namespace
++{
++constexpr const char* TAG = "SlippiAudio";
++constexpr int kMinBufferBursts = 1;
++constexpr int kMaxBufferBursts = 12;
++
++int ConfiguredBufferBursts()
++{
++  return std::clamp(Config::Get(Config::MAIN_ANDROID_AUDIO_BUFFER_BURSTS), kMinBufferBursts,
++                    kMaxBufferBursts);
++}
++
++aaudio_data_callback_result_t DataCallback(AAudioStream*, void* user_data, void* audio_data,
++                                           int32_t num_frames)
++{
++  auto* self = static_cast<AAudioSoundStream*>(user_data);
++  Mixer* mixer = self ? self->GetMixer() : nullptr;
++  if (!mixer)
++  {
++    std::memset(audio_data, 0, static_cast<size_t>(num_frames) * 2 * sizeof(s16));
++    return AAUDIO_CALLBACK_RESULT_CONTINUE;
++  }
++
++  mixer->Mix(static_cast<s16*>(audio_data), static_cast<std::size_t>(num_frames));
++  return AAUDIO_CALLBACK_RESULT_CONTINUE;
++}
++
++void ErrorCallback(AAudioStream*, void*, aaudio_result_t error)
++{
++  __android_log_print(ANDROID_LOG_WARN, TAG, "AAudio stream error: %s",
++                      AAudio_convertResultToText(error));
++}
++
++bool OpenStream(AAudioStreamBuilder* builder, AAudioStream** stream, aaudio_sharing_mode_t mode)
++{
++  AAudioStreamBuilder_setSharingMode(builder, mode);
++  aaudio_result_t result = AAudioStreamBuilder_openStream(builder, stream);
++  if (result == AAUDIO_OK)
++    return true;
++
++  __android_log_print(ANDROID_LOG_WARN, TAG, "AAudio open %s failed: %s",
++                      mode == AAUDIO_SHARING_MODE_EXCLUSIVE ? "exclusive" : "shared",
++                      AAudio_convertResultToText(result));
++  return false;
++}
++}  // namespace
++
++AAudioSoundStream::~AAudioSoundStream()
++{
++  auto* stream = static_cast<AAudioStream*>(m_stream);
++  if (!stream)
++    return;
++
++  AAudioStream_requestStop(stream);
++  AAudioStream_close(stream);
++  m_stream = nullptr;
++}
++
++bool AAudioSoundStream::Init()
++{
++  AAudioStreamBuilder* builder = nullptr;
++  aaudio_result_t result = AAudio_createStreamBuilder(&builder);
++  if (result != AAUDIO_OK || !builder)
++  {
++    __android_log_print(ANDROID_LOG_WARN, TAG, "AAudio builder failed: %s",
++                        AAudio_convertResultToText(result));
++    return false;
++  }
++
++  AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
++  AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
++  AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
++  AAudioStreamBuilder_setChannelCount(builder, 2);
++  AAudioStreamBuilder_setSampleRate(builder, m_mixer->GetSampleRate());
++  AAudioStreamBuilder_setDataCallback(builder, DataCallback, this);
++  AAudioStreamBuilder_setErrorCallback(builder, ErrorCallback, this);
++#if __ANDROID_API__ >= 28
++  AAudioStreamBuilder_setUsage(builder, AAUDIO_USAGE_GAME);
++  AAudioStreamBuilder_setContentType(builder, AAUDIO_CONTENT_TYPE_MUSIC);
++#endif
++
++  AAudioStream* stream = nullptr;
++  bool opened = OpenStream(builder, &stream, AAUDIO_SHARING_MODE_EXCLUSIVE);
++  if (!opened)
++    opened = OpenStream(builder, &stream, AAUDIO_SHARING_MODE_SHARED);
++
++  AAudioStreamBuilder_delete(builder);
++  if (!opened || !stream)
++    return false;
++
++  const int32_t frames_per_burst = AAudioStream_getFramesPerBurst(stream);
++  if (frames_per_burst > 0)
++  {
++    const int bursts = ConfiguredBufferBursts();
++    const int32_t target_frames = frames_per_burst * bursts;
++    const int32_t actual_frames = AAudioStream_setBufferSizeInFrames(stream, target_frames);
++    __android_log_print(ANDROID_LOG_INFO, TAG,
++                        "AAudio burst=%d bufferBursts=%d targetBuffer=%d actualBuffer=%d "
++                        "capacity=%d sampleRate=%d sharing=%d",
++                        frames_per_burst, bursts, target_frames, actual_frames,
++                        AAudioStream_getBufferCapacityInFrames(stream),
++                        AAudioStream_getSampleRate(stream), AAudioStream_getSharingMode(stream));
++  }
++
++  m_stream = stream;
++  return true;
++}
++
++bool AAudioSoundStream::SetRunning(bool running)
++{
++  auto* stream = static_cast<AAudioStream*>(m_stream);
++  if (!stream)
++    return false;
++
++  if (running)
++    return AAudioStream_requestStart(stream) == AAUDIO_OK;
++
++  return AAudioStream_requestStop(stream) == AAUDIO_OK;
++}
++
++#endif  // HAVE_AAUDIO
+diff --git a/Source/Core/AudioCommon/AAudioStream.h b/Source/Core/AudioCommon/AAudioStream.h
+new file mode 100644
+index 0000000..6d7ccfd
+--- /dev/null
++++ b/Source/Core/AudioCommon/AAudioStream.h
+@@ -0,0 +1,23 @@
++// Copyright 2026 Dolphin Emulator Project
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#pragma once
++
++#include "AudioCommon/SoundStream.h"
++
++class AAudioSoundStream final : public SoundStream
++{
++#ifdef HAVE_AAUDIO
++public:
++  ~AAudioSoundStream() override;
++  bool Init() override;
++  bool SetRunning(bool running) override;
++  static bool IsValid() { return true; }
++
++private:
++  void* m_stream = nullptr;
++#else
++public:
++  static bool IsValid() { return false; }
++#endif
++};
+diff --git a/Source/Core/AudioCommon/AudioCommon.cpp b/Source/Core/AudioCommon/AudioCommon.cpp
+index de046a9..a21142e 100644
+--- a/Source/Core/AudioCommon/AudioCommon.cpp
++++ b/Source/Core/AudioCommon/AudioCommon.cpp
+@@ -6,10 +6,12 @@
+ #include <fmt/chrono.h>
+ #include <fmt/format.h>
+ 
++#include "AudioCommon/AAudioStream.h"
+ #include "AudioCommon/AlsaSoundStream.h"
+ #include "AudioCommon/CubebStream.h"
+ #include "AudioCommon/Mixer.h"
+ #include "AudioCommon/NullSoundStream.h"
++#include "AudioCommon/OboeStream.h"
+ #include "AudioCommon/OpenALStream.h"
+ #include "AudioCommon/OpenSLESStream.h"
+ #include "AudioCommon/PulseAudioStream.h"
+@@ -37,6 +39,10 @@ static std::unique_ptr<SoundStream> CreateSoundStreamForBackend(std::string_view
+     return std::make_unique<AlsaSound>();
+   else if (backend == BACKEND_PULSEAUDIO && PulseAudio::IsValid())
+     return std::make_unique<PulseAudio>();
++  else if (backend == BACKEND_OBOE && OboeSoundStream::IsValid())
++    return std::make_unique<OboeSoundStream>();
++  else if (backend == BACKEND_AAUDIO && AAudioSoundStream::IsValid())
++    return std::make_unique<AAudioSoundStream>();
+   else if (backend == BACKEND_OPENSLES && OpenSLESStream::IsValid())
+     return std::make_unique<OpenSLESStream>();
+   else if (backend == BACKEND_WASAPI && WASAPIStream::IsValid())
+@@ -58,10 +64,23 @@ void InitSoundStream(Core::System& system)
+ 
+   if (!sound_stream || !sound_stream->Init())
+   {
+-    WARN_LOG_FMT(AUDIO, "Could not initialize backend {}, using {} instead.", backend,
+-                 BACKEND_NULLSOUND);
+-    sound_stream = std::make_unique<NullSound>();
+-    sound_stream->Init();
++    WARN_LOG_FMT(AUDIO, "Could not initialize backend {}", backend);
++    sound_stream.reset();
++    if (backend != BACKEND_OPENSLES && OpenSLESStream::IsValid())
++    {
++      WARN_LOG_FMT(AUDIO, "Trying fallback backend {}", BACKEND_OPENSLES);
++      backend = BACKEND_OPENSLES;
++      sound_stream = std::make_unique<OpenSLESStream>();
++      if (!sound_stream->Init())
++        sound_stream.reset();
++    }
++
++    if (!sound_stream)
++    {
++      WARN_LOG_FMT(AUDIO, "Using {} instead", BACKEND_NULLSOUND);
++      sound_stream = std::make_unique<NullSound>();
++      sound_stream->Init();
++    }
+   }
+ 
+   system.SetSoundStream(std::move(sound_stream));
+@@ -94,7 +113,12 @@ void ShutdownSoundStream(Core::System& system)
+ std::string GetDefaultSoundBackend()
+ {
+ #if defined(ANDROID)
+-  return BACKEND_OPENSLES;
++  if (OboeSoundStream::IsValid())
++    return BACKEND_OBOE;
++  if (AAudioSoundStream::IsValid())
++    return BACKEND_AAUDIO;
++  if (OpenSLESStream::IsValid())
++    return BACKEND_OPENSLES;
+ #else
+   if (CubebStream::IsValid())
+     return BACKEND_CUBEB;
+@@ -126,6 +150,10 @@ std::vector<std::string> GetSoundBackends()
+     backends.emplace_back(BACKEND_PULSEAUDIO);
+   if (OpenALStream::IsValid())
+     backends.emplace_back(BACKEND_OPENAL);
++  if (OboeSoundStream::IsValid())
++    backends.emplace_back(BACKEND_OBOE);
++  if (AAudioSoundStream::IsValid())
++    backends.emplace_back(BACKEND_AAUDIO);
+   if (OpenSLESStream::IsValid())
+     backends.emplace_back(BACKEND_OPENSLES);
+   if (WASAPIStream::IsValid())
+diff --git a/Source/Core/AudioCommon/CMakeLists.txt b/Source/Core/AudioCommon/CMakeLists.txt
+index 04ad967..9fced37 100644
+--- a/Source/Core/AudioCommon/CMakeLists.txt
++++ b/Source/Core/AudioCommon/CMakeLists.txt
+@@ -34,6 +34,39 @@ if(ANDROID)
+     target_link_libraries(audiocommon PRIVATE OpenSLES::OpenSLES)
+     target_compile_definitions(audiocommon PRIVATE HAVE_OPENSL_ES=1)
+   endif()
++
++  target_sources(audiocommon PRIVATE
++    AAudioStream.cpp
++    AAudioStream.h
++  )
++  target_link_libraries(audiocommon PRIVATE aaudio)
++  target_compile_definitions(audiocommon PRIVATE HAVE_AAUDIO=1)
++
++  find_package(oboe CONFIG QUIET)
++  if(NOT TARGET oboe::oboe AND DEFINED MAINLINE_OBOE_PREFAB_DIR)
++    set(MAINLINE_OBOE_LIBRARY
++      "${MAINLINE_OBOE_PREFAB_DIR}/libs/android.${ANDROID_ABI}/liboboe.so")
++    set(MAINLINE_OBOE_INCLUDE_DIR "${MAINLINE_OBOE_PREFAB_DIR}/include")
++    if(EXISTS "${MAINLINE_OBOE_LIBRARY}" AND IS_DIRECTORY "${MAINLINE_OBOE_INCLUDE_DIR}")
++      add_library(oboe::oboe SHARED IMPORTED)
++      set_target_properties(oboe::oboe PROPERTIES
++        IMPORTED_LOCATION "${MAINLINE_OBOE_LIBRARY}"
++        INTERFACE_INCLUDE_DIRECTORIES "${MAINLINE_OBOE_INCLUDE_DIR}"
++      )
++    endif()
++  endif()
++
++  if(TARGET oboe::oboe)
++    message(STATUS "Oboe found, enabling Oboe sound backend")
++    target_sources(audiocommon PRIVATE
++      OboeStream.cpp
++      OboeStream.h
++    )
++    target_link_libraries(audiocommon PRIVATE oboe::oboe)
++    target_compile_definitions(audiocommon PRIVATE HAVE_OBOE=1)
++  else()
++    message(STATUS "Oboe NOT found, disabling Oboe sound backend")
++  endif()
+ endif()
+ 
+ if(ENABLE_ALSA)
+diff --git a/Source/Core/AudioCommon/OboeStream.cpp b/Source/Core/AudioCommon/OboeStream.cpp
+new file mode 100644
+index 0000000..c3ff080
+--- /dev/null
++++ b/Source/Core/AudioCommon/OboeStream.cpp
+@@ -0,0 +1,146 @@
++// Copyright 2026 Dolphin Emulator Project
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#ifdef HAVE_OBOE
++
++#include "AudioCommon/OboeStream.h"
++
++#include <android/log.h>
++
++#include <algorithm>
++#include <cstring>
++
++#include "AudioCommon/Mixer.h"
++#include "Common/CommonTypes.h"
++#include "Core/Config/MainSettings.h"
++
++namespace
++{
++constexpr const char* TAG = "SlippiAudio";
++constexpr int kMinBufferBursts = 1;
++constexpr int kMaxBufferBursts = 12;
++
++int ConfiguredBufferBursts()
++{
++  return std::clamp(Config::Get(Config::MAIN_ANDROID_AUDIO_BUFFER_BURSTS), kMinBufferBursts,
++                    kMaxBufferBursts);
++}
++}  // namespace
++
++OboeSoundStream::~OboeSoundStream()
++{
++  if (!m_stream)
++    return;
++
++  m_stream->requestStop();
++  m_stream->close();
++  m_stream.reset();
++}
++
++bool OboeSoundStream::Init()
++{
++  return OpenStream(oboe::SharingMode::Exclusive) || OpenStream(oboe::SharingMode::Shared);
++}
++
++bool OboeSoundStream::OpenStream(oboe::SharingMode sharing_mode)
++{
++  oboe::AudioStreamBuilder builder;
++  builder.setDirection(oboe::Direction::Output)
++      ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
++      ->setSharingMode(sharing_mode)
++      ->setFormat(oboe::AudioFormat::I16)
++      ->setChannelCount(oboe::ChannelCount::Stereo)
++      ->setSampleRate(m_mixer->GetSampleRate())
++      ->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium)
++      ->setUsage(oboe::Usage::Game)
++      ->setContentType(oboe::ContentType::Music)
++      ->setDataCallback(this)
++      ->setErrorCallback(this);
++
++  std::shared_ptr<oboe::AudioStream> stream;
++  oboe::Result result = builder.openStream(stream);
++  if (result != oboe::Result::OK || !stream)
++  {
++    __android_log_print(ANDROID_LOG_WARN, TAG, "Oboe open %s failed: %s",
++                        sharing_mode == oboe::SharingMode::Exclusive ? "exclusive" : "shared",
++                        oboe::convertToText(result));
++    return false;
++  }
++
++  m_stream = std::move(stream);
++  ConfigureBuffer();
++  return true;
++}
++
++bool OboeSoundStream::SetRunning(bool running)
++{
++  if (!m_stream)
++    return false;
++
++  oboe::Result result = running ? m_stream->requestStart() : m_stream->requestStop();
++  if (result != oboe::Result::OK)
++  {
++    __android_log_print(ANDROID_LOG_WARN, TAG, "Oboe %s failed: %s",
++                        running ? "start" : "stop", oboe::convertToText(result));
++    return false;
++  }
++
++  return true;
++}
++
++void OboeSoundStream::ConfigureBuffer()
++{
++  const int32_t frames_per_burst = m_stream->getFramesPerBurst();
++  const int32_t capacity = m_stream->getBufferCapacityInFrames();
++  int bursts = ConfiguredBufferBursts();
++  int32_t target_frames = frames_per_burst > 0 ? frames_per_burst * bursts : capacity;
++  if (capacity > 0)
++    target_frames = std::min(target_frames, capacity);
++
++  int32_t actual_frames = m_stream->getBufferSizeInFrames();
++  oboe::ResultWithValue<int32_t> buffer_result = m_stream->setBufferSizeInFrames(target_frames);
++  if (buffer_result)
++    actual_frames = buffer_result.value();
++
++  oboe::ResultWithValue<int32_t> xrun_result = m_stream->getXRunCount();
++  if (xrun_result)
++    m_last_xruns.store(xrun_result.value());
++
++  __android_log_print(
++      ANDROID_LOG_INFO, TAG,
++      "Oboe api=%s sharing=%s burst=%d bufferBursts=%d targetBuffer=%d actualBuffer=%d "
++      "capacity=%d sampleRate=%d xruns=%d",
++      oboe::convertToText(m_stream->getAudioApi()), oboe::convertToText(m_stream->getSharingMode()),
++      frames_per_burst, bursts, target_frames, actual_frames, capacity, m_stream->getSampleRate(),
++      m_last_xruns.load());
++}
++
++oboe::DataCallbackResult OboeSoundStream::onAudioReady(oboe::AudioStream* stream, void* audio_data,
++                                                       int32_t num_frames)
++{
++  Mixer* mixer = GetMixer();
++  if (!mixer)
++  {
++    std::memset(audio_data, 0, static_cast<size_t>(num_frames) * 2 * sizeof(s16));
++    return oboe::DataCallbackResult::Continue;
++  }
++
++  mixer->Mix(static_cast<s16*>(audio_data), static_cast<std::size_t>(num_frames));
++
++  oboe::ResultWithValue<int32_t> xrun_result = stream->getXRunCount();
++  if (xrun_result && xrun_result.value() != m_last_xruns.load())
++  {
++    __android_log_print(ANDROID_LOG_WARN, TAG, "Oboe xruns=%d", xrun_result.value());
++    m_last_xruns.store(xrun_result.value());
++  }
++
++  return oboe::DataCallbackResult::Continue;
++}
++
++void OboeSoundStream::onErrorAfterClose(oboe::AudioStream*, oboe::Result error)
++{
++  __android_log_print(ANDROID_LOG_WARN, TAG, "Oboe stream error after close: %s",
++                      oboe::convertToText(error));
++}
++
++#endif  // HAVE_OBOE
+diff --git a/Source/Core/AudioCommon/OboeStream.h b/Source/Core/AudioCommon/OboeStream.h
+new file mode 100644
+index 0000000..5bbf73d
+--- /dev/null
++++ b/Source/Core/AudioCommon/OboeStream.h
+@@ -0,0 +1,44 @@
++// Copyright 2026 Dolphin Emulator Project
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#pragma once
++
++#include "AudioCommon/SoundStream.h"
++
++#ifdef HAVE_OBOE
++
++#include <atomic>
++#include <memory>
++
++#include <oboe/Oboe.h>
++
++class OboeSoundStream final : public SoundStream, public oboe::AudioStreamDataCallback,
++                              public oboe::AudioStreamErrorCallback
++{
++public:
++  ~OboeSoundStream() override;
++  bool Init() override;
++  bool SetRunning(bool running) override;
++  oboe::DataCallbackResult onAudioReady(oboe::AudioStream* stream, void* audio_data,
++                                        int32_t num_frames) override;
++  void onErrorAfterClose(oboe::AudioStream* stream, oboe::Result error) override;
++
++  static bool IsValid() { return true; }
++
++private:
++  bool OpenStream(oboe::SharingMode sharing_mode);
++  void ConfigureBuffer();
++
++  std::shared_ptr<oboe::AudioStream> m_stream;
++  std::atomic<int32_t> m_last_xruns{0};
++};
++
++#else
++
++class OboeSoundStream final : public SoundStream
++{
++public:
++  static bool IsValid() { return false; }
++};
++
++#endif
+diff --git a/Source/Core/AudioCommon/OpenSLESStream.cpp b/Source/Core/AudioCommon/OpenSLESStream.cpp
+index a3f6308..add4ff1 100644
+--- a/Source/Core/AudioCommon/OpenSLESStream.cpp
++++ b/Source/Core/AudioCommon/OpenSLESStream.cpp
+@@ -4,14 +4,18 @@
+ #ifdef HAVE_OPENSL_ES
+ #include "AudioCommon/OpenSLESStream.h"
+ 
++#include <algorithm>
+ #include <cmath>
++#include <vector>
+ 
+ #include <SLES/OpenSLES.h>
+ #include <SLES/OpenSLES_Android.h>
++#include <SLES/OpenSLES_AndroidConfiguration.h>
+ 
+ #include "Common/Assert.h"
+ #include "Common/CommonTypes.h"
+ #include "Common/Logging/Log.h"
++#include "Core/Config/MainSettings.h"
+ #include "Core/ConfigManager.h"
+ 
+ // engine interfaces
+@@ -25,12 +29,20 @@ static SLPlayItf bqPlayerPlay;
+ static SLAndroidSimpleBufferQueueItf bqPlayerBufferQueue;
+ static SLVolumeItf bqPlayerVolume;
+ static Mixer* g_mixer;
+-#define BUFFER_SIZE 512
+-#define BUFFER_SIZE_IN_SAMPLES (BUFFER_SIZE / 2)
+ 
+ // Double buffering.
+-static short buffer[2][BUFFER_SIZE];
+-static int curBuffer = 0;
++static constexpr int BASE_BUFFER_FRAMES = 192;
++static constexpr int MIN_BUFFER_BURSTS = 1;
++static constexpr int MAX_BUFFER_BURSTS = 12;
++static u32 g_buffer_frames = BASE_BUFFER_FRAMES * 4;
++static std::vector<s16> buffer[2];
++static int nextBuffer = 0;
++
++static int ConfiguredBufferBursts()
++{
++  return std::clamp(Config::Get(Config::MAIN_ANDROID_AUDIO_BUFFER_BURSTS), MIN_BUFFER_BURSTS,
++                    MAX_BUFFER_BURSTS);
++}
+ 
+ static void bqPlayerCallback(SLAndroidSimpleBufferQueueItf bq, void* context)
+ {
+@@ -38,10 +50,12 @@ static void bqPlayerCallback(SLAndroidSimpleBufferQueueItf bq, void* context)
+   ASSERT(nullptr == context);
+ 
+   // Render to the fresh buffer
+-  g_mixer->Mix(reinterpret_cast<short*>(buffer[curBuffer]), BUFFER_SIZE_IN_SAMPLES);
+-  SLresult result =
+-      (*bqPlayerBufferQueue)->Enqueue(bqPlayerBufferQueue, buffer[curBuffer], sizeof(buffer[0]));
+-  curBuffer ^= 1;  // Switch buffer
++  s16* fill_buffer = buffer[nextBuffer].data();
++  g_mixer->Mix(fill_buffer, g_buffer_frames);
++  SLresult result = (*bqPlayerBufferQueue)
++                        ->Enqueue(bqPlayerBufferQueue, fill_buffer,
++                                  buffer[nextBuffer].size() * sizeof(s16));
++  nextBuffer ^= 1;  // Switch buffer
+ 
+   // Comment from sample code:
+   // the most likely other result is SL_RESULT_BUFFER_INSUFFICIENT,
+@@ -80,13 +94,35 @@ bool OpenSLESStream::Init()
+   SLDataSink audioSnk = {&loc_outmix, nullptr};
+ 
+   // create audio player
++#ifdef SL_ANDROID_KEY_PERFORMANCE_MODE
++  const SLInterfaceID ids[3] = {SL_IID_BUFFERQUEUE, SL_IID_VOLUME,
++                                SL_IID_ANDROIDCONFIGURATION};
++  const SLboolean req[3] = {SL_BOOLEAN_TRUE, SL_BOOLEAN_TRUE, SL_BOOLEAN_FALSE};
++  result =
++      (*engineEngine)
++          ->CreateAudioPlayer(engineEngine, &bqPlayerObject, &audioSrc, &audioSnk, 3, ids, req);
++#else
+   const SLInterfaceID ids[2] = {SL_IID_BUFFERQUEUE, SL_IID_VOLUME};
+   const SLboolean req[2] = {SL_BOOLEAN_TRUE, SL_BOOLEAN_TRUE};
+   result =
+       (*engineEngine)
+           ->CreateAudioPlayer(engineEngine, &bqPlayerObject, &audioSrc, &audioSnk, 2, ids, req);
++#endif
+   ASSERT(SL_RESULT_SUCCESS == result);
+ 
++#ifdef SL_ANDROID_KEY_PERFORMANCE_MODE
++  SLAndroidConfigurationItf player_config = nullptr;
++  result =
++      (*bqPlayerObject)->GetInterface(bqPlayerObject, SL_IID_ANDROIDCONFIGURATION, &player_config);
++  if (result == SL_RESULT_SUCCESS && player_config)
++  {
++    SLuint32 performance_mode = SL_ANDROID_PERFORMANCE_LATENCY;
++    (*player_config)
++        ->SetConfiguration(player_config, SL_ANDROID_KEY_PERFORMANCE_MODE, &performance_mode,
++                           sizeof(performance_mode));
++  }
++#endif
++
+   result = (*bqPlayerObject)->Realize(bqPlayerObject, SL_BOOLEAN_FALSE);
+   ASSERT(SL_RESULT_SUCCESS == result);
+   result = (*bqPlayerObject)->GetInterface(bqPlayerObject, SL_IID_PLAY, &bqPlayerPlay);
+@@ -101,11 +137,24 @@ bool OpenSLESStream::Init()
+   result = (*bqPlayerPlay)->SetPlayState(bqPlayerPlay, SL_PLAYSTATE_PLAYING);
+   ASSERT(SL_RESULT_SUCCESS == result);
+ 
+-  // Render and enqueue a first buffer.
+-  curBuffer ^= 1;
++  const int configured_bursts = ConfiguredBufferBursts();
++  g_buffer_frames = BASE_BUFFER_FRAMES * configured_bursts;
++  buffer[0].assign(g_buffer_frames * 2, 0);
++  buffer[1].assign(g_buffer_frames * 2, 0);
+   g_mixer = m_mixer.get();
++  g_mixer->Mix(buffer[0].data(), g_buffer_frames);
++  g_mixer->Mix(buffer[1].data(), g_buffer_frames);
++  nextBuffer = 0;
++
++  INFO_LOG_FMT(AUDIO, "OpenSLES bufferBursts={} bufferFrames={}", configured_bursts,
++               g_buffer_frames);
+ 
+-  result = (*bqPlayerBufferQueue)->Enqueue(bqPlayerBufferQueue, buffer[0], sizeof(buffer[0]));
++  result = (*bqPlayerBufferQueue)
++               ->Enqueue(bqPlayerBufferQueue, buffer[0].data(), buffer[0].size() * sizeof(s16));
++  if (SL_RESULT_SUCCESS != result)
++    return false;
++  result = (*bqPlayerBufferQueue)
++               ->Enqueue(bqPlayerBufferQueue, buffer[1].data(), buffer[1].size() * sizeof(s16));
+   if (SL_RESULT_SUCCESS != result)
+     return false;
+ 
 diff --git a/Source/Core/Common/FileUtil.cpp b/Source/Core/Common/FileUtil.cpp
 index 10abba8..d42210b 100644
 --- a/Source/Core/Common/FileUtil.cpp
@@ -395,6 +1090,42 @@ index 10abba8..d42210b 100644
  #endif
  
    return homeDir;
+diff --git a/Source/Core/Core/Config/MainSettings.cpp b/Source/Core/Core/Config/MainSettings.cpp
+index 2a2e77d..7e3033f 100644
+--- a/Source/Core/Core/Config/MainSettings.cpp
++++ b/Source/Core/Core/Config/MainSettings.cpp
+@@ -337,6 +337,9 @@ const Info<bool> MAIN_DUMP_UCODE{{System::Main, "DSP", "DumpUCode"}, false};
+ const Info<std::string> MAIN_AUDIO_BACKEND{{System::Main, "DSP", "Backend"},
+                                            AudioCommon::GetDefaultSoundBackend()};
+ const Info<int> MAIN_AUDIO_VOLUME{{System::Main, "DSP", "Volume"}, 10};
++const Info<int> MAIN_ANDROID_AUDIO_BUFFER_BURSTS{{System::Main, "DSP",
++                                                  "AndroidAudioBufferBursts"},
++                                                 4};
+ const Info<bool> MAIN_AUDIO_MUTED{{System::Main, "DSP", "Muted"}, false};
+ const Info<bool> MAIN_AUDIO_MUTE_ON_DISABLED_SPEED_LIMIT{
+     {System::Main, "DSP", "MuteOnDisabledSpeedLimit"}, false};
+diff --git a/Source/Core/Core/Config/MainSettings.h b/Source/Core/Core/Config/MainSettings.h
+index eab3604..0c488dc 100644
+--- a/Source/Core/Core/Config/MainSettings.h
++++ b/Source/Core/Core/Config/MainSettings.h
+@@ -18,7 +18,9 @@
+ // DSP Backend Types
+ #define BACKEND_NULLSOUND _trans("No Audio Output")
+ #define BACKEND_ALSA "ALSA"
++#define BACKEND_AAUDIO "AAudio"
+ #define BACKEND_CUBEB "Cubeb"
++#define BACKEND_OBOE "Oboe"
+ #define BACKEND_OPENAL "OpenAL"
+ #define BACKEND_PULSEAUDIO "Pulse"
+ #define BACKEND_OPENSLES "OpenSLES"
+@@ -197,6 +199,7 @@ extern const Info<bool> MAIN_DUMP_AUDIO_SILENT;
+ extern const Info<bool> MAIN_DUMP_UCODE;
+ extern const Info<std::string> MAIN_AUDIO_BACKEND;
+ extern const Info<int> MAIN_AUDIO_VOLUME;
++extern const Info<int> MAIN_ANDROID_AUDIO_BUFFER_BURSTS;
+ extern const Info<bool> MAIN_AUDIO_MUTED;
+ extern const Info<bool> MAIN_AUDIO_MUTE_ON_DISABLED_SPEED_LIMIT;
+ #ifdef _WIN32
 diff --git a/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp b/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp
 index beb633f..c3a29b2 100644
 --- a/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp
@@ -524,3 +1255,57 @@ index 19b5bdb..d0bf154 100644
  class CSIDevice_GCController : public ISIDevice
  {
  protected:
+diff --git a/Source/Core/VideoBackends/Vulkan/VKSwapChain.cpp b/Source/Core/VideoBackends/Vulkan/VKSwapChain.cpp
+index 589d9a4..1196323 100644
+--- a/Source/Core/VideoBackends/Vulkan/VKSwapChain.cpp
++++ b/Source/Core/VideoBackends/Vulkan/VKSwapChain.cpp
+@@ -253,6 +253,17 @@ bool SwapChain::SelectPresentMode()
+     return true;
+   }
+ 
++#if defined(VK_USE_PLATFORM_ANDROID_KHR)
++  // Android's compositor can still keep an immediate producer behind BLAST
++  // buffering. Prefer MAILBOX when available so it keeps the newest completed
++  // frame instead of scanning out an older queued one.
++  if (!m_vsync_enabled && Common::Contains(present_modes, VK_PRESENT_MODE_MAILBOX_KHR))
++  {
++    m_present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
++    return true;
++  }
++#endif
++
+   // Prefer screen-tearing, if possible, for lowest latency.
+   if (Common::Contains(present_modes, VK_PRESENT_MODE_IMMEDIATE_KHR))
+   {
+@@ -288,13 +299,29 @@ bool SwapChain::CreateSwapChain()
+   if (!SelectSurfaceFormat() || !SelectPresentMode())
+     return false;
+ 
+-  // Select number of images in swap chain, we prefer one buffer in the background to work on
+-  uint32_t image_count = surface_capabilities.minImageCount + 1;
++  // Select number of images in swap chain. We normally prefer one buffer in
++  // the background to work on, but immediate present mode should use the
++  // minimum image count so a freshly rendered frame can scan out as fast as
++  // possible. On Android we also keep MAILBOX shallow because SurfaceFlinger
++  // already adds its own queueing.
++  bool use_minimum_images = m_present_mode == VK_PRESENT_MODE_IMMEDIATE_KHR;
++#if defined(VK_USE_PLATFORM_ANDROID_KHR)
++  use_minimum_images =
++      use_minimum_images || (!m_vsync_enabled && m_present_mode == VK_PRESENT_MODE_MAILBOX_KHR);
++#endif
++  uint32_t image_count = surface_capabilities.minImageCount;
++  if (!use_minimum_images)
++    image_count += 1;
+ 
+   // maxImageCount can be zero, in which case there isn't an upper limit on the number of buffers.
+   if (surface_capabilities.maxImageCount > 0)
+     image_count = std::min(image_count, surface_capabilities.maxImageCount);
+ 
++  INFO_LOG_FMT(VIDEO,
++               "Vulkan swapchain latency config: present_mode={} images={} min={} max={} vsync={}",
++               static_cast<u32>(m_present_mode), image_count, surface_capabilities.minImageCount,
++               surface_capabilities.maxImageCount, m_vsync_enabled);
++
+   // Determine the dimensions of the swap chain. Values of -1 indicate the size we specify here
+   // determines window size?
+   VkExtent2D size = surface_capabilities.currentExtent;

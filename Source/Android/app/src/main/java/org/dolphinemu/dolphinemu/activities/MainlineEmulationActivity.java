@@ -2,13 +2,17 @@ package org.dolphinemu.dolphinemu.activities;
 
 import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
+import android.os.PerformanceHintManager;
 import android.os.Process;
+import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.Log;
+import android.view.Display;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.Surface;
@@ -42,7 +46,13 @@ import org.dolphinemu.dolphinemu.utils.RawStickInputProviders;
 import org.dolphinemu.dolphinemu.utils.RawStickState;
 import org.dolphinemu.dolphinemu.views.TouchControlOverlayView;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileReader;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.Locale;
+import java.util.Set;
 
 public class MainlineEmulationActivity extends AppCompatActivity implements SurfaceHolder.Callback {
     public static final String EXTRA_ISO_PATH = "iso_path";
@@ -55,8 +65,19 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     private static final String PREF_KEY_AUDIO_BACKEND = "audio_backend";
     private static final String PREF_KEY_AUDIO_BUFFER_BURSTS = "audio_buffer_bursts";
     private static final String BACKEND_VULKAN = "Vulkan";
+    private static final String AUDIO_BACKEND_OBOE = "Oboe";
+    private static final String AUDIO_BACKEND_AAUDIO = "AAudio";
     private static final String AUDIO_BACKEND_OPENSLES = "OpenSLES";
     private static final int AUDIO_BURSTS_BALANCED = 4;
+    private static final String SETTING_PEAK_REFRESH_RATE = "peak_refresh_rate";
+    private static final String SETTING_MIN_REFRESH_RATE = "min_refresh_rate";
+    private static final String[] PERF_HINT_THREAD_NAMES = {
+            "CPU thread",
+            "CPU-GPU thread",
+            "Video thread",
+            "AudioTrack",
+            "NetPlay Client",
+    };
     private static final int EXI_DEVICE_MEMORYCARD = 1;
     private static final int EXI_DEVICE_SLIPPI = 13;
     private static final int EXI_DEVICE_NONE = 0xFF;
@@ -72,8 +93,10 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     private Thread emuThread;
     private HandlerThread rawInputThread;
     private Handler rawInputHandler;
+    private PerformanceHintManager.Session hintSession;
     private volatile boolean emuStarted;
     private volatile boolean rawInputPolling;
+    private volatile int rawInputThreadTid = -1;
     private StickCalibration mainStickCal = StickCalibration.IDENTITY;
     private StickCalibration cStickCal = StickCalibration.IDENTITY;
     private ButtonMap buttonMap = ButtonMap.defaults();
@@ -83,6 +106,10 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     private String isoPath;
     private boolean useGcAdapter;
     private boolean isTrainingMode;
+    private boolean refreshRateSettingsSaved;
+    private boolean refreshRateSettingsOverridden;
+    private String previousPeakRefreshRate;
+    private String previousMinRefreshRate;
     private final Runnable controllerDetectorPoll = new Runnable() {
         @Override
         public void run() {
@@ -244,6 +271,13 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         shutdownRawInputThread();
         ui.removeCallbacks(controllerDetectorPoll);
         shutdownEmuThreadSync();
+        if (hintSession != null) {
+            try {
+                hintSession.close();
+            } catch (Throwable ignored) {
+            }
+            hintSession = null;
+        }
         try {
             NativeLibrary.ClearPadOverride(0);
         } catch (Throwable ignored) {
@@ -252,6 +286,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             rawStickInput.stop();
             rawStickInput = null;
         }
+        restoreSystemRefreshRateSettings();
         NativeLibrary.clearEmulationActivity();
         super.onDestroy();
         if (isFinishing()) {
@@ -268,6 +303,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
 
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
+        applyLowLatencySurfaceConfig(holder);
         NativeLibrary.SurfaceChanged(holder.getSurface());
         startEmulationIfNeeded();
     }
@@ -356,13 +392,8 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     private void applyMainlineRuntimeConfig() {
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
         String backend = prefs.getString(PREF_KEY_BACKEND, BACKEND_VULKAN);
-        String requestedAudioBackend = prefs.getString(PREF_KEY_AUDIO_BACKEND,
-                AUDIO_BACKEND_OPENSLES);
-        String audioBackend = AUDIO_BACKEND_OPENSLES;
-        if (!AUDIO_BACKEND_OPENSLES.equals(requestedAudioBackend)) {
-            Log.w(TAG, "mainline Android audio supports OpenSLES only; ignoring requested "
-                    + requestedAudioBackend);
-        }
+        String audioBackend = sanitizeAudioBackend(prefs.getString(PREF_KEY_AUDIO_BACKEND,
+                AUDIO_BACKEND_OBOE));
         int audioBursts = prefs.getInt(PREF_KEY_AUDIO_BUFFER_BURSTS, AUDIO_BURSTS_BALANCED);
         int port0 = useGcAdapter ? SI_WIIU_ADAPTER : SI_GC_CONTROLLER;
         int portN = useGcAdapter ? SI_WIIU_ADAPTER : SI_NONE;
@@ -371,6 +402,8 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         NativeConfig.setString(NativeConfig.LAYER_BASE, "Dolphin", "DSP", "Backend", audioBackend);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "DSP",
                 "AndroidAudioBufferBursts", audioBursts);
+        Log.i(TAG, "mainline runtime config gfx=" + backend
+                + " audio=" + audioBackend + "/" + audioBursts);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core", "SIDevice0", port0);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core", "SIDevice1", portN);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core", "SIDevice2", portN);
@@ -382,6 +415,15 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         if (useGcAdapter) {
             NativeLibrary.UpdateGCAdapterScanThread();
         }
+    }
+
+    private String sanitizeAudioBackend(String backend) {
+        if (AUDIO_BACKEND_OBOE.equals(backend)
+                || AUDIO_BACKEND_AAUDIO.equals(backend)
+                || AUDIO_BACKEND_OPENSLES.equals(backend)) {
+            return backend;
+        }
+        return AUDIO_BACKEND_OBOE;
     }
 
     private void applyMainlineExiRuntimeConfig() {
@@ -524,6 +566,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         HandlerThread thread = rawInputThread;
         rawInputThread = null;
         rawInputHandler = null;
+        rawInputThreadTid = -1;
         if (thread != null) {
             thread.quitSafely();
             try {
@@ -543,13 +586,17 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         rawInputThread.start();
         rawInputHandler = new Handler(rawInputThread.getLooper());
         rawInputHandler.post(() -> {
+            rawInputThreadTid = Process.myTid();
             try {
                 Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY);
             } catch (Throwable t) {
                 Log.w(TAG, "raw input priority failed: " + t);
             }
-            Log.i(TAG, "mainline raw input polling started blocking="
-                    + (rawStickInput != null && rawStickInput.supportsBlockingWait()));
+            Log.i(TAG, "mainline raw input thread tid=" + rawInputThreadTid
+                    + " blocking=" + (rawStickInput != null && rawStickInput.supportsBlockingWait())
+                    + " waitMs=" + RAW_INPUT_WAIT_MS
+                    + " fallbackPollMs=" + RAW_INPUT_FALLBACK_POLL_MS);
+            updatePerfHintThreads();
         });
     }
 
@@ -610,6 +657,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             }
         }, "MainlineDolphin");
         emuThread.start();
+        registerPerfHintWhenReady();
     }
 
     private void shutdownEmuThreadSync() {
@@ -629,6 +677,263 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
                 Thread.currentThread().interrupt();
             }
         }
+    }
+
+    private void registerPerfHintWhenReady() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return;
+        final PerformanceHintManager mgr =
+                (PerformanceHintManager) getSystemService(PERFORMANCE_HINT_SERVICE);
+        if (mgr == null) return;
+        ui.post(new Runnable() {
+            int attempts = 0;
+
+            @Override
+            public void run() {
+                int[] tids = discoverPerfHintThreadTids(false);
+                if (!hasHotPerfThread()) {
+                    if (++attempts < 250) {
+                        ui.postDelayed(this, 10);
+                        return;
+                    }
+                    tids = discoverPerfHintThreadTids(true);
+                }
+                if (tids.length == 0) {
+                    return;
+                }
+                try {
+                    hintSession = mgr.createHintSession(tids, 16_666_666L);
+                    updatePerfHintThreads();
+                    Log.i(TAG, "mainline PerformanceHintSession created for tids="
+                            + tidsToString(tids));
+                } catch (Throwable t) {
+                    Log.w(TAG, "mainline PerformanceHintSession failed: " + t);
+                }
+            }
+        });
+    }
+
+    private synchronized void updatePerfHintThreads() {
+        if (hintSession == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            return;
+        }
+        int[] tids = discoverPerfHintThreadTids(true);
+        if (tids.length == 0) {
+            return;
+        }
+        try {
+            hintSession.setThreads(tids);
+            Log.i(TAG, "mainline PerformanceHintSession threads=" + tidsToString(tids));
+        } catch (Throwable t) {
+            Log.w(TAG, "mainline PerformanceHintSession setThreads failed: " + t);
+        }
+    }
+
+    private void applyLowLatencySurfaceConfig(SurfaceHolder holder) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    holder.getSurface().setFrameRate(60f,
+                            Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
+                            Surface.CHANGE_FRAME_RATE_ALWAYS);
+                } else {
+                    holder.getSurface().setFrameRate(60f,
+                            Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
+                }
+            } catch (IllegalStateException ignored) {
+            }
+        }
+        preferLowLatencyDisplayMode();
+    }
+
+    private void preferLowLatencyDisplayMode() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return;
+        }
+
+        Display display = getWindowManager().getDefaultDisplay();
+        if (display == null) {
+            return;
+        }
+
+        Display.Mode best = null;
+        for (Display.Mode mode : display.getSupportedModes()) {
+            float refresh = mode.getRefreshRate();
+            float multiple = refresh / 60f;
+            float nearestMultiple = Math.round(multiple);
+            if (nearestMultiple < 1f || Math.abs(multiple - nearestMultiple) > 0.02f) {
+                continue;
+            }
+            if (best == null
+                    || refresh > best.getRefreshRate()
+                    || (refresh == best.getRefreshRate()
+                    && mode.getPhysicalWidth() * mode.getPhysicalHeight()
+                    > best.getPhysicalWidth() * best.getPhysicalHeight())) {
+                best = mode;
+            }
+        }
+        if (best == null) {
+            return;
+        }
+
+        WindowManager.LayoutParams attrs = getWindow().getAttributes();
+        if (attrs.preferredDisplayModeId == best.getModeId()) {
+            temporarilyLiftSystemRefreshRateCap(best.getRefreshRate());
+            return;
+        }
+        attrs.preferredDisplayModeId = best.getModeId();
+        getWindow().setAttributes(attrs);
+        Log.i(TAG, "mainline preferred low-latency display mode id=" + best.getModeId()
+                + " refresh=" + best.getRefreshRate()
+                + " size=" + best.getPhysicalWidth() + "x" + best.getPhysicalHeight());
+        temporarilyLiftSystemRefreshRateCap(best.getRefreshRate());
+    }
+
+    private void temporarilyLiftSystemRefreshRateCap(float targetRefreshRate) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || targetRefreshRate < 61f) {
+            return;
+        }
+
+        String currentPeak = Settings.System.getString(getContentResolver(),
+                SETTING_PEAK_REFRESH_RATE);
+        String currentMin = Settings.System.getString(getContentResolver(),
+                SETTING_MIN_REFRESH_RATE);
+        if (!Settings.System.canWrite(this)) {
+            Log.w(TAG, "WRITE_SETTINGS not granted; mainline refresh caps remain peak="
+                    + currentPeak + " min=" + currentMin
+                    + " while app requested " + targetRefreshRate + "Hz");
+            return;
+        }
+
+        if (!refreshRateSettingsSaved) {
+            previousPeakRefreshRate = currentPeak;
+            previousMinRefreshRate = currentMin;
+            refreshRateSettingsSaved = true;
+        }
+
+        boolean peakAllowed = settingRefreshAtLeast(currentPeak, targetRefreshRate);
+        boolean minAllowed = settingRefreshAtLeast(currentMin, targetRefreshRate);
+        boolean wrote = false;
+        if (!peakAllowed) {
+            wrote |= putSystemRefreshRateSetting(SETTING_PEAK_REFRESH_RATE,
+                    formatRefreshRate(targetRefreshRate));
+        }
+        if (!minAllowed) {
+            wrote |= putSystemRefreshRateSetting(SETTING_MIN_REFRESH_RATE,
+                    formatRefreshRate(targetRefreshRate));
+        }
+        if (wrote) {
+            refreshRateSettingsOverridden = true;
+            Log.i(TAG, "mainline temporarily lifted system refresh caps to "
+                    + targetRefreshRate + "Hz");
+        }
+    }
+
+    private boolean settingRefreshAtLeast(String value, float targetRefreshRate) {
+        try {
+            return value != null && Float.parseFloat(value) >= targetRefreshRate - 0.5f;
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
+    }
+
+    private String formatRefreshRate(float refreshRate) {
+        return String.format(Locale.US, "%.1f", refreshRate);
+    }
+
+    private boolean putSystemRefreshRateSetting(String key, String value) {
+        try {
+            return Settings.System.putString(getContentResolver(), key, value);
+        } catch (Throwable t) {
+            Log.w(TAG, "mainline system refresh cap write blocked for " + key + "=" + value
+                    + ": " + t);
+            return false;
+        }
+    }
+
+    private void restoreSystemRefreshRateSettings() {
+        if (!refreshRateSettingsOverridden || !Settings.System.canWrite(this)) {
+            return;
+        }
+        putSystemRefreshRateSetting(SETTING_PEAK_REFRESH_RATE, previousPeakRefreshRate);
+        putSystemRefreshRateSetting(SETTING_MIN_REFRESH_RATE, previousMinRefreshRate);
+        Log.i(TAG, "mainline restored system refresh caps peak=" + previousPeakRefreshRate
+                + " min=" + previousMinRefreshRate);
+        refreshRateSettingsOverridden = false;
+    }
+
+    private int[] discoverPerfHintThreadTids(boolean allowFallback) {
+        Set<Integer> tids = new LinkedHashSet<>();
+        File[] taskFiles = new File("/proc/self/task").listFiles();
+        if (taskFiles != null) {
+            for (File task : taskFiles) {
+                int tid;
+                try {
+                    tid = Integer.parseInt(task.getName());
+                } catch (NumberFormatException ignored) {
+                    continue;
+                }
+                String comm = readThreadComm(task);
+                if (comm == null) {
+                    continue;
+                }
+                for (String wanted : PERF_HINT_THREAD_NAMES) {
+                    if (wanted.equals(comm)) {
+                        tids.add(tid);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (rawInputThreadTid > 0 && shouldPollRawStickSource()) {
+            tids.add(rawInputThreadTid);
+        }
+        if (allowFallback) {
+            int emuTid = NativeLibrary.GetEmuThreadTid();
+            if (emuTid > 0) {
+                tids.add(emuTid);
+            }
+        }
+
+        ArrayList<Integer> list = new ArrayList<>(tids);
+        int[] result = new int[list.size()];
+        for (int i = 0; i < list.size(); i++) {
+            result[i] = list.get(i);
+        }
+        return result;
+    }
+
+    private boolean hasHotPerfThread() {
+        File[] taskFiles = new File("/proc/self/task").listFiles();
+        if (taskFiles == null) {
+            return false;
+        }
+        for (File task : taskFiles) {
+            String comm = readThreadComm(task);
+            if ("CPU thread".equals(comm) || "CPU-GPU thread".equals(comm)
+                    || "Video thread".equals(comm)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String readThreadComm(File taskDir) {
+        File comm = new File(taskDir, "comm");
+        try (BufferedReader reader = new BufferedReader(new FileReader(comm))) {
+            return reader.readLine();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String tidsToString(int[] tids) {
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < tids.length; i++) {
+            if (i > 0) sb.append(',');
+            sb.append(tids[i]);
+        }
+        return sb.append(']').toString();
     }
 
     private void applyImmersive() {

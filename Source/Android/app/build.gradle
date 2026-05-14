@@ -13,6 +13,7 @@ def mainlinePatchDir = file("${rootDir}/mainline-patches")
 def mainlineWorkDir = layout.buildDirectory.dir("mainlineSlippi/source")
 def mainlineCmakeBuildDir = layout.buildDirectory.dir("mainlineSlippi/cmake/arm64-v8a")
 def mainlineGeneratedDir = layout.buildDirectory.dir("generated/mainlineSlippi")
+def mainlineOboePrefabDir = layout.buildDirectory.dir("mainlineSlippi/oboePrefab")
 
 android {
     namespace 'org.dolphinemu.dolphinemu'
@@ -186,6 +187,17 @@ dependencies {
     implementation 'androidx.security:security-crypto:1.1.0-alpha06'
 }
 
+def mainlineOboeAar = configurations.detachedConfiguration(
+        dependencies.create('com.google.oboe:oboe:1.10.0@aar'))
+
+tasks.register('extractMainlineOboePrefab', Copy) {
+    onlyIf { !skipMainlineCoreBuild }
+    from({ zipTree(mainlineOboeAar.singleFile) }) {
+        include 'prefab/modules/oboe/**'
+    }
+    into(mainlineOboePrefabDir)
+}
+
 def mainlineSubmodulePaths = [
         'Externals/SlippiRustExtensions',
         'Externals/corrosion',
@@ -356,10 +368,12 @@ def rustToolchainArgsFor = { File sourceDir ->
 
 tasks.register('configureMainlineSlippiCore', Exec) {
     dependsOn tasks.named('applyMainlineSlippiPatches')
+    dependsOn tasks.named('extractMainlineOboePrefab')
     onlyIf { !skipMainlineCoreBuild }
     doFirst {
         def sourceDir = mainlineWorkDir.get().asFile
         def nativeBuildDir = mainlineCmakeBuildDir.get().asFile
+        def oboeModuleDir = new File(mainlineOboePrefabDir.get().asFile, 'prefab/modules/oboe')
         nativeBuildDir.mkdirs()
         def cmakeBinDir = new File(android.sdkDirectory, 'cmake/3.22.1/bin')
         def cmake = new File(cmakeBinDir, 'cmake')
@@ -391,6 +405,7 @@ tasks.register('configureMainlineSlippiCore', Exec) {
                 '-DENABLE_QT=OFF',
                 '-DENABLE_TESTS=OFF',
                 '-DENABLE_VULKAN=ON',
+                "-DMAINLINE_OBOE_PREFAB_DIR=${oboeModuleDir.absolutePath}",
                 '-DUSE_RETRO_ACHIEVEMENTS=ON',
                 '-DUSE_UPNP=OFF'
         ] + rustToolchainArgsFor(sourceDir)
