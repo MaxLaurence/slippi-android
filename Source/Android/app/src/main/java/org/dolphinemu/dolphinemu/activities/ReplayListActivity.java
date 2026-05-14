@@ -39,6 +39,7 @@ import org.dolphinemu.dolphinemu.MainlineCore;
 import org.dolphinemu.dolphinemu.NativeLibrary;
 import org.dolphinemu.dolphinemu.R;
 import org.dolphinemu.dolphinemu.UserDirectoryBootstrap;
+import org.dolphinemu.dolphinemu.gpu.GpuDriverManager;
 import org.dolphinemu.dolphinemu.replay.ReplayConfig;
 import org.dolphinemu.dolphinemu.replay.ReplayMetadata;
 import org.dolphinemu.dolphinemu.replay.ReplayStore;
@@ -269,6 +270,9 @@ public class ReplayListActivity extends AppCompatActivity {
         it.putExtra(EmulationActivity.EXTRA_REPLAY_PATH, slp.getAbsolutePath());
         it.putExtra(EmulationActivity.EXTRA_LAUNCH_MODE, EmulationActivity.LAUNCH_MODE_REPLAY);
         // Replay mode never uses adapter input; leave the default (false).
+        GpuDriverManager.prepareNativeDirectoriesForCurrentBackend(this);
+        NativeLibrary.SetConfig("GFX.ini", "Settings", "DriverLibName",
+                GpuDriverManager.selectedLibraryNameForCurrentBackend(this));
         startActivity(it);
     }
 

@@ -27,6 +27,7 @@ import org.dolphinemu.dolphinemu.R;
 import org.dolphinemu.dolphinemu.UserDirectoryBootstrap;
 import org.dolphinemu.dolphinemu.controller.ButtonMap;
 import org.dolphinemu.dolphinemu.controller.ControllerProfile;
+import org.dolphinemu.dolphinemu.gpu.GpuDriverManager;
 import org.dolphinemu.dolphinemu.training.TrainingModeManager;
 
 import java.io.File;
@@ -458,6 +459,9 @@ public class TrainingModeActivity extends AppCompatActivity {
     private boolean applyControllerAndAvRuntimeConfig() {
         String backend = prefs().getString(PREF_KEY_BACKEND, BACKEND_VULKAN);
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "GFXBackend", backend);
+        GpuDriverManager.prepareNativeDirectoriesForBackend(this, backend);
+        NativeLibrary.SetConfig("GFX.ini", "Settings", "DriverLibName",
+                GpuDriverManager.selectedLibraryNameForBackend(this, backend));
 
         String audioBackend = prefs().getString(PREF_KEY_AUDIO_BACKEND, AUDIO_BACKEND_OBOE);
         int bursts = prefs().getInt(PREF_KEY_AUDIO_BUFFER_BURSTS, AUDIO_BURSTS_BALANCED);

@@ -52,6 +52,12 @@
 // REMEMBER: strdup considered harmful!
 namespace File
 {
+#ifdef ANDROID
+static std::string s_android_sys_directory;
+static std::string s_android_driver_directory;
+static std::string s_android_lib_directory;
+#endif
+
 // Remove any ending forward slashes from directory paths
 // Modifies argument.
 static void StripTailDirSlashes(std::string &fname)
@@ -805,7 +811,8 @@ std::string GetSysDirectory()
 	// them into the app's private files dir at <files_dir>/dolphin/Sys/.
 	// We can't use /sdcard on modern Android (scoped storage), so anchor
 	// off the user dir that the Java side already configured.
-	sysDir = GetUserPath(D_USER_IDX) + "Sys";
+	sysDir = s_android_sys_directory.empty() ? GetUserPath(D_USER_IDX) + "Sys" :
+	                                           s_android_sys_directory;
 #else
 	sysDir = SYSDATA_DIR;
 #endif
@@ -814,6 +821,36 @@ std::string GetSysDirectory()
 	INFO_LOG(COMMON, "GetSysDirectory: Setting to %s:", sysDir.c_str());
 	return sysDir;
 }
+
+#ifdef ANDROID
+void SetSysDirectory(const std::string& path)
+{
+	s_android_sys_directory = path;
+}
+
+void SetGpuDriverDirectories(const std::string& path, const std::string& lib_path)
+{
+	s_android_driver_directory = path;
+	s_android_lib_directory = lib_path;
+}
+
+std::string GetGpuDriverDirectory(unsigned int dir_index)
+{
+	switch (dir_index)
+	{
+	case D_GPU_DRIVERS_EXTRACTED:
+		return s_android_driver_directory + DIR_SEP GPU_DRIVERS_EXTRACTED DIR_SEP;
+	case D_GPU_DRIVERS_TMP:
+		return s_android_driver_directory + DIR_SEP GPU_DRIVERS_TMP DIR_SEP;
+	case D_GPU_DRIVERS_HOOKS:
+		return s_android_lib_directory;
+	case D_GPU_DRIVERS_FILE_REDIRECT:
+		return s_android_driver_directory + DIR_SEP GPU_DRIVERS_FILE_REDIRECT DIR_SEP;
+	default:
+		return "";
+	}
+}
+#endif
 
 // This returns the folder where certain configuration files are stored (i.e,
 // `user.json`, etc). 

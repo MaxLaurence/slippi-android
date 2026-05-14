@@ -43,6 +43,9 @@ set(SRCS ButtonManager.cpp
 
 set(SHARED_LIB main)
 add_library(${SHARED_LIB} SHARED ${SRCS})
+if(ANDROID AND _M_ARM_64)
+  add_dependencies(${SHARED_LIB} main_hook file_redirect_hook hook_impl gsl_alloc_hook)
+endif()
 target_link_libraries(${SHARED_LIB}
 log
 android

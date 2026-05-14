@@ -13,3 +13,6 @@
 	url = https://github.com/project-slippi/dolphin.git
 	branch = slippi
 	shallow = true
+[submodule "Externals/libadrenotools"]
+	path = Externals/libadrenotools
+	url = https://github.com/bylaws/libadrenotools.git

@@ -55,6 +55,7 @@ VideoConfig::VideoConfig()
 	backend_info.bSupportsInternalResolutionFrameDumps = false;
 	bEnableValidationLayer = false;
 	bBackendMultithreading = true;
+	customDriverLibraryName = "";
 	backend_info.MaxTextureSize = 4096;
 }
 
@@ -163,6 +164,7 @@ void VideoConfig::Load(const std::string& ini_file)
 	settings->Get("EnableValidationLayer", &bEnableValidationLayer, false);
 	settings->Get("BackendMultithreading", &bBackendMultithreading, true);
 	settings->Get("CommandBufferExecuteInterval", &iCommandBufferExecuteInterval, 100);
+	settings->Get("DriverLibName", &customDriverLibraryName, "");
 
 	IniFile::Section* enhancements = iniFile.GetOrCreateSection("Enhancements");
 	enhancements->Get("ForceFiltering", &bForceFiltering, 0);
@@ -516,6 +518,7 @@ void VideoConfig::Save(const std::string& ini_file)
 	settings->Set("EnableValidationLayer", bEnableValidationLayer);
 	settings->Set("BackendMultithreading", bBackendMultithreading);
 	settings->Set("CommandBufferExecuteInterval", iCommandBufferExecuteInterval);
+	settings->Set("DriverLibName", customDriverLibraryName);
 
 	IniFile::Section* enhancements = iniFile.GetOrCreateSection("Enhancements");
 	enhancements->Set("ForceFiltering", bForceFiltering);

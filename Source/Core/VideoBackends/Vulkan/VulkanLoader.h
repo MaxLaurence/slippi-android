@@ -34,10 +34,14 @@
 
 namespace Vulkan
 {
-bool LoadVulkanLibrary();
+bool LoadVulkanLibrary(bool force_system_library = false);
 bool LoadVulkanInstanceFunctions(VkInstance instance);
 bool LoadVulkanDeviceFunctions(VkDevice device);
 void UnloadVulkanLibrary();
+
+#ifdef ANDROID
+bool SupportsCustomDriver();
+#endif
 
 const char* VkResultToString(VkResult res);
 void LogVulkanResult(int level, const char* func_name, VkResult res, const char* msg, ...);

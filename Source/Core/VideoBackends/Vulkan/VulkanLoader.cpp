@@ -6,12 +6,19 @@
 #include <cstdarg>
 #include <cstdlib>
 
+#if defined(ANDROID) && defined(_M_ARM_64)
+#include <android/api-level.h>
+#include <adrenotools/driver.h>
+#include <unistd.h>
+#endif
+
 #include "Common/CommonFuncs.h"
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
 
 #include "VideoBackends/Vulkan/VulkanLoader.h"
+#include "VideoCommon/VideoConfig.h"
 
 #if defined(_WIN32)
 #include <Windows.h>
@@ -45,8 +52,9 @@ static void ResetVulkanLibraryFunctionPointers()
 static HMODULE vulkan_module;
 static std::atomic_int vulkan_module_ref_count = {0};
 
-bool LoadVulkanLibrary()
+bool LoadVulkanLibrary(bool force_system_library)
 {
+	(void)force_system_library;
 	// Not thread safe if a second thread calls the loader whilst the first is still in-progress.
 	if (vulkan_module)
 	{
@@ -102,8 +110,9 @@ void UnloadVulkanLibrary()
 static void *vulkan_module;
 static std::atomic_int vulkan_module_ref_count = {0};
 
-bool LoadVulkanLibrary()
+bool LoadVulkanLibrary(bool force_system_library)
 {
+	(void)force_system_library;
 	// Not thread safe if a second thread calls the loader whilst the first is still in-progress.
 	if (vulkan_module)
 	{
@@ -123,13 +132,43 @@ bool LoadVulkanLibrary()
 		vulkan_module = dlopen(path.c_str(), RTLD_NOW);
 	}
 #else
-	// Names of libraries to search. Desktop should use libvulkan.so.1 or libvulkan.so.
-	static const char *search_lib_names[] = {"libvulkan.so.1", "libvulkan.so"};
-	for (size_t i = 0; i < ArraySize(search_lib_names); i++)
+#if defined(ANDROID) && defined(_M_ARM_64)
+	const std::string& driver_lib_name = g_Config.customDriverLibraryName;
+	if (!force_system_library && !driver_lib_name.empty() && SupportsCustomDriver())
 	{
-		vulkan_module = dlopen(search_lib_names[i], RTLD_NOW);
+		std::string tmp_dir = File::GetGpuDriverDirectory(D_GPU_DRIVERS_TMP);
+		std::string hook_dir = File::GetGpuDriverDirectory(D_GPU_DRIVERS_HOOKS);
+		std::string file_redirect_dir = File::GetGpuDriverDirectory(D_GPU_DRIVERS_FILE_REDIRECT);
+		std::string driver_dir = File::GetGpuDriverDirectory(D_GPU_DRIVERS_EXTRACTED);
+		INFO_LOG(VIDEO, "Loading custom Vulkan driver: %s", driver_lib_name.c_str());
+
+		vulkan_module = adrenotools_open_libvulkan(
+		    RTLD_NOW, ADRENOTOOLS_DRIVER_FILE_REDIRECT | ADRENOTOOLS_DRIVER_CUSTOM,
+		    tmp_dir.c_str(), hook_dir.c_str(), driver_dir.c_str(), driver_lib_name.c_str(),
+		    file_redirect_dir.c_str(), nullptr);
 		if (vulkan_module)
-			break;
+		{
+			INFO_LOG(VIDEO, "Successfully loaded custom Vulkan driver: %s",
+			         driver_lib_name.c_str());
+		}
+		else
+		{
+			WARN_LOG(VIDEO, "Loading custom Vulkan driver failed: %s",
+			         driver_lib_name.c_str());
+		}
+	}
+#endif
+
+	// Names of libraries to search. Desktop should use libvulkan.so.1 or libvulkan.so.
+	if (!vulkan_module)
+	{
+		static const char *search_lib_names[] = {"libvulkan.so.1", "libvulkan.so"};
+		for (size_t i = 0; i < ArraySize(search_lib_names); i++)
+		{
+			vulkan_module = dlopen(search_lib_names[i], RTLD_NOW);
+			if (vulkan_module)
+				break;
+		}
 	}
 #endif
 
@@ -297,6 +336,18 @@ const char *VkResultToString(VkResult res)
 		return "UNKNOWN_VK_RESULT";
 	}
 }
+
+#if defined(ANDROID) && defined(_M_ARM_64)
+bool SupportsCustomDriver()
+{
+	return android_get_device_api_level() >= 28 && access("/dev/kgsl-3d0", F_OK) == 0;
+}
+#elif defined(ANDROID)
+bool SupportsCustomDriver()
+{
+	return false;
+}
+#endif
 
 void LogVulkanResult(int level, const char *func_name, VkResult res, const char *msg, ...)
 {

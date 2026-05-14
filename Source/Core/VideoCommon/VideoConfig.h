@@ -234,6 +234,7 @@ struct VideoConfig final
 	// Early command buffer execution interval in number of draws.
 	// Currently only supported with Vulkan.
 	int iCommandBufferExecuteInterval;
+	std::string customDriverLibraryName;
 
 	// Static config per API
 	// TODO: Move this out of VideoConfig

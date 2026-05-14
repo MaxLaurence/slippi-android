@@ -1240,6 +1240,21 @@ JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetUserDirec
   UICommon::SetUserDirectory(directory);
 }
 
+JNIEXPORT void JNICALL
+Java_org_dolphinemu_dolphinemu_utils_DirectoryInitialization_SetSysDirectory(
+    JNIEnv* env, jclass obj, jstring jDirectory)
+{
+  File::SetSysDirectory(GetJString(env, jDirectory));
+}
+
+JNIEXPORT void JNICALL
+Java_org_dolphinemu_dolphinemu_utils_DirectoryInitialization_SetGpuDriverDirectories(
+    JNIEnv* env, jclass obj, jstring jDirectory, jstring jLibraryDirectory)
+{
+  File::SetGpuDriverDirectories(GetJString(env, jDirectory),
+                                GetJString(env, jLibraryDirectory));
+}
+
 JNIEXPORT jstring JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetUserDirectory(JNIEnv* env,
                                                                                         jobject obj)
 {

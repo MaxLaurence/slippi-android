@@ -695,6 +695,9 @@ add_subdirectory(Externals/Bochs_disasm)
 include_directories(Externals/Bochs_disasm)
 
 add_subdirectory(Externals/glslang)
+if(ANDROID AND _M_ARM_64)
+	add_subdirectory(Externals/libadrenotools)
+endif()
 
 add_subdirectory(Externals/SlippiLib)
 include_directories(Externals/SlippiLib)

@@ -34,6 +34,7 @@ import org.dolphinemu.dolphinemu.controller.ControllerProfile;
 import org.dolphinemu.dolphinemu.controller.GameCubePadState;
 import org.dolphinemu.dolphinemu.controller.StickCalibration;
 import org.dolphinemu.dolphinemu.controller.TouchOverlayLayoutStore;
+import org.dolphinemu.dolphinemu.gpu.GpuDriverManager;
 import org.dolphinemu.dolphinemu.replay.GeckoOverride;
 import org.dolphinemu.dolphinemu.replay.ReplayConfig;
 import org.dolphinemu.dolphinemu.utils.PhysicalControllerDetector;
@@ -252,6 +253,9 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         Log.i(TAG, "touch controls force flag=" + BuildConfig.FORCE_TOUCH_CONTROLS);
 
         NativeLibrary.setEmulationActivity(this);
+        GpuDriverManager.prepareNativeDirectoriesForCurrentBackend(this);
+        NativeLibrary.SetConfig("GFX.ini", "Settings", "DriverLibName",
+                GpuDriverManager.selectedLibraryNameForCurrentBackend(this));
         applyImmersive();
         updateTouchOverlayVisibility();
 

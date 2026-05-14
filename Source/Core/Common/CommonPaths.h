@@ -87,6 +87,11 @@
 #define PIPES_DIR "Pipes"
 #define MEMORYWATCHER_DIR "MemoryWatcher"
 
+// GPU driver package directories
+#define GPU_DRIVERS_EXTRACTED "Extracted"
+#define GPU_DRIVERS_TMP "Tmp"
+#define GPU_DRIVERS_FILE_REDIRECT "FileRedirect"
+
 // The theme directory used by default
 #define DEFAULT_THEME_DIR "Clean Blue"
 

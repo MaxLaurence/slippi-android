@@ -12,6 +12,7 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -28,6 +29,7 @@ import org.dolphinemu.dolphinemu.MainlineCore;
 import org.dolphinemu.dolphinemu.NativeLibrary;
 import org.dolphinemu.dolphinemu.R;
 import org.dolphinemu.dolphinemu.UserDirectoryBootstrap;
+import org.dolphinemu.dolphinemu.gpu.GpuDriverManager;
 // SlippiAuthClient / SlippiSession (Firebase-based) intentionally removed
 // — the Slippi team prefers users go through their slippi.gg login flow
 // in a WebView (SlippiLoginActivity), which we trigger from the auth card
@@ -47,6 +49,8 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * One-screen launcher: pick an ISO, sign into Slippi (or drop in a
@@ -146,6 +150,12 @@ public class MainActivity extends AppCompatActivity {
                 }
             });
 
+    private final ActivityResultLauncher<String[]> pickGpuDriver =
+            registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
+                if (uri == null) return;
+                installImportedGpuDriver(uri);
+            });
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -223,6 +233,8 @@ public class MainActivity extends AppCompatActivity {
             if (!isChecked) return;
             String value = checkedId == R.id.backend_vulkan ? BACKEND_VULKAN : BACKEND_OGL;
             prefs().edit().putString(PREF_KEY_BACKEND, value).apply();
+            applyGpuDriverConfig(value);
+            refresh();
         });
 
         // Initial auth state: signed in iff there's a user.json on disk.
@@ -439,6 +451,202 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
+    private void showGpuDriverChooser() {
+        if (!GpuDriverManager.canAttemptCustomDriverLoading()) {
+            new AlertDialog.Builder(this)
+                    .setTitle(R.string.gpu_driver_title)
+                    .setMessage(R.string.gpu_driver_unsupported)
+                    .setPositiveButton(R.string.gpu_driver_use_system, (dialog, which) -> {
+                        GpuDriverManager.useSystemDriver(this);
+                        applyGpuDriverConfig();
+                        toast(getString(R.string.gpu_driver_system_selected));
+                    })
+                    .setNegativeButton(android.R.string.ok, null)
+                    .show();
+            return;
+        }
+
+        AlertDialog loading = new AlertDialog.Builder(this)
+                .setTitle(R.string.gpu_driver_title)
+                .setMessage(R.string.gpu_driver_fetching)
+                .setNegativeButton(android.R.string.cancel, null)
+                .create();
+        loading.show();
+
+        new Thread(() -> {
+            try {
+                List<GpuDriverManager.DriverPackage> packages = GpuDriverManager.fetchCatalog();
+                runOnUiThread(() -> {
+                    if (loading.isShowing()) loading.dismiss();
+                    showGpuDriverCatalog(packages);
+                });
+            } catch (Exception e) {
+                Log.w(TAG, "GPU driver catalog fetch failed", e);
+                runOnUiThread(() -> {
+                    if (loading.isShowing()) loading.dismiss();
+                    toast(getString(R.string.gpu_driver_fetch_failed,
+                            e.getMessage() == null ? e.toString() : e.getMessage()));
+                    showGpuDriverCatalog(new ArrayList<>());
+                });
+            }
+        }, "GpuDriverCatalog").start();
+    }
+
+    private void showGpuDriverCatalog(List<GpuDriverManager.DriverPackage> packages) {
+        List<CharSequence> labels = new ArrayList<>();
+        List<Runnable> actions = new ArrayList<>();
+        List<GpuDriverManager.CachedDriver> cachedDrivers =
+                GpuDriverManager.listCachedDrivers(this);
+
+        labels.add(getString(R.string.gpu_driver_use_system));
+        actions.add(() -> {
+            GpuDriverManager.useSystemDriver(this);
+            applyGpuDriverConfig();
+            toast(getString(R.string.gpu_driver_system_selected));
+        });
+        labels.add(getString(R.string.gpu_driver_import));
+        actions.add(() -> pickGpuDriver.launch(new String[]{
+                "application/zip", "application/octet-stream", "*/*"}));
+        for (GpuDriverManager.CachedDriver cached : cachedDrivers) {
+            labels.add(getString(R.string.gpu_driver_cached_item,
+                    cached.label, cached.summary()));
+            actions.add(() -> selectCachedGpuDriver(cached));
+        }
+        if (!cachedDrivers.isEmpty()) {
+            labels.add(getString(R.string.gpu_driver_remove));
+            actions.add(() -> {
+                GpuDriverManager.removeInstalledDriver(this);
+                applyGpuDriverConfig();
+                toast(getString(R.string.gpu_driver_removed));
+            });
+        }
+        for (GpuDriverManager.DriverPackage pkg : packages) {
+            labels.add(pkg.displayName + "\n" + pkg.summary() + " · " + pkg.repositoryLabel);
+            actions.add(() -> confirmGpuDriverInstall(pkg));
+        }
+
+        if (packages.isEmpty() && cachedDrivers.isEmpty()) {
+            labels.add(getString(R.string.gpu_driver_empty));
+            actions.add(() -> {});
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.gpu_driver_title_current,
+                        GpuDriverManager.currentLabel(this)))
+                .setItems(labels.toArray(new CharSequence[0]), (dialog, which) -> {
+                    Runnable action = actions.get(which);
+                    if (action != null) action.run();
+                })
+                .show();
+    }
+
+    private void confirmGpuDriverInstall(GpuDriverManager.DriverPackage pkg) {
+        new AlertDialog.Builder(this)
+                .setTitle(pkg.displayName)
+                .setMessage(getString(R.string.gpu_driver_install_confirm,
+                        pkg.repositoryLabel, pkg.summary()))
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(R.string.gpu_driver_download,
+                        (dialog, which) -> installGpuDriver(pkg))
+                .show();
+    }
+
+    private void installGpuDriver(GpuDriverManager.DriverPackage pkg) {
+        showGpuDriverInstallProgress(pkg.displayName, progress ->
+                GpuDriverManager.installFromUrl(getApplicationContext(), pkg, progress));
+    }
+
+    private void selectCachedGpuDriver(GpuDriverManager.CachedDriver driver) {
+        showGpuDriverInstallProgress(driver.label, progress ->
+                GpuDriverManager.selectCachedDriver(getApplicationContext(), driver));
+    }
+
+    private void installImportedGpuDriver(Uri uri) {
+        showGpuDriverInstallProgress(getString(R.string.gpu_driver_imported_driver), progress -> {
+            try (InputStream in = getContentResolver().openInputStream(uri)) {
+                if (in == null) throw new IOException("Could not open selected driver");
+                return GpuDriverManager.installFromStream(getApplicationContext(), in,
+                        getString(R.string.gpu_driver_imported_driver),
+                        getString(R.string.gpu_driver_import_source),
+                        uri.toString(), progress);
+            }
+        });
+    }
+
+    private void showGpuDriverInstallProgress(String title, GpuDriverInstallAction action) {
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) (20 * getResources().getDisplayMetrics().density);
+        body.setPadding(pad, pad / 2, pad, 0);
+        TextView label = new TextView(this);
+        label.setTextColor(getColor(R.color.text_primary));
+        label.setText(R.string.gpu_driver_installing);
+        ProgressBar progress = new ProgressBar(this, null,
+                android.R.attr.progressBarStyleHorizontal);
+        progress.setIndeterminate(true);
+        progress.setMax(1000);
+        body.addView(label);
+        body.addView(progress);
+
+        AlertDialog progressDialog = new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setView(body)
+                .setCancelable(false)
+                .create();
+        progressDialog.show();
+
+        new Thread(() -> {
+            try {
+                GpuDriverManager.InstallResult result = action.run(
+                        (stage, completedBytes, totalBytes) -> runOnUiThread(() -> {
+                            label.setText(stage);
+                            if (totalBytes > 0L && completedBytes >= 0L) {
+                                progress.setIndeterminate(false);
+                                progress.setProgress((int) Math.min(
+                                        1000L, completedBytes * 1000L / totalBytes));
+                            } else {
+                                progress.setIndeterminate(true);
+                            }
+                        }));
+                runOnUiThread(() -> {
+                    progressDialog.dismiss();
+                    if (!result.success) {
+                        showGpuDriverInstallFailure(result.error);
+                        return;
+                    }
+                    applyGpuDriverConfig();
+                    toast(getString(R.string.gpu_driver_installed,
+                            GpuDriverManager.currentLabel(this)));
+                });
+            } catch (Exception e) {
+                Log.w(TAG, "GPU driver install failed", e);
+                runOnUiThread(() -> {
+                    progressDialog.dismiss();
+                    showGpuDriverInstallFailure(e.getMessage() == null
+                            ? e.toString() : e.getMessage());
+                });
+            }
+        }, "GpuDriverInstall").start();
+    }
+
+    private void showGpuDriverInstallFailure(String message) {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.gpu_driver_install_failed_title)
+                .setMessage(message == null ? getString(R.string.gpu_driver_install_failed) : message)
+                .setPositiveButton(android.R.string.ok, null)
+                .show();
+    }
+
+    private void applyGpuDriverConfig() {
+        applyGpuDriverConfig(prefs().getString(PREF_KEY_BACKEND, BACKEND_VULKAN));
+    }
+
+    private void applyGpuDriverConfig(String backend) {
+        GpuDriverManager.prepareNativeDirectoriesForBackend(this, backend);
+        NativeLibrary.SetConfig("GFX.ini", "Settings", "DriverLibName",
+                GpuDriverManager.selectedLibraryNameForBackend(this, backend));
+    }
+
     private void showLauncherSettingsMenu(View anchor) {
         AudioPreset audioPreset = currentAudioPreset();
         PopupMenu menu = new PopupMenu(this, anchor);
@@ -446,10 +654,17 @@ public class MainActivity extends AppCompatActivity {
         menu.getMenu().findItem(R.id.menu_launcher_audio).setTitle(
                 getString(R.string.launcher_settings_audio_current,
                         audioPreset.backend, audioPreset.bursts));
+        menu.getMenu().findItem(R.id.menu_launcher_gpu_driver).setTitle(
+                getString(R.string.launcher_settings_gpu_driver_current,
+                        GpuDriverManager.currentLabel(this)));
         menu.setOnMenuItemClickListener(item -> {
             int id = item.getItemId();
             if (id == R.id.menu_launcher_audio) {
                 showAudioChooser();
+                return true;
+            }
+            if (id == R.id.menu_launcher_gpu_driver) {
+                showGpuDriverChooser();
                 return true;
             }
             if (id == R.id.menu_launcher_calibrate) {
@@ -467,6 +682,11 @@ public class MainActivity extends AppCompatActivity {
             return false;
         });
         menu.show();
+    }
+
+    private interface GpuDriverInstallAction {
+        GpuDriverManager.InstallResult run(GpuDriverManager.ProgressListener progress)
+                throws IOException;
     }
 
     /**
@@ -519,6 +739,7 @@ public class MainActivity extends AppCompatActivity {
         // without first touching the toggle.
         String backend = prefs().getString(PREF_KEY_BACKEND, BACKEND_VULKAN);
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "GFXBackend", backend);
+        applyGpuDriverConfig(backend);
 
         AudioPreset audioPreset = currentAudioPreset();
         NativeLibrary.SetConfig("Dolphin.ini", "DSP", "Backend", audioPreset.backend);

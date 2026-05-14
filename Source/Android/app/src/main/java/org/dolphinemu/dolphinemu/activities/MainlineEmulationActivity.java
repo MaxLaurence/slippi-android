@@ -38,6 +38,7 @@ import org.dolphinemu.dolphinemu.controller.GameCubePadState;
 import org.dolphinemu.dolphinemu.controller.StickCalibration;
 import org.dolphinemu.dolphinemu.controller.TouchOverlayLayoutStore;
 import org.dolphinemu.dolphinemu.features.settings.model.NativeConfig;
+import org.dolphinemu.dolphinemu.gpu.GpuDriverManager;
 import org.dolphinemu.dolphinemu.replay.GeckoOverride;
 import org.dolphinemu.dolphinemu.replay.ReplayConfig;
 import org.dolphinemu.dolphinemu.utils.DirectoryInitialization;
@@ -407,20 +408,14 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         File userDir = MainlineCore.userDir(this);
         File cacheDir = MainlineCore.cacheDir(this);
         File sysDir = MainlineCore.sysDir(this);
-        File driverDir = new File(getFilesDir(), "MainlineGPUDrivers");
-        File extractedDriverDir = new File(driverDir, "Extracted");
-        File tmpDriverDir = new File(driverDir, "Tmp");
-        File redirectDriverDir = new File(driverDir, "FileRedirect");
         cacheDir.mkdirs();
-        extractedDriverDir.mkdirs();
-        tmpDriverDir.mkdirs();
-        redirectDriverDir.mkdirs();
 
         NativeLibrary.SetUserDirectory(userDir.getAbsolutePath());
         NativeLibrary.SetCacheDirectory(cacheDir.getAbsolutePath());
         DirectoryInitialization.SetSysDirectory(sysDir.getAbsolutePath());
-        DirectoryInitialization.SetGpuDriverDirectories(
-                driverDir.getAbsolutePath(), getApplicationInfo().nativeLibraryDir);
+        String backend = PreferenceManager.getDefaultSharedPreferences(this)
+                .getString(PREF_KEY_BACKEND, BACKEND_VULKAN);
+        GpuDriverManager.prepareNativeDirectoriesForBackend(this, backend);
     }
 
     private void applyMainlineRuntimeConfig() {
@@ -433,6 +428,9 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         int portN = useGcAdapter ? SI_WIIU_ADAPTER : SI_NONE;
 
         NativeConfig.setString(NativeConfig.LAYER_BASE, "Dolphin", "Core", "GFXBackend", backend);
+        NativeConfig.setString(NativeConfig.LAYER_BASE, "GFX", "Settings", "DriverLibName",
+                GpuDriverManager.selectedLibraryNameForBackend(this, backend));
+        applyMainlineGraphicsStabilityConfig();
         NativeConfig.setString(NativeConfig.LAYER_BASE, "Dolphin", "DSP", "Backend", audioBackend);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "DSP",
                 "AndroidAudioBufferBursts", audioBursts);
@@ -449,6 +447,23 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         if (useGcAdapter) {
             NativeLibrary.UpdateGCAdapterScanThread();
         }
+    }
+
+    private void applyMainlineGraphicsStabilityConfig() {
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "BackendMultithreading", false);
+        NativeConfig.setInt(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "ShaderCompilationMode", 0);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "WaitForShadersBeforeStarting", true);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "PreferVSForLinePointExpansion", true);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Hacks",
+                "ImmediateXFBEnable", true);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Hacks",
+                "XFBToTextureEnable", true);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Hacks",
+                "SkipDuplicateXFBs", true);
     }
 
     private String sanitizeAudioBackend(String backend) {

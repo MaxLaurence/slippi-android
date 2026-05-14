@@ -49,6 +49,10 @@ enum
 	D_PIPES_IDX,
 	D_MEMORYWATCHER_IDX,
 	D_SLIPPI_IDX,
+	D_GPU_DRIVERS_EXTRACTED,
+	D_GPU_DRIVERS_TMP,
+	D_GPU_DRIVERS_HOOKS,
+	D_GPU_DRIVERS_FILE_REDIRECT,
 	F_DOLPHINCONFIG_IDX,
 	F_DEBUGGERCONFIG_IDX,
 	F_LOGGERCONFIG_IDX,
@@ -157,6 +161,12 @@ std::string GetSlippiUserConfigFolder();
 
 // Returns the path to where the sys file are
 std::string GetSysDirectory();
+
+#ifdef ANDROID
+void SetSysDirectory(const std::string& path);
+void SetGpuDriverDirectories(const std::string& path, const std::string& lib_path);
+std::string GetGpuDriverDirectory(unsigned int dir_index);
+#endif
 
 #ifdef __APPLE__
 std::string GetBundleDirectory();
