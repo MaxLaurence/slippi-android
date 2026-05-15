@@ -68,6 +68,8 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREF_KEY_AUDIO_BACKEND = "audio_backend";
     private static final String PREF_KEY_AUDIO_BUFFER_BURSTS = "audio_buffer_bursts";
     private static final String PREF_KEY_DISPLAY_LATENCY_MODE = "display_latency_mode";
+    private static final String PREF_KEY_LAUNCH_DISCLAIMER_SEEN =
+            "launch_disclaimer_seen_v1";
     private static final String BACKEND_VULKAN = "Vulkan";
     private static final String BACKEND_OGL = "OGL";
     private static final String DISPLAY_LATENCY_SMOOTH = "smooth";
@@ -250,6 +252,7 @@ public class MainActivity extends AppCompatActivity {
         } else {
             renderAuthLoggedOut(null);
         }
+        showLaunchDisclaimerIfNeeded();
     }
 
     @Override
@@ -321,6 +324,19 @@ public class MainActivity extends AppCompatActivity {
         authLoading.setVisibility(View.GONE);
         authForm.setVisibility(View.GONE);
         authSignedIn.setVisibility(View.VISIBLE);
+    }
+
+    private void showLaunchDisclaimerIfNeeded() {
+        SharedPreferences p = prefs();
+        if (p.getBoolean(PREF_KEY_LAUNCH_DISCLAIMER_SEEN, false)) return;
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.launch_disclaimer_title)
+                .setMessage(R.string.launch_disclaimer_body)
+                .setPositiveButton(R.string.launch_disclaimer_confirm, (dialog, which) ->
+                        p.edit().putBoolean(PREF_KEY_LAUNCH_DISCLAIMER_SEEN, true).apply())
+                .setOnCancelListener(dialog ->
+                        p.edit().putBoolean(PREF_KEY_LAUNCH_DISCLAIMER_SEEN, true).apply())
+                .show();
     }
 
     private void refresh() {

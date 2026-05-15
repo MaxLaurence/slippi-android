@@ -4,6 +4,9 @@
     <string name="back">Back</string>
     <string name="header_title">Slippi (unofficial)</string>
     <string name="build_chip">android · alpha</string>
+    <string name="launch_disclaimer_title">Before you play</string>
+    <string name="launch_disclaimer_body">This is an unofficial hobby project and is not affiliated with Project Slippi. Support is not guaranteed.\n\nPlease file bugs and feature requests at:\nhttps://github.com/MaxLaurence/slippi-android/issues\n\nDo not discuss this Android build in the official Slippi Discord.\n\nIf you are registering a fresh Slippi account, log in once on the official PC / Mac / Linux app first to activate the account before using it here.</string>
+    <string name="launch_disclaimer_confirm">I understand</string>
     <string name="iso_section">Melee ISO</string>
     <string name="user_json_section">Slippi user.json</string>
     <string name="account_section">Slippi account</string>
