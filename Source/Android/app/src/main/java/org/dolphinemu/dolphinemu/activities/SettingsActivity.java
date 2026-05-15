@@ -51,6 +51,8 @@ import java.util.List;
 
 public class SettingsActivity extends AppCompatActivity {
     private static final String TAG = "SettingsActivity";
+    private static final String ISSUES_URL =
+            "https://github.com/MaxLaurence/slippi-android/issues";
 
     private FrameLayout contentFrame;
     private LinearLayout nav;
@@ -269,11 +271,24 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     private void populateSupportPane(LinearLayout body) {
+        addActionRow(body, "Report an issue",
+                "Open the GitHub issue tracker",
+                v -> openIssuesPage());
         addActionRow(body, "Export diagnostics",
                 "App, device, settings, controller, and core state",
                 v -> exportDiagnostics());
         addLabel(body, "Version " + BuildConfig.VERSION_NAME
                 + " (" + BuildConfig.VERSION_CODE + ")");
+    }
+
+    private void openIssuesPage() {
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(ISSUES_URL));
+        try {
+            startActivity(intent);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "could not open issues page", e);
+            toast(ISSUES_URL);
+        }
     }
 
     private void exportDiagnostics() {
