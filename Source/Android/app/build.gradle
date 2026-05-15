@@ -8,8 +8,58 @@ plugins {
 // credentials in the binary.
 def forceTouchControls = project.findProperty('forceTouchControls')?.toString()?.toBoolean() ?: false
 def skipMainlineCoreBuild = project.findProperty('skipMainlineCoreBuild')?.toString()?.toBoolean() ?: false
-def androidVersionCode = (project.findProperty('androidVersionCode') ?: '3060005').toString().toInteger()
-def androidVersionName = (project.findProperty('androidVersionName') ?: '3.6.0-android-r5').toString()
+def androidVersionPattern = ~/^v?([0-9]+)\.([0-9]+)\.([0-9]+)-android-r([0-9]+)$/
+def runGit = { List<String> args ->
+    def standardOutputBytes = new ByteArrayOutputStream()
+    def errorOutputBytes = new ByteArrayOutputStream()
+    def result = exec {
+        workingDir file("${rootDir}/../..")
+        commandLine args
+        ignoreExitValue true
+        standardOutput = standardOutputBytes
+        errorOutput = errorOutputBytes
+    }
+    return result.exitValue == 0 ? standardOutputBytes.toString('UTF-8').trim() : ''
+}
+def latestAndroidReleaseTag = {
+    runGit(['git', 'describe', '--tags', '--match', 'v*-android-r*', '--abbrev=0'])
+}
+def normalizeAndroidVersionName = { Object rawValue ->
+    def value = rawValue.toString().trim()
+    def matcher = value =~ androidVersionPattern
+    if (!matcher.matches()) {
+        throw new GradleException(
+                "Android version must look like 3.6.0-android-r7, got '${value}'")
+    }
+    return value.startsWith('v') ? value.substring(1) : value
+}
+def versionCodeForAndroidVersion = { String versionName ->
+    def matcher = versionName =~ androidVersionPattern
+    if (!matcher.matches()) {
+        throw new GradleException(
+                "Android version must look like 3.6.0-android-r7, got '${versionName}'")
+    }
+    return matcher.group(1).toInteger() * 1000000 +
+            matcher.group(2).toInteger() * 10000 +
+            matcher.group(3).toInteger() * 100 +
+            matcher.group(4).toInteger()
+}
+def explicitAndroidVersionName = project.findProperty('androidVersionName')
+def explicitAndroidVersionCode = project.findProperty('androidVersionCode')
+def inferredAndroidVersionTag = latestAndroidReleaseTag()
+def androidVersionName = normalizeAndroidVersionName(
+        explicitAndroidVersionName ?: (inferredAndroidVersionTag ?: '3.6.0-android-r0'))
+def expectedAndroidVersionCode = versionCodeForAndroidVersion(androidVersionName)
+def androidVersionCode = explicitAndroidVersionCode != null
+        ? explicitAndroidVersionCode.toString().toInteger()
+        : expectedAndroidVersionCode
+if (androidVersionCode != expectedAndroidVersionCode &&
+        !project.findProperty('allowAndroidVersionCodeOverride')?.toString()?.toBoolean()) {
+    throw new GradleException(
+            "androidVersionCode=${androidVersionCode} does not match " +
+            "${androidVersionName} (expected ${expectedAndroidVersionCode}). " +
+            "Pass -PallowAndroidVersionCodeOverride=true only for a deliberate compatibility build.")
+}
 def slippiRustPatchDir = file("${rootDir}/slippi-rust-patches")
 def mainlineSlippiRoot = file("${rootDir}/../../Externals/MainlineSlippiDolphin")
 def mainlinePatchDir = file("${rootDir}/mainline-patches")
@@ -20,13 +70,13 @@ def mainlineOboePrefabDir = layout.buildDirectory.dir("mainlineSlippi/oboePrefab
 
 android {
     namespace 'org.dolphinemu.dolphinemu'
-    compileSdk 34
+    compileSdk 35
     ndkVersion '27.1.12297006'
 
     defaultConfig {
         applicationId 'org.ishiiruka.slippidolphin'
         minSdk 29
-        targetSdk 34
+        targetSdk 35
         versionCode androidVersionCode
         versionName androidVersionName
         buildConfigField 'boolean', 'FORCE_TOUCH_CONTROLS', forceTouchControls ? 'true' : 'false'
@@ -280,6 +330,33 @@ tasks.register('applySlippiRustPatches') {
         }
         applyPatchQueue(sourceDir, slippiRustPatchDir, 'Slippi Rust')
     }
+}
+
+tasks.register('printAndroidVersion') {
+    doLast {
+        println "androidVersionName=${androidVersionName}"
+        println "androidVersionCode=${androidVersionCode}"
+    }
+}
+
+tasks.register('validateAndroidReleaseVersion') {
+    doLast {
+        if (explicitAndroidVersionName != null) {
+            return
+        }
+        def matchingHeadTag = runGit([
+                'git', 'tag', '--points-at', 'HEAD', '--list', "v${androidVersionName}"])
+        if (!matchingHeadTag) {
+            throw new GradleException(
+                    "Refusing to assemble an unversioned release APK from an untagged commit. " +
+                    "HEAD is not tagged v${androidVersionName}; pass -PandroidVersionName=<x.y.z-android-rN> " +
+                    "or build from the release tag.")
+        }
+    }
+}
+
+tasks.matching { it.name == 'assembleRelease' }.configureEach {
+    dependsOn tasks.named('validateAndroidReleaseVersion')
 }
 
 def mainlineSubmodulePaths = [

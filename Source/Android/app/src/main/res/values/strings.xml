@@ -81,6 +81,10 @@
     <string name="backend_ogl">OpenGL</string>
     <string name="audio_status_default">Audio Oboe/4</string>
     <string name="audio_status_format">Audio %1$s/%2$d</string>
+    <string name="display_status_default">Display Smooth low latency</string>
+    <string name="display_status_format">Display %1$s</string>
+    <string name="refresh_caps_available">Refresh caps granted</string>
+    <string name="refresh_caps_permission_missing">Refresh caps need permission</string>
     <string name="audio_pick_preset">Audio preset</string>
     <string name="audio_preset_oboe_ultra_low">Oboe - Ultra low latency (1 burst)</string>
     <string name="audio_preset_oboe_low">Oboe - Low latency (2 bursts)</string>
@@ -172,4 +176,8 @@
     <string name="replay_cancel">Cancel</string>
     <string name="replay_share_chooser">Share replay via…</string>
     <string name="replay_unparseable_toast">Couldn\'t read this replay</string>
+    <string name="diagnostics_share_subject">Slippi Android diagnostics</string>
+    <string name="diagnostics_share_text">Diagnostics report attached.</string>
+    <string name="diagnostics_share_chooser">Share diagnostics via...</string>
+    <string name="diagnostics_export_failed">Couldn\'t export diagnostics</string>
 </resources>

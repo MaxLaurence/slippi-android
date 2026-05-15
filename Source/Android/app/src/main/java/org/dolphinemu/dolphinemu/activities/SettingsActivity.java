@@ -1,5 +1,6 @@
 package org.dolphinemu.dolphinemu.activities;
 
+import android.content.ClipData;
 import android.content.Intent;
 import android.content.res.ColorStateList;
 import android.graphics.Typeface;
@@ -29,7 +30,9 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.SwitchCompat;
+import androidx.core.content.FileProvider;
 
+import org.dolphinemu.dolphinemu.BuildConfig;
 import org.dolphinemu.dolphinemu.NativeLibrary;
 import org.dolphinemu.dolphinemu.R;
 import org.dolphinemu.dolphinemu.UserDirectoryBootstrap;
@@ -37,7 +40,9 @@ import org.dolphinemu.dolphinemu.controller.ControllerProfile;
 import org.dolphinemu.dolphinemu.gpu.GpuDriverManager;
 import org.dolphinemu.dolphinemu.settings.DolphinSettings;
 import org.dolphinemu.dolphinemu.settings.GameSettingsOverride;
+import org.dolphinemu.dolphinemu.utils.DiagnosticsExporter;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -63,7 +68,8 @@ public class SettingsActivity extends AppCompatActivity {
         GRAPHICS("Graphics"),
         AUDIO("Audio & Latency"),
         CONTROLS("Controls"),
-        GECKO("Gecko Codes");
+        GECKO("Gecko Codes"),
+        SUPPORT("Support");
 
         final String label;
 
@@ -182,8 +188,10 @@ public class SettingsActivity extends AppCompatActivity {
             populateAudioPane(body);
         } else if (pane == Pane.CONTROLS) {
             populateControlsPane(body);
-        } else {
+        } else if (pane == Pane.GECKO) {
             populateGeckoPane(body);
+        } else {
+            populateSupportPane(body);
         }
 
         Integer savedScrollY = paneScrollY.get(pane);
@@ -258,6 +266,37 @@ public class SettingsActivity extends AppCompatActivity {
                 v -> showRemapChooser());
         addActionRow(body, "Touch controls", "Edit the on-screen controller layout",
                 v -> startActivity(new Intent(this, TouchOverlayActivity.class)));
+    }
+
+    private void populateSupportPane(LinearLayout body) {
+        addActionRow(body, "Export diagnostics",
+                "App, device, settings, controller, and core state",
+                v -> exportDiagnostics());
+        addLabel(body, "Version " + BuildConfig.VERSION_NAME
+                + " (" + BuildConfig.VERSION_CODE + ")");
+    }
+
+    private void exportDiagnostics() {
+        try {
+            File report = DiagnosticsExporter.write(this);
+            Uri uri = FileProvider.getUriForFile(this,
+                    getPackageName() + ".replays", report);
+            Intent send = new Intent(Intent.ACTION_SEND)
+                    .setType("text/plain")
+                    .putExtra(Intent.EXTRA_STREAM, uri)
+                    .putExtra(Intent.EXTRA_SUBJECT,
+                            getString(R.string.diagnostics_share_subject))
+                    .putExtra(Intent.EXTRA_TEXT,
+                            getString(R.string.diagnostics_share_text))
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            send.setClipData(ClipData.newUri(getContentResolver(),
+                    report.getName(), uri));
+            startActivity(Intent.createChooser(send,
+                    getString(R.string.diagnostics_share_chooser)));
+        } catch (IOException | IllegalArgumentException e) {
+            Log.w(TAG, "diagnostics export failed", e);
+            toast(getString(R.string.diagnostics_export_failed));
+        }
     }
 
     private void populateGeckoPane(LinearLayout body) {

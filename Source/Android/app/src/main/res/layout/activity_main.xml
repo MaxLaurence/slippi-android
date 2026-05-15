@@ -415,6 +415,28 @@
                         android:text="@string/audio_status_default"
                         android:textColor="@color/text_secondary"
                         android:textSize="12sp"/>
+
+                    <TextView
+                        android:id="@+id/display_status"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="@string/display_status_default"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="12sp"/>
+
+                    <TextView
+                        android:id="@+id/refresh_rate_status"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="@string/refresh_caps_permission_missing"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="12sp"/>
                 </LinearLayout>
             </LinearLayout>
         </LinearLayout>

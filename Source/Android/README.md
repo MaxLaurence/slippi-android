@@ -12,9 +12,9 @@ This document is the build/dev/debug reference.
 - macOS or Linux (build instructions below assume macOS — tweak rustup
   triple for Linux).
 - OpenJDK 17: `brew install openjdk@17`
-- Android cmdline-tools + NDK 27.1.12297006 + build-tools 34 + platform 34:
+- Android cmdline-tools + NDK 27.1.12297006 + build-tools 35 + platform 35:
   `brew install --cask android-commandlinetools` then
-  `sdkmanager 'ndk;27.1.12297006' 'build-tools;34.0.0' 'platforms;android-34'`
+  `sdkmanager 'ndk;27.1.12297006' 'build-tools;35.0.0' 'platforms;android-35'`
 - rustup with the toolchain pinned in
   `Externals/SlippiRustExtensions/rust-toolchain.toml` (currently
   `1.88.0`) and the `aarch64-linux-android` target:
@@ -48,8 +48,8 @@ export PATH=$HOME/.cargo/bin:/opt/homebrew/bin:$PATH
 
 # Distributable build with an explicit Obtainium/GitHub release version:
 ./Source/Android/gradlew -p Source/Android :app:assembleRelease \
-  -PandroidVersionName=3.6.0-android-r5 \
-  -PandroidVersionCode=3060005
+  -PandroidVersionName=3.6.0-android-r7 \
+  -PandroidVersionCode=3060007
 
 # Java/resource-only iteration when you do not need to rebuild/package mainline:
 ./Source/Android/gradlew -p Source/Android :app:assembleDebug -PskipMainlineCoreBuild=true
@@ -145,13 +145,17 @@ the launcher's account card for users who already have one on disk.
 
 Obtainium users can subscribe to the GitHub releases for the Android
 APK. Keep the upstream Ishiiruka / Dolphin version in the tag, then add
-an Android release number, for example `v3.6.0-android-r5`. The Android
+an Android release number, for example `v3.6.0-android-r7`. The Android
 `versionName` should match the tag without the leading `v`
-(`3.6.0-android-r5`).
+(`3.6.0-android-r7`). Local builds derive the default `versionName`
+and `versionCode` from the latest `v*-android-r*` tag. Local release
+builds from an untagged commit must pass `-PandroidVersionName=...`
+explicitly so distributable APKs do not silently reuse an old release
+number.
 
 The workflow derives `versionCode` as:
 `major * 1000000 + minor * 10000 + patch * 100 + android_release`.
-For example, `3.6.0-android-r5` becomes `3060005`. This keeps app
+For example, `3.6.0-android-r7` becomes `3060007`. This keeps app
 updates monotonic while leaving the upstream version number honest.
 
 The Android release workflow expects these repository secrets:
@@ -161,9 +165,9 @@ The Android release workflow expects these repository secrets:
 - `ANDROID_RELEASE_KEY_ALIAS`
 - `ANDROID_RELEASE_KEY_PASSWORD`
 
-Create a release by pushing a tag like `v3.6.0-android-r5`. The
+Create a release by pushing a tag like `v3.6.0-android-r7`. The
 workflow builds `app-release.apk`, renames it to
-`slippi-android-v3.6.0-android-r5.apk`, uploads a `.sha256` file, and
+`slippi-android-v3.6.0-android-r7.apk`, uploads a `.sha256` file, and
 attaches both to the GitHub Release. Keep one Android APK asset per
 release when possible; if desktop assets also share the release, tell
 Obtainium users to filter APKs with `slippi-android-v.*\.apk`.

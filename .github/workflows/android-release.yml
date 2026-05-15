@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version without the leading v, for example 3.6.0-android-r5'
+        description: 'Release version without the leading v, for example 3.6.0-android-r7'
         required: true
         type: string
 
@@ -48,7 +48,7 @@ jobs:
           fi
 
       - name: Install Android packages
-        run: sdkmanager 'ndk;27.1.12297006' 'build-tools;34.0.0' 'platforms;android-34' 'cmake;3.22.1'
+        run: sdkmanager 'ndk;27.1.12297006' 'build-tools;35.0.0' 'platforms;android-35' 'cmake;3.22.1'
 
       - name: Set up Rust
         run: |
@@ -68,7 +68,7 @@ jobs:
           fi
 
           if [[ ! "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)-android-r([0-9]+)$ ]]; then
-            echo "Version must look like 3.6.0-android-r5" >&2
+            echo "Version must look like 3.6.0-android-r7" >&2
             exit 1
           fi
 

@@ -29,7 +29,6 @@
         android:supportsRtl="true"
         android:isGame="true"
         android:hardwareAccelerated="true"
-        android:requestLegacyExternalStorage="true"
         android:theme="@style/Theme.SlippiDolphin">
 
         <activity

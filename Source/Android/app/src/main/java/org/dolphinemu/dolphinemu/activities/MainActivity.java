@@ -6,20 +6,20 @@ import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.appcompat.widget.PopupMenu;
 import androidx.preference.PreferenceManager;
 
 import com.google.android.material.button.MaterialButtonToggleGroup;
@@ -42,17 +42,12 @@ import org.json.JSONObject;
 
 import java.io.FileInputStream;
 import java.nio.charset.StandardCharsets;
-import org.dolphinemu.dolphinemu.controller.ControllerProfile;
-
-import androidx.appcompat.app.AlertDialog;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * One-screen launcher: pick an ISO, sign into Slippi (or drop in a
@@ -64,49 +59,14 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAG = "MainActivity";
     private static final String PREF_KEY_ISO_URI = "iso_uri";
     private static final String PREF_KEY_EMULATOR_CORE = EmulatorCore.PREF_KEY;
-    private static final String PREF_KEY_BACKEND = "backend";
-    private static final String PREF_KEY_AUDIO_BACKEND = "audio_backend";
-    private static final String PREF_KEY_AUDIO_BUFFER_BURSTS = "audio_buffer_bursts";
-    private static final String PREF_KEY_DISPLAY_LATENCY_MODE = "display_latency_mode";
     private static final String PREF_KEY_LAUNCH_DISCLAIMER_SEEN =
             "launch_disclaimer_seen_v1";
-    private static final String BACKEND_VULKAN = "Vulkan";
-    private static final String BACKEND_OGL = "OGL";
-    private static final String DISPLAY_LATENCY_SMOOTH = "smooth";
-    private static final String DISPLAY_LATENCY_FASTEST = "fastest";
-    private static final String AUDIO_BACKEND_OBOE = "Oboe";
-    private static final String AUDIO_BACKEND_AAUDIO = "AAudio";
-    private static final String AUDIO_BACKEND_OPENSLES = "OpenSLES";
-    private static final int AUDIO_BURSTS_LOW = 2;
-    private static final int AUDIO_BURSTS_ULTRA_LOW = 1;
-    private static final int AUDIO_BURSTS_BALANCED = 4;
-    private static final int AUDIO_BURSTS_STABLE = 8;
-    private static final AudioPreset[] AUDIO_PRESETS = {
-            new AudioPreset(AUDIO_BACKEND_OBOE, AUDIO_BURSTS_ULTRA_LOW,
-                    R.string.audio_preset_oboe_ultra_low),
-            new AudioPreset(AUDIO_BACKEND_OBOE, AUDIO_BURSTS_LOW,
-                    R.string.audio_preset_oboe_low),
-            new AudioPreset(AUDIO_BACKEND_OBOE, AUDIO_BURSTS_BALANCED,
-                    R.string.audio_preset_oboe_balanced),
-            new AudioPreset(AUDIO_BACKEND_OBOE, AUDIO_BURSTS_STABLE,
-                    R.string.audio_preset_oboe_stable),
-            new AudioPreset(AUDIO_BACKEND_OPENSLES, AUDIO_BURSTS_BALANCED,
-                    R.string.audio_preset_opensles_balanced),
-            new AudioPreset(AUDIO_BACKEND_OPENSLES, AUDIO_BURSTS_STABLE,
-                    R.string.audio_preset_opensles_stable),
-            new AudioPreset(AUDIO_BACKEND_AAUDIO, AUDIO_BURSTS_BALANCED,
-                    R.string.audio_preset_aaudio_balanced),
-            new AudioPreset(AUDIO_BACKEND_AAUDIO, AUDIO_BURSTS_ULTRA_LOW,
-                    R.string.audio_preset_aaudio_ultra_low),
-    };
-    private static final DisplayLatencyMode[] DISPLAY_LATENCY_MODES = {
-            new DisplayLatencyMode(DISPLAY_LATENCY_SMOOTH, R.string.display_latency_smooth),
-            new DisplayLatencyMode(DISPLAY_LATENCY_FASTEST, R.string.display_latency_fastest),
-    };
 
     private TextView isoStatus;
     private TextView adapterStatus;
     private TextView audioStatus;
+    private TextView displayStatus;
+    private TextView refreshRateStatus;
     private TextView emulatorCoreStatus;
     private MaterialButtonToggleGroup emulatorCoreToggle;
     private MaterialButtonToggleGroup backendToggle;
@@ -158,12 +118,6 @@ public class MainActivity extends AppCompatActivity {
                 }
             });
 
-    private final ActivityResultLauncher<String[]> pickGpuDriver =
-            registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
-                if (uri == null) return;
-                installImportedGpuDriver(uri);
-            });
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -171,6 +125,8 @@ public class MainActivity extends AppCompatActivity {
         isoStatus = findViewById(R.id.iso_status);
         adapterStatus = findViewById(R.id.adapter_status);
         audioStatus = findViewById(R.id.audio_status);
+        displayStatus = findViewById(R.id.display_status);
+        refreshRateStatus = findViewById(R.id.refresh_rate_status);
         emulatorCoreStatus = findViewById(R.id.emulator_core_status);
         emulatorCoreToggle = findViewById(R.id.emulator_core_toggle);
         backendToggle = findViewById(R.id.backend_toggle);
@@ -235,13 +191,14 @@ public class MainActivity extends AppCompatActivity {
         // still available as a toggle).
         // The MaterialButtonToggleGroup callback fires on initial
         // check too, which is fine since we're idempotent.
-        String saved = prefs().getString(PREF_KEY_BACKEND, BACKEND_VULKAN);
-        backendToggle.check(BACKEND_VULKAN.equals(saved)
+        String saved = DolphinSettings.getBackend(this);
+        backendToggle.check(DolphinSettings.BACKEND_VULKAN.equals(saved)
                 ? R.id.backend_vulkan : R.id.backend_ogl);
         backendToggle.addOnButtonCheckedListener((group, checkedId, isChecked) -> {
             if (!isChecked) return;
-            String value = checkedId == R.id.backend_vulkan ? BACKEND_VULKAN : BACKEND_OGL;
-            prefs().edit().putString(PREF_KEY_BACKEND, value).apply();
+            String value = checkedId == R.id.backend_vulkan
+                    ? DolphinSettings.BACKEND_VULKAN : DolphinSettings.BACKEND_OGL;
+            DolphinSettings.setBackend(this, value);
             applyGpuDriverConfig(value);
             refresh();
         });
@@ -349,9 +306,16 @@ public class MainActivity extends AppCompatActivity {
         }
         boolean hasAdapter = hasWiiUAdapter();
         adapterStatus.setText(hasAdapter ? R.string.adapter_connected : R.string.adapter_none);
-        AudioPreset audioPreset = currentAudioPreset();
+        DolphinSettings.AudioPreset audioPreset = DolphinSettings.getAudioPreset(this);
         audioStatus.setText(getString(R.string.audio_status_format,
                 audioPreset.backend, audioPreset.bursts));
+        DolphinSettings.DisplayLatencyMode displayLatencyMode =
+                DolphinSettings.getDisplayLatencyMode(this);
+        displayStatus.setText(getString(R.string.display_status_format,
+                getString(displayLatencyMode.labelResId)));
+        refreshRateStatus.setText(Settings.System.canWrite(this)
+                ? R.string.refresh_caps_available
+                : R.string.refresh_caps_permission_missing);
         refreshCoreStatus();
     }
 
@@ -409,340 +373,14 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /**
-     * List controllers available for button remapping. GC adapter ports stay
-     * here because remapping buttons does not alter the controller's stick data.
-     */
-    private void showRemapChooser() {
-        java.util.List<String> labels = new java.util.ArrayList<>();
-        java.util.List<String> deviceKeys = new java.util.ArrayList<>();
-        labels.add(getString(R.string.calibrate_device));
-        deviceKeys.add(ControllerProfile.DEVICE_BUILTIN);
-        if (hasWiiUAdapter()) {
-            for (int i = 0; i < 4; i++) {
-                labels.add(getString(R.string.calibrate_adapter_port, i + 1));
-                deviceKeys.add(ControllerProfile.adapterDeviceKey(i));
-            }
-        }
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.remap_pick_controller)
-                .setItems(labels.toArray(new CharSequence[0]), (d, which) -> {
-                    Intent it = new Intent(this, ButtonMapActivity.class);
-                    it.putExtra(ButtonMapActivity.EXTRA_DEVICE_KEY, deviceKeys.get(which));
-                    it.putExtra(ButtonMapActivity.EXTRA_DEVICE_LABEL, labels.get(which));
-                    startActivity(it);
-                })
-                .show();
-    }
-
-    private void showCalibrationChooser() {
-        java.util.List<String> labels = new java.util.ArrayList<>();
-        java.util.List<String> deviceKeys = new java.util.ArrayList<>();
-        labels.add(getString(R.string.calibrate_device));
-        deviceKeys.add(ControllerProfile.DEVICE_BUILTIN);
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.calibrate_pick_controller)
-                .setItems(labels.toArray(new CharSequence[0]), (d, which) -> {
-                    Intent it = new Intent(this, CalibrationActivity.class);
-                    it.putExtra(CalibrationActivity.EXTRA_DEVICE_KEY, deviceKeys.get(which));
-                    it.putExtra(CalibrationActivity.EXTRA_DEVICE_LABEL, labels.get(which));
-                    startActivity(it);
-                })
-                .show();
-    }
-
-    private void showAudioChooser() {
-        CharSequence[] labels = new CharSequence[AUDIO_PRESETS.length];
-        int checked = -1;
-        AudioPreset current = currentAudioPreset();
-        for (int i = 0; i < AUDIO_PRESETS.length; i++) {
-            AudioPreset preset = AUDIO_PRESETS[i];
-            labels[i] = getString(preset.labelResId);
-            if (preset.equals(current)) checked = i;
-        }
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.audio_pick_preset)
-                .setSingleChoiceItems(labels, checked, (d, which) -> {
-                    AudioPreset preset = AUDIO_PRESETS[which];
-                    prefs().edit()
-                            .putString(PREF_KEY_AUDIO_BACKEND, preset.backend)
-                            .putInt(PREF_KEY_AUDIO_BUFFER_BURSTS, preset.bursts)
-                            .apply();
-                    refresh();
-                    d.dismiss();
-                })
-                .show();
-    }
-
-    private void showDisplayLatencyChooser() {
-        CharSequence[] labels = new CharSequence[DISPLAY_LATENCY_MODES.length];
-        int checked = -1;
-        DisplayLatencyMode current = currentDisplayLatencyMode();
-        for (int i = 0; i < DISPLAY_LATENCY_MODES.length; i++) {
-            DisplayLatencyMode mode = DISPLAY_LATENCY_MODES[i];
-            labels[i] = getString(mode.labelResId);
-            if (mode.equals(current)) checked = i;
-        }
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.display_latency_title)
-                .setSingleChoiceItems(labels, checked, (d, which) -> {
-                    DisplayLatencyMode mode = DISPLAY_LATENCY_MODES[which];
-                    prefs().edit()
-                            .putString(PREF_KEY_DISPLAY_LATENCY_MODE, mode.configValue)
-                            .apply();
-                    NativeLibrary.SetConfig("GFX.ini", "Settings",
-                            "AndroidPresentMode", mode.configValue);
-                    toast(getString(R.string.launcher_settings_display_latency_current,
-                            getString(mode.labelResId)));
-                    d.dismiss();
-                })
-                .show();
-    }
-
-    private void showGpuDriverChooser() {
-        if (!GpuDriverManager.canAttemptCustomDriverLoading()) {
-            new AlertDialog.Builder(this)
-                    .setTitle(R.string.gpu_driver_title)
-                    .setMessage(R.string.gpu_driver_unsupported)
-                    .setPositiveButton(R.string.gpu_driver_use_system, (dialog, which) -> {
-                        GpuDriverManager.useSystemDriver(this);
-                        applyGpuDriverConfig();
-                        toast(getString(R.string.gpu_driver_system_selected));
-                    })
-                    .setNegativeButton(android.R.string.ok, null)
-                    .show();
-            return;
-        }
-
-        AlertDialog loading = new AlertDialog.Builder(this)
-                .setTitle(R.string.gpu_driver_title)
-                .setMessage(R.string.gpu_driver_fetching)
-                .setNegativeButton(android.R.string.cancel, null)
-                .create();
-        loading.show();
-
-        new Thread(() -> {
-            try {
-                List<GpuDriverManager.DriverPackage> packages = GpuDriverManager.fetchCatalog();
-                runOnUiThread(() -> {
-                    if (loading.isShowing()) loading.dismiss();
-                    showGpuDriverCatalog(packages);
-                });
-            } catch (Exception e) {
-                Log.w(TAG, "GPU driver catalog fetch failed", e);
-                runOnUiThread(() -> {
-                    if (loading.isShowing()) loading.dismiss();
-                    toast(getString(R.string.gpu_driver_fetch_failed,
-                            e.getMessage() == null ? e.toString() : e.getMessage()));
-                    showGpuDriverCatalog(new ArrayList<>());
-                });
-            }
-        }, "GpuDriverCatalog").start();
-    }
-
-    private void showGpuDriverCatalog(List<GpuDriverManager.DriverPackage> packages) {
-        List<CharSequence> labels = new ArrayList<>();
-        List<Runnable> actions = new ArrayList<>();
-        List<GpuDriverManager.CachedDriver> cachedDrivers =
-                GpuDriverManager.listCachedDrivers(this);
-
-        labels.add(getString(R.string.gpu_driver_use_system));
-        actions.add(() -> {
-            GpuDriverManager.useSystemDriver(this);
-            applyGpuDriverConfig();
-            toast(getString(R.string.gpu_driver_system_selected));
-        });
-        labels.add(getString(R.string.gpu_driver_import));
-        actions.add(() -> pickGpuDriver.launch(new String[]{
-                "application/zip", "application/octet-stream", "*/*"}));
-        for (GpuDriverManager.CachedDriver cached : cachedDrivers) {
-            labels.add(getString(R.string.gpu_driver_cached_item,
-                    cached.label, cached.summary()));
-            actions.add(() -> selectCachedGpuDriver(cached));
-        }
-        if (!cachedDrivers.isEmpty()) {
-            labels.add(getString(R.string.gpu_driver_remove));
-            actions.add(() -> {
-                GpuDriverManager.removeInstalledDriver(this);
-                applyGpuDriverConfig();
-                toast(getString(R.string.gpu_driver_removed));
-            });
-        }
-        for (GpuDriverManager.DriverPackage pkg : packages) {
-            labels.add(pkg.displayName + "\n" + pkg.summary() + " · " + pkg.repositoryLabel);
-            actions.add(() -> confirmGpuDriverInstall(pkg));
-        }
-
-        if (packages.isEmpty() && cachedDrivers.isEmpty()) {
-            labels.add(getString(R.string.gpu_driver_empty));
-            actions.add(() -> {});
-        }
-
-        new AlertDialog.Builder(this)
-                .setTitle(getString(R.string.gpu_driver_title_current,
-                        GpuDriverManager.currentLabel(this)))
-                .setItems(labels.toArray(new CharSequence[0]), (dialog, which) -> {
-                    Runnable action = actions.get(which);
-                    if (action != null) action.run();
-                })
-                .show();
-    }
-
-    private void confirmGpuDriverInstall(GpuDriverManager.DriverPackage pkg) {
-        new AlertDialog.Builder(this)
-                .setTitle(pkg.displayName)
-                .setMessage(getString(R.string.gpu_driver_install_confirm,
-                        pkg.repositoryLabel, pkg.summary()))
-                .setNegativeButton(android.R.string.cancel, null)
-                .setPositiveButton(R.string.gpu_driver_download,
-                        (dialog, which) -> installGpuDriver(pkg))
-                .show();
-    }
-
-    private void installGpuDriver(GpuDriverManager.DriverPackage pkg) {
-        showGpuDriverInstallProgress(pkg.displayName, progress ->
-                GpuDriverManager.installFromUrl(getApplicationContext(), pkg, progress));
-    }
-
-    private void selectCachedGpuDriver(GpuDriverManager.CachedDriver driver) {
-        showGpuDriverInstallProgress(driver.label, progress ->
-                GpuDriverManager.selectCachedDriver(getApplicationContext(), driver));
-    }
-
-    private void installImportedGpuDriver(Uri uri) {
-        showGpuDriverInstallProgress(getString(R.string.gpu_driver_imported_driver), progress -> {
-            try (InputStream in = getContentResolver().openInputStream(uri)) {
-                if (in == null) throw new IOException("Could not open selected driver");
-                return GpuDriverManager.installFromStream(getApplicationContext(), in,
-                        getString(R.string.gpu_driver_imported_driver),
-                        getString(R.string.gpu_driver_import_source),
-                        uri.toString(), progress);
-            }
-        });
-    }
-
-    private void showGpuDriverInstallProgress(String title, GpuDriverInstallAction action) {
-        LinearLayout body = new LinearLayout(this);
-        body.setOrientation(LinearLayout.VERTICAL);
-        int pad = (int) (20 * getResources().getDisplayMetrics().density);
-        body.setPadding(pad, pad / 2, pad, 0);
-        TextView label = new TextView(this);
-        label.setTextColor(getColor(R.color.text_primary));
-        label.setText(R.string.gpu_driver_installing);
-        ProgressBar progress = new ProgressBar(this, null,
-                android.R.attr.progressBarStyleHorizontal);
-        progress.setIndeterminate(true);
-        progress.setMax(1000);
-        body.addView(label);
-        body.addView(progress);
-
-        AlertDialog progressDialog = new AlertDialog.Builder(this)
-                .setTitle(title)
-                .setView(body)
-                .setCancelable(false)
-                .create();
-        progressDialog.show();
-
-        new Thread(() -> {
-            try {
-                GpuDriverManager.InstallResult result = action.run(
-                        (stage, completedBytes, totalBytes) -> runOnUiThread(() -> {
-                            label.setText(stage);
-                            if (totalBytes > 0L && completedBytes >= 0L) {
-                                progress.setIndeterminate(false);
-                                progress.setProgress((int) Math.min(
-                                        1000L, completedBytes * 1000L / totalBytes));
-                            } else {
-                                progress.setIndeterminate(true);
-                            }
-                        }));
-                runOnUiThread(() -> {
-                    progressDialog.dismiss();
-                    if (!result.success) {
-                        showGpuDriverInstallFailure(result.error);
-                        return;
-                    }
-                    applyGpuDriverConfig();
-                    toast(getString(R.string.gpu_driver_installed,
-                            GpuDriverManager.currentLabel(this)));
-                });
-            } catch (Exception e) {
-                Log.w(TAG, "GPU driver install failed", e);
-                runOnUiThread(() -> {
-                    progressDialog.dismiss();
-                    showGpuDriverInstallFailure(e.getMessage() == null
-                            ? e.toString() : e.getMessage());
-                });
-            }
-        }, "GpuDriverInstall").start();
-    }
-
-    private void showGpuDriverInstallFailure(String message) {
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.gpu_driver_install_failed_title)
-                .setMessage(message == null ? getString(R.string.gpu_driver_install_failed) : message)
-                .setPositiveButton(android.R.string.ok, null)
-                .show();
-    }
-
     private void applyGpuDriverConfig() {
-        applyGpuDriverConfig(prefs().getString(PREF_KEY_BACKEND, BACKEND_VULKAN));
+        applyGpuDriverConfig(DolphinSettings.getBackend(this));
     }
 
     private void applyGpuDriverConfig(String backend) {
         GpuDriverManager.prepareNativeDirectoriesForBackend(this, backend);
         NativeLibrary.SetConfig("GFX.ini", "Settings", "DriverLibName",
                 GpuDriverManager.selectedLibraryNameForBackend(this, backend));
-    }
-
-    private void showLauncherSettingsMenu(View anchor) {
-        AudioPreset audioPreset = currentAudioPreset();
-        DisplayLatencyMode displayLatencyMode = currentDisplayLatencyMode();
-        PopupMenu menu = new PopupMenu(this, anchor);
-        menu.getMenuInflater().inflate(R.menu.menu_launcher_settings, menu.getMenu());
-        menu.getMenu().findItem(R.id.menu_launcher_audio).setTitle(
-                getString(R.string.launcher_settings_audio_current,
-                        audioPreset.backend, audioPreset.bursts));
-        menu.getMenu().findItem(R.id.menu_launcher_gpu_driver).setTitle(
-                getString(R.string.launcher_settings_gpu_driver_current,
-                        GpuDriverManager.currentLabel(this)));
-        menu.getMenu().findItem(R.id.menu_launcher_display_latency).setTitle(
-                getString(R.string.launcher_settings_display_latency_current,
-                        getString(displayLatencyMode.labelResId)));
-        menu.setOnMenuItemClickListener(item -> {
-            int id = item.getItemId();
-            if (id == R.id.menu_launcher_audio) {
-                showAudioChooser();
-                return true;
-            }
-            if (id == R.id.menu_launcher_gpu_driver) {
-                showGpuDriverChooser();
-                return true;
-            }
-            if (id == R.id.menu_launcher_display_latency) {
-                showDisplayLatencyChooser();
-                return true;
-            }
-            if (id == R.id.menu_launcher_calibrate) {
-                showCalibrationChooser();
-                return true;
-            }
-            if (id == R.id.menu_launcher_remap) {
-                showRemapChooser();
-                return true;
-            }
-            if (id == R.id.menu_launcher_touch) {
-                startActivity(new Intent(this, TouchOverlayActivity.class));
-                return true;
-            }
-            return false;
-        });
-        menu.show();
-    }
-
-    private interface GpuDriverInstallAction {
-        GpuDriverManager.InstallResult run(GpuDriverManager.ProgressListener progress)
-                throws IOException;
     }
 
     /**
@@ -793,14 +431,14 @@ public class MainActivity extends AppCompatActivity {
         // Graphics backend selection from the toggle. Same default as
         // the initial-restore path so a fresh install gets Vulkan
         // without first touching the toggle.
-        String backend = prefs().getString(PREF_KEY_BACKEND, BACKEND_VULKAN);
+        String backend = DolphinSettings.getBackend(this);
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "GFXBackend", backend);
         applyGpuDriverConfig(backend);
         NativeLibrary.SetConfig("GFX.ini", "Settings", "AndroidPresentMode",
-                currentDisplayLatencyMode().configValue);
+                DolphinSettings.getDisplayLatencyMode(this).configValue);
         DolphinSettings.applyIshiirukaGraphicsConfig(this);
 
-        AudioPreset audioPreset = currentAudioPreset();
+        DolphinSettings.AudioPreset audioPreset = DolphinSettings.getAudioPreset(this);
         NativeLibrary.SetConfig("Dolphin.ini", "DSP", "Backend", audioPreset.backend);
         NativeLibrary.SetConfig("Dolphin.ini", "DSP", "AndroidAudioBufferBursts",
                 Integer.toString(audioPreset.bursts));
@@ -815,25 +453,6 @@ public class MainActivity extends AppCompatActivity {
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "SIDevice2", portN);
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "SIDevice3", portN);
         return hasAdapter;
-    }
-
-    private AudioPreset currentAudioPreset() {
-        SharedPreferences p = prefs();
-        String backend = p.getString(PREF_KEY_AUDIO_BACKEND, AUDIO_BACKEND_OBOE);
-        int bursts = p.getInt(PREF_KEY_AUDIO_BUFFER_BURSTS, AUDIO_BURSTS_BALANCED);
-        AudioPreset candidate = new AudioPreset(backend, bursts, R.string.audio_preset_custom);
-        for (AudioPreset preset : AUDIO_PRESETS) {
-            if (preset.equals(candidate)) return preset;
-        }
-        return candidate;
-    }
-
-    private DisplayLatencyMode currentDisplayLatencyMode() {
-        String value = prefs().getString(PREF_KEY_DISPLAY_LATENCY_MODE, DISPLAY_LATENCY_SMOOTH);
-        for (DisplayLatencyMode mode : DISPLAY_LATENCY_MODES) {
-            if (mode.configValue.equals(value)) return mode;
-        }
-        return DISPLAY_LATENCY_MODES[0];
     }
 
     private boolean hasWiiUAdapter() {
@@ -910,51 +529,5 @@ public class MainActivity extends AppCompatActivity {
 
     private void toast(String msg) {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
-    }
-
-    private static final class AudioPreset {
-        final String backend;
-        final int bursts;
-        final int labelResId;
-
-        AudioPreset(String backend, int bursts, int labelResId) {
-            this.backend = backend == null ? AUDIO_BACKEND_OBOE : backend;
-            this.bursts = bursts;
-            this.labelResId = labelResId;
-        }
-
-        @Override
-        public boolean equals(Object obj) {
-            if (!(obj instanceof AudioPreset)) return false;
-            AudioPreset other = (AudioPreset) obj;
-            return backend.equals(other.backend) && bursts == other.bursts;
-        }
-
-        @Override
-        public int hashCode() {
-            return 31 * backend.hashCode() + bursts;
-        }
-    }
-
-    private static final class DisplayLatencyMode {
-        final String configValue;
-        final int labelResId;
-
-        DisplayLatencyMode(String configValue, int labelResId) {
-            this.configValue = configValue;
-            this.labelResId = labelResId;
-        }
-
-        @Override
-        public boolean equals(Object other) {
-            if (!(other instanceof DisplayLatencyMode)) return false;
-            DisplayLatencyMode that = (DisplayLatencyMode) other;
-            return configValue.equals(that.configValue);
-        }
-
-        @Override
-        public int hashCode() {
-            return configValue.hashCode();
-        }
     }
 }

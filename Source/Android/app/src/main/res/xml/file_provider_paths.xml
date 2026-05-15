@@ -7,4 +7,7 @@
     <files-path
         name="replays"
         path="dolphin/Slippi/Replays/"/>
+    <files-path
+        name="diagnostics"
+        path="diagnostics/"/>
 </paths>
