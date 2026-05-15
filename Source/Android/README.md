@@ -108,8 +108,10 @@ writes the response to `<app-files>/dolphin/Slippi/user.json`. From
 the user's perspective it's a single in-app sign-in step, with no
 external credentials in the binary.
 
-New Slippi accounts must be logged in once through the official
-PC / Mac / Linux launcher before they can play on Android.
+> **Important:** If the user is creating a new Slippi account, they
+> must create it and log in once through the official PC / Mac / Linux
+> launcher before trying to log in on Android. New accounts cannot be
+> used in the mobile app until that desktop launcher step is complete.
 
 A manual `user.json` import is still available behind a small link on
 the launcher's account card for users who already have one on disk.
@@ -192,10 +194,10 @@ $ADB devices                   # confirm
    in-app `WebView` pointed at `https://slippi.gg/online/enable`.
    The user logs in there; on tapping **Download**, our blob
    interceptor captures the response and writes it to
-   `<files>/dolphin/Slippi/user.json` directly. New Slippi accounts
-   must first log in once through the official PC / Mac / Linux
-   launcher before they can play on Android. (Manual file-picker
-   import is still available as a link.)
+   `<files>/dolphin/Slippi/user.json` directly. New-account users
+   must complete the desktop launcher step described in the
+   **Important** note above first. (Manual file-picker import is
+   still available as a link.)
 3. **Pick emulator core** — built-in Ishiiruka (default) or an
    embedded mainline Slippi Dolphin core.
 4. **Pick graphics backend** — Vulkan (default) or OpenGL ES.

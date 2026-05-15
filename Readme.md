@@ -43,9 +43,6 @@ For the official desktop launcher, go to https://slippi.gg.
      launcher captures the resulting `user.json` directly into
      `<app-files>/dolphin/Slippi/user.json` and the account card
      updates to show your display name + connect code.
-     - New Slippi accounts must be logged in once through the
-       official PC / Mac / Linux launcher before they can play on
-       Android.
      - Power users who already have a `user.json` on disk can use the
        small "Already have a user.json? Import it" link instead.
    - **Pick a graphics backend** — Vulkan (default) or OpenGL. Vulkan
@@ -67,6 +64,11 @@ For the official desktop launcher, go to https://slippi.gg.
      straight into training. When a new Training Mode version drops,
      tap "Check updates" → "Update". Tap "Remove" to free the storage
      back up.
+
+> **Important:** If you are creating a new Slippi account, create it
+> and log in once through the official PC / Mac / Linux launcher before
+> trying to log in on Android. New accounts cannot be used in the
+> mobile app until that desktop launcher step is complete.
 
 ### Install with Obtainium
 
