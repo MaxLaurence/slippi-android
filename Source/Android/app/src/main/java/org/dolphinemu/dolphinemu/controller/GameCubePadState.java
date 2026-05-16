@@ -2,6 +2,8 @@ package org.dolphinemu.dolphinemu.controller;
 
 import org.dolphinemu.dolphinemu.NativeLibrary;
 
+import java.util.Locale;
+
 /**
  * Mutable GameCube port state shared by hardware input and the touch overlay.
  * Values are kept in GC byte space for SI override and in Melee's float stick
@@ -111,6 +113,26 @@ public final class GameCubePadState {
                 stickX, stickY, substickX, substickY,
                 triggerL, triggerR, analogA, analogB);
         NativeLibrary.SetMeleePadFloats(port, meleeMainX, meleeMainY, meleeCX, meleeCY);
+    }
+
+    public synchronized String snapshotString() {
+        return "buttons=0x" + String.format(Locale.US, "%04X", buttons & 0xFFFF)
+                + " names=" + buttonNames(buttons)
+                + " main=(" + stickX + "," + stickY + ")"
+                + " c=(" + substickX + "," + substickY + ")"
+                + " triggers=(" + triggerL + "," + triggerR + ")"
+                + " analogTriggers=(" + analogTriggerL + "," + analogTriggerR + ")";
+    }
+
+    private static String buttonNames(int buttons) {
+        if (buttons == 0) return "none";
+        StringBuilder sb = new StringBuilder();
+        for (int bit : ButtonMap.GC_BUTTONS_DISPLAY_ORDER) {
+            if ((buttons & bit) == 0) continue;
+            if (sb.length() > 0) sb.append('+');
+            sb.append(ButtonMap.labelForGcBit(bit));
+        }
+        return sb.toString();
     }
 
     private void syncTriggerBytes() {

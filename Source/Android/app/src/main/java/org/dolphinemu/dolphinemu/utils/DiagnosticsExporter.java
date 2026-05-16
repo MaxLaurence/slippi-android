@@ -18,27 +18,40 @@ import org.dolphinemu.dolphinemu.EmulatorCore;
 import org.dolphinemu.dolphinemu.MainlineCore;
 import org.dolphinemu.dolphinemu.NativeLibrary;
 import org.dolphinemu.dolphinemu.UserDirectoryBootstrap;
+import org.dolphinemu.dolphinemu.controller.ButtonMap;
+import org.dolphinemu.dolphinemu.controller.ControllerProfile;
 import org.dolphinemu.dolphinemu.gpu.GpuDriverManager;
 import org.dolphinemu.dolphinemu.replay.ReplayConfig;
 import org.dolphinemu.dolphinemu.settings.DolphinSettings;
 import org.dolphinemu.dolphinemu.settings.GameSettingsOverride;
 import org.dolphinemu.dolphinemu.training.TrainingModeManager;
 
+import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public final class DiagnosticsExporter {
     private static final String PREF_KEY_ISO_URI = "iso_uri";
     private static final String DATE_PATTERN = "yyyy-MM-dd HH:mm:ss Z";
     private static final String FILE_PATTERN = "yyyyMMdd-HHmmss";
+    private static final Pattern CAPTURE_P1_PATTERN = Pattern.compile(
+            "^t=(\\d+).*?payload=([0-9A-F]+).*? p1=\\{.*?buttons=0x([0-9A-F]+).*?"
+                    + "main=\\((\\d+),(\\d+)\\),c=\\((\\d+),(\\d+)\\),triggers=\\((\\d+),(\\d+)\\)");
 
     private DiagnosticsExporter() {
     }
@@ -80,6 +93,11 @@ public final class DiagnosticsExporter {
         appendSettings(sb, context);
         appendFiles(sb, context);
         appendControllers(sb, context);
+        appendGcAdapterSnapshot(sb);
+        appendLaunchSession(sb, context);
+        appendAdapterConfiguration(sb, context);
+        appendLatestControllerCapture(sb, context);
+        appendRecentControllerLogs(sb);
         appendNative(sb);
         return sb.toString();
     }
@@ -186,6 +204,192 @@ public final class DiagnosticsExporter {
         }
     }
 
+    private static void appendGcAdapterSnapshot(StringBuilder sb) {
+        appendSection(sb, "GC Adapter Snapshot");
+        try {
+            Java_GCAdapter.DiagnosticsSnapshot snapshot =
+                    Java_GCAdapter.GetDiagnosticsSnapshot();
+            appendKV(sb, "Snapshot", ControllerDiagnosticsCapture.formatSnapshot(snapshot));
+            appendKV(sb, "Stick calibration", "GC adapter sticks are pass-through");
+        } catch (Throwable t) {
+            appendKV(sb, "Snapshot", summarize(t));
+        }
+    }
+
+    private static void appendLaunchSession(StringBuilder sb, Context context) {
+        appendSection(sb, "Launch Session");
+        File session = ControllerDiagnosticsCapture.latestSessionFile(context);
+        appendFile(sb, "Last launch session", session);
+        String sessionText = ControllerDiagnosticsCapture.readSmallFile(session, 16 * 1024L);
+        if (TextUtils.isEmpty(sessionText)) {
+            appendKV(sb, "Last launch session data", "none");
+        } else {
+            sb.append(sessionText);
+            if (!sessionText.endsWith("\n")) sb.append('\n');
+        }
+
+        appendCoreConfig(sb, "Ishiiruka", new File(UserDirectoryBootstrap.userDir(context),
+                "Config/Dolphin.ini"));
+        appendCoreConfig(sb, "Mainline", new File(MainlineCore.userDir(context),
+                "Config/Dolphin.ini"));
+        appendGeckoOverrideSummary(sb, "Ishiiruka", UserDirectoryBootstrap.userDir(context));
+        appendGeckoOverrideSummary(sb, "Mainline", MainlineCore.userDir(context));
+    }
+
+    private static void appendCoreConfig(StringBuilder sb, String label, File dolphinIni) {
+        appendKV(sb, label + " Dolphin.ini path", dolphinIni.getAbsolutePath());
+        appendKV(sb, label + " SIDevice0",
+                readIniValue(dolphinIni, "Core", "SIDevice0", ""));
+        appendKV(sb, label + " SIDevice1",
+                readIniValue(dolphinIni, "Core", "SIDevice1", ""));
+        appendKV(sb, label + " SIDevice2",
+                readIniValue(dolphinIni, "Core", "SIDevice2", ""));
+        appendKV(sb, label + " SIDevice3",
+                readIniValue(dolphinIni, "Core", "SIDevice3", ""));
+        appendKV(sb, label + " SlotA",
+                readIniValue(dolphinIni, "Core", "SlotA", ""));
+        appendKV(sb, label + " SlotB",
+                readIniValue(dolphinIni, "Core", "SlotB", "default"));
+        appendKV(sb, label + " SerialPort1",
+                readIniValue(dolphinIni, "Core", "SerialPort1", ""));
+        appendKV(sb, label + " PollingMethod",
+                readIniValue(dolphinIni, "Core", "PollingMethod", "default"));
+    }
+
+    private static void appendGeckoOverrideSummary(StringBuilder sb, String label, File userDir) {
+        File override = new File(userDir, "GameSettings/GALE01r2.ini");
+        appendFile(sb, label + " GALE01r2 override", override);
+        String mode = "none; bundled defaults apply";
+        if (override.isFile()) {
+            String sample = ControllerDiagnosticsCapture.readSmallFile(override, 64 * 1024L);
+            if (sample.contains("Android Training Mode launch override")) {
+                mode = "training override; Slippi Online/Recording defaults disabled";
+            } else if (sample.contains("Slippi Playback")) {
+                mode = "replay override";
+            } else if (sample.contains("# Android user GameSettings override")) {
+                mode = "live/user override";
+            } else {
+                mode = "custom override present";
+            }
+            appendKV(sb, label + " Slippi Online disabled",
+                    sample.contains("$Required: Slippi Online"));
+        }
+        appendKV(sb, label + " Gecko override mode", mode);
+    }
+
+    private static void appendAdapterConfiguration(StringBuilder sb, Context context) {
+        appendSection(sb, "Adapter Configuration");
+        ControllerProfile profile = new ControllerProfile(context);
+        for (int port = 0; port < 4; port++) {
+            String key = ControllerProfile.adapterDeviceKey(port);
+            appendKV(sb, "Adapter port " + (port + 1) + " stick calibration",
+                    "pass-through; saved main="
+                            + profile.hasCalibration(key, ControllerProfile.Stick.MAIN)
+                            + " saved c="
+                            + profile.hasCalibration(key, ControllerProfile.Stick.C));
+            if (!profile.hasButtonMap(key)) {
+                appendKV(sb, "Adapter port " + (port + 1) + " button map", "identity");
+                continue;
+            }
+            ButtonMap map = profile.getButtonMap(key);
+            appendKV(sb, "Adapter port " + (port + 1) + " button map",
+                    "custom bindings=" + map.totalBindings()
+                            + " serialized=" + map.serialize());
+        }
+        appendKV(sb, "Adapter note",
+                "WUP-028 stick bytes bypass app calibration; only button remap can alter adapter input");
+    }
+
+    private static void appendLatestControllerCapture(StringBuilder sb, Context context) {
+        appendSection(sb, "Latest Controller Capture");
+        File capture = ControllerDiagnosticsCapture.latestCaptureFile(context);
+        appendFile(sb, "Capture", capture);
+        String text = ControllerDiagnosticsCapture.readSmallFile(capture, 6L * 1024L * 1024L);
+        if (TextUtils.isEmpty(text)) {
+            appendKV(sb, "Capture data", "none");
+            return;
+        }
+        appendCaptureSummary(sb, text);
+        sb.append(text);
+        if (!text.endsWith("\n")) sb.append('\n');
+    }
+
+    private static void appendCaptureSummary(StringBuilder sb, String text) {
+        int samples = 0;
+        int genericEvents = 0;
+        long lastT = 0L;
+        int minMainX = 255, minMainY = 255, minCX = 255, minCY = 255;
+        int minTriggerL = 255, minTriggerR = 255;
+        int maxMainX = 0, maxMainY = 0, maxCX = 0, maxCY = 0;
+        int maxTriggerL = 0, maxTriggerR = 0;
+        Set<String> payloads = new HashSet<>();
+        Set<String> buttonMasks = new HashSet<>();
+        String stopReason = "";
+
+        for (String line : text.split("\\r?\\n")) {
+            if (line.startsWith("event t=")) {
+                genericEvents++;
+                continue;
+            }
+            if (line.startsWith("stop_reason=")) {
+                stopReason = line.substring("stop_reason=".length());
+                continue;
+            }
+            Matcher matcher = CAPTURE_P1_PATTERN.matcher(line);
+            if (!matcher.find()) continue;
+            samples++;
+            lastT = parseLong(matcher.group(1), lastT);
+            payloads.add(matcher.group(2));
+            buttonMasks.add(matcher.group(3));
+            int mainX = parseInt(matcher.group(4));
+            int mainY = parseInt(matcher.group(5));
+            int cX = parseInt(matcher.group(6));
+            int cY = parseInt(matcher.group(7));
+            int triggerL = parseInt(matcher.group(8));
+            int triggerR = parseInt(matcher.group(9));
+            minMainX = Math.min(minMainX, mainX);
+            minMainY = Math.min(minMainY, mainY);
+            minCX = Math.min(minCX, cX);
+            minCY = Math.min(minCY, cY);
+            minTriggerL = Math.min(minTriggerL, triggerL);
+            minTriggerR = Math.min(minTriggerR, triggerR);
+            maxMainX = Math.max(maxMainX, mainX);
+            maxMainY = Math.max(maxMainY, mainY);
+            maxCX = Math.max(maxCX, cX);
+            maxCY = Math.max(maxCY, cY);
+            maxTriggerL = Math.max(maxTriggerL, triggerL);
+            maxTriggerR = Math.max(maxTriggerR, triggerR);
+        }
+
+        appendKV(sb, "Capture summary samples", samples);
+        appendKV(sb, "Capture summary duration", lastT + " ms");
+        appendKV(sb, "Capture summary generic events", genericEvents);
+        appendKV(sb, "Capture summary unique WUP payloads", payloads.size());
+        appendKV(sb, "Capture summary P1 button masks", buttonMasks.toString());
+        if (samples > 0) {
+            appendKV(sb, "Capture summary P1 main range",
+                    "(" + minMainX + ".." + maxMainX + ", "
+                            + minMainY + ".." + maxMainY + ")");
+            appendKV(sb, "Capture summary P1 c range",
+                    "(" + minCX + ".." + maxCX + ", " + minCY + ".." + maxCY + ")");
+            appendKV(sb, "Capture summary P1 trigger range",
+                    "(" + minTriggerL + ".." + maxTriggerL + ", "
+                            + minTriggerR + ".." + maxTriggerR + ")");
+        }
+        appendKV(sb, "Capture summary stop reason", stopReason);
+    }
+
+    private static void appendRecentControllerLogs(StringBuilder sb) {
+        appendSection(sb, "Recent Controller Logs");
+        String logs = readFilteredLogcat();
+        if (TextUtils.isEmpty(logs)) {
+            appendKV(sb, "Logs", "none or unavailable");
+            return;
+        }
+        sb.append(logs);
+        if (!logs.endsWith("\n")) sb.append('\n');
+    }
+
     private static void appendUsbDevices(StringBuilder sb, Context context) {
         UsbManager manager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
         if (manager == null) {
@@ -236,6 +440,91 @@ public final class DiagnosticsExporter {
         appendKV(sb, "Git revision", safeNativeString(NativeLibrary::GetGitRevision));
         appendKV(sb, "Native user directory", safeNativeString(NativeLibrary::GetUserDirectory));
         appendKV(sb, "Native cache directory", safeNativeString(NativeLibrary::GetCacheDirectory));
+    }
+
+    private static String readIniValue(File file, String section, String key, String defaultValue) {
+        if (file == null || !file.isFile()) return defaultValue;
+        String currentSection = "";
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                new FileInputStream(file), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String trimmed = line.trim();
+                if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+                    currentSection = trimmed.substring(1, trimmed.length() - 1);
+                    continue;
+                }
+                if (!section.equals(currentSection)) continue;
+                int equals = trimmed.indexOf('=');
+                if (equals <= 0) continue;
+                String foundKey = trimmed.substring(0, equals).trim();
+                if (key.equals(foundKey)) {
+                    return trimmed.substring(equals + 1).trim();
+                }
+            }
+        } catch (IOException e) {
+            return summarize(e);
+        }
+        return defaultValue;
+    }
+
+    private static int parseInt(String value) {
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private static long parseLong(String value, long fallback) {
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
+    }
+
+    private static String readFilteredLogcat() {
+        StringBuilder out = new StringBuilder(128 * 1024);
+        java.lang.Process process = null;
+        try {
+            process = Runtime.getRuntime().exec(new String[]{
+                    "logcat", "-d", "-t", "400", "-v", "time"
+            });
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                    process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                int lines = 0;
+                int bytes = 0;
+                while ((line = reader.readLine()) != null) {
+                    if (!isControllerLogLine(line)) continue;
+                    int lineBytes = line.getBytes(StandardCharsets.UTF_8).length + 1;
+                    if (lines >= 250 || bytes + lineBytes > 192 * 1024) {
+                        out.append("[truncated]\n");
+                        break;
+                    }
+                    out.append(line).append('\n');
+                    lines++;
+                    bytes += lineBytes;
+                }
+            }
+            process.waitFor(500, TimeUnit.MILLISECONDS);
+        } catch (Throwable t) {
+            return summarize(t);
+        } finally {
+            if (process != null) process.destroy();
+        }
+        return out.toString();
+    }
+
+    private static boolean isControllerLogLine(String line) {
+        return line.contains("SlippiGCAdapter")
+                || line.contains("SlippiEmu")
+                || line.contains("MainlineEmu")
+                || line.contains("SlippiRawInput")
+                || line.contains("SlippiPadOverride")
+                || line.contains("SERIALINTERFACE")
+                || line.contains("DolphinJNI");
     }
 
     private static void appendFile(StringBuilder sb, String label, File file) {

@@ -13,9 +13,11 @@ import android.hardware.usb.UsbEndpoint;
 import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbManager;
 import android.hardware.usb.UsbRequest;
+import android.os.SystemClock;
 import android.util.Log;
 
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.ArrayDeque;
 
 import org.dolphinemu.dolphinemu.DolphinApplication;
@@ -61,6 +63,8 @@ public final class Java_GCAdapter {
      */
     @SuppressWarnings("unused")
     public static final byte[] controller_payload = new byte[37];
+    private static int sLastInputSize;
+    private static long sLastInputElapsedMs;
     private static boolean sReceiverRegistered;
 
     // Async receive pipeline: keep a small number of UsbRequests queued on
@@ -252,6 +256,8 @@ public final class Java_GCAdapter {
             int len = Math.min(buf.position(), controller_payload.length);
             buf.rewind();
             buf.get(controller_payload, 0, len);
+            sLastInputSize = len;
+            sLastInputElapsedMs = SystemClock.elapsedRealtime();
             // Re-queue immediately so the kernel always has IN_FLIGHT
             // outstanding URBs.
             buf.clear();
@@ -267,6 +273,16 @@ public final class Java_GCAdapter {
 
     public static synchronized int GetFD() {
         return sConnection != null ? sConnection.getFileDescriptor() : -1;
+    }
+
+    public static synchronized DiagnosticsSnapshot GetDiagnosticsSnapshot() {
+        long now = SystemClock.elapsedRealtime();
+        long ageMs = sLastInputElapsedMs > 0 ? Math.max(0L, now - sLastInputElapsedMs) : -1L;
+        return new DiagnosticsSnapshot(
+                sConnection != null,
+                sLastInputSize,
+                ageMs,
+                Arrays.copyOf(controller_payload, controller_payload.length));
     }
 
     public static synchronized void Shutdown() {
@@ -290,5 +306,19 @@ public final class Java_GCAdapter {
         sInterface = null;
         sIn = null;
         sOut = null;
+    }
+
+    public static final class DiagnosticsSnapshot {
+        public final boolean adapterOpen;
+        public final int inputSize;
+        public final long ageMs;
+        public final byte[] payload;
+
+        private DiagnosticsSnapshot(boolean adapterOpen, int inputSize, long ageMs, byte[] payload) {
+            this.adapterOpen = adapterOpen;
+            this.inputSize = inputSize;
+            this.ageMs = ageMs;
+            this.payload = payload;
+        }
     }
 }

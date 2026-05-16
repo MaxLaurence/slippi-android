@@ -40,6 +40,7 @@ import org.dolphinemu.dolphinemu.controller.ControllerProfile;
 import org.dolphinemu.dolphinemu.gpu.GpuDriverManager;
 import org.dolphinemu.dolphinemu.settings.DolphinSettings;
 import org.dolphinemu.dolphinemu.settings.GameSettingsOverride;
+import org.dolphinemu.dolphinemu.utils.ControllerDiagnosticsCapture;
 import org.dolphinemu.dolphinemu.utils.DiagnosticsExporter;
 
 import java.io.File;
@@ -277,6 +278,9 @@ public class SettingsActivity extends AppCompatActivity {
         addActionRow(body, "Export diagnostics",
                 "App, device, settings, controller, and core state",
                 v -> exportDiagnostics());
+        addActionRow(body, "Record controller diagnostics on next launch",
+                ControllerDiagnosticsCapture.captureStatus(this),
+                v -> armControllerDiagnosticsCapture());
         addLabel(body, "Version " + BuildConfig.VERSION_NAME
                 + " (" + BuildConfig.VERSION_CODE + ")");
     }
@@ -310,6 +314,21 @@ public class SettingsActivity extends AppCompatActivity {
                     getString(R.string.diagnostics_share_chooser)));
         } catch (IOException | IllegalArgumentException e) {
             Log.w(TAG, "diagnostics export failed", e);
+            toast(getString(R.string.diagnostics_export_failed));
+        }
+    }
+
+    private void armControllerDiagnosticsCapture() {
+        try {
+            ControllerDiagnosticsCapture.armNextLaunch(this);
+            new AlertDialog.Builder(this)
+                    .setTitle("Controller diagnostics armed")
+                    .setMessage("Launch CE Training or PLAY next. Once in-game, leave the controller neutral for a few seconds, then test main-stick directions, diagonals, C-stick directions, X/Y, shield, and modifiers. Exit back here and export diagnostics.")
+                    .setPositiveButton(android.R.string.ok, null)
+                    .show();
+            refreshCurrentPane();
+        } catch (IOException e) {
+            Log.w(TAG, "controller diagnostics arm failed", e);
             toast(getString(R.string.diagnostics_export_failed));
         }
     }

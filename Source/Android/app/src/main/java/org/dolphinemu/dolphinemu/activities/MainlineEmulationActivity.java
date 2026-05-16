@@ -48,6 +48,7 @@ import org.dolphinemu.dolphinemu.replay.GeckoOverride;
 import org.dolphinemu.dolphinemu.replay.ReplayConfig;
 import org.dolphinemu.dolphinemu.settings.DolphinSettings;
 import org.dolphinemu.dolphinemu.settings.GameSettingsOverride;
+import org.dolphinemu.dolphinemu.utils.ControllerDiagnosticsCapture;
 import org.dolphinemu.dolphinemu.utils.DirectoryInitialization;
 import org.dolphinemu.dolphinemu.utils.PhysicalControllerDetector;
 import org.dolphinemu.dolphinemu.utils.RawStickInputProvider;
@@ -133,6 +134,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     private boolean useGcAdapter;
     private boolean isTrainingMode;
     private boolean isReplayMode;
+    private String launchMode = LAUNCH_MODE_LIVE;
     private boolean refreshRateSettingsSaved;
     private boolean refreshRateSettingsOverridden;
     private String previousPeakRefreshRate;
@@ -228,6 +230,8 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             if (feedRawStickState(state)) {
                 traceInputEvent("raw:" + rawSourceLabel(), SystemClock.uptimeMillis(), 0);
                 pushPad();
+                ControllerDiagnosticsCapture.recordInputEvent("raw:" + rawSourceLabel(),
+                        describeRawStickState(state) + " pad=" + padState.snapshotString());
                 postRawInputPoll();
                 return;
             }
@@ -278,12 +282,14 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         isoPath = getIntent().getStringExtra(EXTRA_ISO_PATH);
         replayPath = getIntent().getStringExtra(EXTRA_REPLAY_PATH);
         useGcAdapter = getIntent().getBooleanExtra(EXTRA_USE_GC_ADAPTER, false);
-        String launchMode = getIntent().getStringExtra(EXTRA_LAUNCH_MODE);
+        launchMode = getIntent().getStringExtra(EXTRA_LAUNCH_MODE);
+        if (launchMode == null) launchMode = LAUNCH_MODE_LIVE;
         isTrainingMode = LAUNCH_MODE_TRAINING.equals(launchMode);
         isReplayMode = !isTrainingMode && replayPath != null && new File(replayPath).exists();
         if (isReplayMode) {
             useGcAdapter = false;
         }
+        ControllerDiagnosticsCapture.recordLaunch(this, "mainline", launchMode, useGcAdapter);
         if (TextUtils.isEmpty(isoPath) || !new File(isoPath).isFile()) {
             Toast.makeText(this, "No ISO path passed", Toast.LENGTH_LONG).show();
             finish();
@@ -387,6 +393,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         }
         restoreSystemRefreshRateSettings();
         NativeLibrary.clearEmulationActivity();
+        ControllerDiagnosticsCapture.stopActiveCapture("activity destroyed");
         super.onDestroy();
         if (isFinishing()) {
             Log.i(TAG, "exiting mainline process to avoid stale native globals");
@@ -434,6 +441,14 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         traceInputEvent("key", event.getEventTime(), event.getRepeatCount());
         padState.setButton(bit, action == KeyEvent.ACTION_DOWN);
         pushPad();
+        ControllerDiagnosticsCapture.recordInputEvent("key",
+                "device=" + safeDeviceName(event.getDevice())
+                        + " keyCode=" + event.getKeyCode()
+                        + " action=" + action
+                        + " repeat=" + event.getRepeatCount()
+                        + " source=0x" + Integer.toHexString(event.getSource())
+                        + " gcBit=0x" + Integer.toHexString(bit)
+                        + " pad=" + padState.snapshotString());
         return true;
     }
 
@@ -463,6 +478,8 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         padState.setHat(event.getAxisValue(MotionEvent.AXIS_HAT_X),
                 event.getAxisValue(MotionEvent.AXIS_HAT_Y));
         pushPad();
+        ControllerDiagnosticsCapture.recordInputEvent("motion",
+                describeMotionEvent(event) + " pad=" + padState.snapshotString());
         return true;
     }
 
@@ -799,6 +816,43 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         return fed;
     }
 
+    private String describeRawStickState(RawStickState state) {
+        if (state == null) return "state=null";
+        return "rawMain=(" + formatAxis(state.valueForAxis(MotionEvent.AXIS_X))
+                + "," + formatAxis(state.valueForAxis(MotionEvent.AXIS_Y))
+                + ") rawC=(" + formatAxis(state.valueForAxis(MotionEvent.AXIS_Z))
+                + "," + formatAxis(state.valueForAxis(MotionEvent.AXIS_RZ))
+                + ")";
+    }
+
+    private String describeMotionEvent(MotionEvent event) {
+        return "device=" + safeDeviceName(event.getDevice())
+                + " source=0x" + Integer.toHexString(event.getSource())
+                + " history=" + event.getHistorySize()
+                + " axes={x=" + formatAxis(event.getAxisValue(MotionEvent.AXIS_X))
+                + ",y=" + formatAxis(event.getAxisValue(MotionEvent.AXIS_Y))
+                + ",z=" + formatAxis(event.getAxisValue(MotionEvent.AXIS_Z))
+                + ",rz=" + formatAxis(event.getAxisValue(MotionEvent.AXIS_RZ))
+                + ",lt=" + formatAxis(event.getAxisValue(MotionEvent.AXIS_LTRIGGER))
+                + ",rt=" + formatAxis(event.getAxisValue(MotionEvent.AXIS_RTRIGGER))
+                + ",brake=" + formatAxis(event.getAxisValue(MotionEvent.AXIS_BRAKE))
+                + ",gas=" + formatAxis(event.getAxisValue(MotionEvent.AXIS_GAS))
+                + ",hat=(" + formatAxis(event.getAxisValue(MotionEvent.AXIS_HAT_X))
+                + "," + formatAxis(event.getAxisValue(MotionEvent.AXIS_HAT_Y)) + ")}";
+    }
+
+    private static String safeDeviceName(android.view.InputDevice device) {
+        return device == null ? "" : device.getName();
+    }
+
+    private static String formatAxis(Float value) {
+        return value == null ? "" : String.format(Locale.US, "%+.3f", value);
+    }
+
+    private static String formatAxis(float value) {
+        return String.format(Locale.US, "%+.3f", value);
+    }
+
     private boolean hasRawStickSource() {
         return rawStickInput != null;
     }
@@ -1075,6 +1129,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             }
         }, "MainlineDolphin");
         emuThread.start();
+        ControllerDiagnosticsCapture.startIfArmed(this, "mainline", launchMode, useGcAdapter);
         registerPerfHintWhenReady();
         ui.post(bootStatusPoll);
     }
