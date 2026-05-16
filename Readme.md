@@ -106,7 +106,9 @@ switching to this update channel.
 - Raw evdev stick read on supported devices (bypasses
   MotionEvent saturation when the Android driver clips early).
 - **Replay browser + playback** — every netplay match auto-saves to
-  `<app-files>/dolphin/Slippi/Replays/` (toggle on the launcher).
+  the replay folder shown in the replay browser. Users can choose a
+  folder; the app uses a staging path only while native Slippi is
+  writing the file.
   In-app browser parses each `.slp` for stage, characters, duration,
   date and shows them in a sortable list. Tap a row to watch; the HUD
   gives you play / pause, ±5s jump, scrubbable seek bar, and a

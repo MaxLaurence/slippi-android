@@ -3,6 +3,7 @@ package org.dolphinemu.dolphinemu.activities;
 import android.app.GameManager;
 import android.content.pm.ActivityInfo;
 import android.os.Build;
+import android.os.FileObserver;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -94,6 +95,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     private final Handler ui = new Handler(Looper.getMainLooper());
     private HandlerThread rawInputThread;
     private Handler rawInputHandler;
+    private FileObserver replayStagingObserver;
     private volatile boolean rawInputPolling;
     private volatile int rawInputThreadTid = -1;
     private long lastInputLatencyLogMs;
@@ -327,6 +329,14 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         isTrainingMode = LAUNCH_MODE_TRAINING.equals(launchMode);
         isReplayMode = !isTrainingMode && replayPath != null && new File(replayPath).exists();
         ControllerDiagnosticsCapture.recordLaunch(this, "ishiiruka", launchMode, useGcAdapter);
+        ReplayConfig.ensureReplayDirectory(this);
+        NativeLibrary.SetConfig("Dolphin.ini", "Core", "SlippiReplayDir",
+                ReplayConfig.nativeReplayWriteDir(this).getAbsolutePath());
+        NativeLibrary.SetConfig("Dolphin.ini", "Core", "SlippiReplayMonthFolders", "False");
+        if (!isReplayMode && !isTrainingMode) {
+            replayStagingObserver = ReplayConfig.createStagingDrainObserver(this, ui);
+            if (replayStagingObserver != null) replayStagingObserver.startWatching();
+        }
 
         if (isTrainingMode) {
             ReplayConfig.writeEmpty(this);
@@ -381,6 +391,10 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         shutdownRawInputThread();
         ui.removeCallbacks(controllerDetectorPoll);
         ui.removeCallbacks(bootStatusPoll);
+        if (replayStagingObserver != null) {
+            replayStagingObserver.stopWatching();
+            replayStagingObserver = null;
+        }
         if (replayHud != null) replayHud.stopPolling();
         if (isReplayMode) {
             // Belt-and-suspenders: if the user exits mid-FFW, the OC
@@ -405,6 +419,11 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         restoreSystemRefreshRateSettings();
         // Idempotent: harmless if onBackPressed already stopped us.
         shutdownEmuThreadSync();
+        if (isReplayMode) {
+            ReplayConfig.clearPlaybackCache(this);
+        } else {
+            ReplayConfig.drainNativeReplayStaging(this);
+        }
         try {
             NativeLibrary.ClearEXIDeviceOverrides();
         } catch (Throwable ignored) {}

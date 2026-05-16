@@ -2,11 +2,14 @@
 // Licensed under GPLv2+
 package org.dolphinemu.dolphinemu.replay;
 
+import android.content.Context;
+import android.net.Uri;
 import android.util.Log;
 import android.util.SparseArray;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
@@ -70,13 +73,53 @@ public final class ReplayMetadata {
         return fresh;
     }
 
+    public static synchronized ReplayMetadata parse(Context ctx, ReplayItem item) {
+        if (item == null) return UNPARSEABLE;
+        if (item.isLocalFile()) return parse(item.file());
+        String key = item.stableKey();
+        long mtime = item.lastModified();
+        long size = item.length();
+        ReplayMetadata hit = CACHE.get(key);
+        if (hit != null && hit.mtimeAtParse == mtime && hit.sizeAtParse == size) {
+            return hit;
+        }
+        ReplayMetadata fresh = parseUncached(ctx, item.uri(), key, mtime, size);
+        CACHE.put(key, fresh);
+        return fresh;
+    }
+
     private static ReplayMetadata parseUncached(File f, long mtime, long size) {
         if (size < 0x100) return UNPARSEABLE;
         try (RandomAccessFile raf = new RandomAccessFile(f, "r")) {
             byte[] head = new byte[Math.min(2048, (int) size)];
             raf.seek(0);
             raf.readFully(head);
+            byte[] tail = new byte[(int) Math.min(4096, size)];
+            raf.seek(size - tail.length);
+            raf.readFully(tail);
+            return parseBuffers(head, tail, mtime, size);
+        } catch (IOException ex) {
+            Log.w(TAG, "parse " + f + ": " + ex);
+            return UNPARSEABLE;
+        }
+    }
 
+    private static ReplayMetadata parseUncached(Context ctx, Uri uri, String key,
+                                                long mtime, long size) {
+        if (size < 0x100) return UNPARSEABLE;
+        try {
+            byte[] head = readRange(ctx, uri, 0, Math.min(2048, size));
+            byte[] tail = readRange(ctx, uri, Math.max(0, size - 4096), Math.min(4096, size));
+            return parseBuffers(head, tail, mtime, size);
+        } catch (IOException ex) {
+            Log.w(TAG, "parse " + key + ": " + ex);
+            return UNPARSEABLE;
+        }
+    }
+
+    private static ReplayMetadata parseBuffers(byte[] head, byte[] tail, long mtime, long size) {
+        if (head == null || head.length < 0x100) return UNPARSEABLE;
+        try {
             // Skip the UBJSON wrapper. Per SlippiGame.cpp's
             // getRawDataPosition, the raw event stream starts at byte 0
             // if the file begins with 0x36, or at byte 15 if it begins
@@ -144,10 +187,10 @@ public final class ReplayMetadata {
                     chars[port] = CHARS.get(charId, "Char " + charId);
                 }
             }
-            int lastFrame = readLastFrame(raf, size);
+            int lastFrame = readLastFrame(tail);
             return new ReplayMetadata(stage, chars, lastFrame, mtime, size, true);
-        } catch (IOException ex) {
-            Log.w(TAG, "parse " + f + ": " + ex);
+        } catch (RuntimeException ex) {
+            Log.w(TAG, "parse replay metadata failed: " + ex);
             return UNPARSEABLE;
         }
     }
@@ -157,11 +200,7 @@ public final class ReplayMetadata {
      * UBJSON key "lastFrame" → i32 marker. Falls back to -123 on miss,
      * which the UI displays as "?".
      */
-    private static int readLastFrame(RandomAccessFile raf, long size) throws IOException {
-        int tailLen = (int) Math.min(4096, size);
-        byte[] tail = new byte[tailLen];
-        raf.seek(size - tailLen);
-        raf.readFully(tail);
+    private static int readLastFrame(byte[] tail) {
         byte[] needle = "lastFrame".getBytes(StandardCharsets.US_ASCII);
         int idx = indexOf(tail, needle, 0);
         if (idx < 0) return -123;
@@ -176,6 +215,38 @@ public final class ReplayMetadata {
             }
         }
         return -123;
+    }
+
+    private static byte[] readRange(Context ctx, Uri uri, long offset, long length)
+            throws IOException {
+        byte[] out = new byte[(int) length];
+        try (InputStream in = ctx.getContentResolver().openInputStream(uri)) {
+            if (in == null) throw new IOException("openInputStream returned null");
+            skipFully(in, offset);
+            int off = 0;
+            while (off < out.length) {
+                int n = in.read(out, off, out.length - off);
+                if (n < 0) break;
+                off += n;
+            }
+            if (off == out.length) return out;
+            byte[] shortOut = new byte[off];
+            System.arraycopy(out, 0, shortOut, 0, off);
+            return shortOut;
+        }
+    }
+
+    private static void skipFully(InputStream in, long bytes) throws IOException {
+        long remaining = bytes;
+        while (remaining > 0) {
+            long skipped = in.skip(remaining);
+            if (skipped > 0) {
+                remaining -= skipped;
+                continue;
+            }
+            if (in.read() < 0) throw new IOException("EOF while skipping");
+            remaining--;
+        }
     }
 
     private static int findFirstByte(byte[] buf, byte b, int from, int to) {
@@ -227,14 +298,64 @@ public final class ReplayMetadata {
     private static final SparseArray<String> CHARS = new SparseArray<>();
 
     static {
-        // Melee internal-stage IDs (legal tournament + common subset).
+        // Melee internal-stage IDs, matching Project Slippi's public stage table.
         STAGES.put(2, "Fountain of Dreams");
         STAGES.put(3, "Pokemon Stadium");
+        STAGES.put(4, "Princess Peach's Castle");
+        STAGES.put(5, "Kongo Jungle");
+        STAGES.put(6, "Brinstar");
+        STAGES.put(7, "Corneria");
         STAGES.put(8, "Yoshi's Story");
-        STAGES.put(28, "Dream Land");
+        STAGES.put(9, "Onett");
+        STAGES.put(10, "Mute City");
+        STAGES.put(11, "Rainbow Cruise");
+        STAGES.put(12, "Jungle Japes");
+        STAGES.put(13, "Great Bay");
+        STAGES.put(14, "Hyrule Temple");
+        STAGES.put(15, "Brinstar Depths");
+        STAGES.put(16, "Yoshi's Island");
+        STAGES.put(17, "Green Greens");
+        STAGES.put(18, "Fourside");
+        STAGES.put(19, "Mushroom Kingdom I");
+        STAGES.put(20, "Mushroom Kingdom II");
+        STAGES.put(22, "Venom");
+        STAGES.put(23, "Poke Floats");
+        STAGES.put(24, "Big Blue");
+        STAGES.put(25, "Icicle Mountain");
+        STAGES.put(26, "Icetop");
+        STAGES.put(27, "Flat Zone");
+        STAGES.put(28, "Dream Land N64");
+        STAGES.put(29, "Yoshi's Island N64");
+        STAGES.put(30, "Kongo Jungle N64");
         STAGES.put(31, "Battlefield");
         STAGES.put(32, "Final Destination");
-        // The rest get rendered as "Stage N" — better than guessing.
+        STAGES.put(33, "Target Test (Mario)");
+        STAGES.put(34, "Target Test (Captain Falcon)");
+        STAGES.put(35, "Target Test (Young Link)");
+        STAGES.put(36, "Target Test (Donkey Kong)");
+        STAGES.put(37, "Target Test (Dr. Mario)");
+        STAGES.put(38, "Target Test (Falco)");
+        STAGES.put(39, "Target Test (Fox)");
+        STAGES.put(40, "Target Test (Ice Climbers)");
+        STAGES.put(41, "Target Test (Kirby)");
+        STAGES.put(42, "Target Test (Bowser)");
+        STAGES.put(43, "Target Test (Link)");
+        STAGES.put(44, "Target Test (Luigi)");
+        STAGES.put(45, "Target Test (Marth)");
+        STAGES.put(46, "Target Test (Mewtwo)");
+        STAGES.put(47, "Target Test (Ness)");
+        STAGES.put(48, "Target Test (Peach)");
+        STAGES.put(49, "Target Test (Pichu)");
+        STAGES.put(50, "Target Test (Pikachu)");
+        STAGES.put(51, "Target Test (Jigglypuff)");
+        STAGES.put(52, "Target Test (Samus)");
+        STAGES.put(53, "Target Test (Sheik)");
+        STAGES.put(54, "Target Test (Yoshi)");
+        STAGES.put(55, "Target Test (Zelda)");
+        STAGES.put(56, "Target Test (Mr. Game & Watch)");
+        STAGES.put(57, "Target Test (Roy)");
+        STAGES.put(58, "Target Test (Ganondorf)");
+        STAGES.put(84, "Home-Run Contest");
 
         // External Melee character IDs (the EXTERNAL set is what GAME_INIT carries).
         CHARS.put(0,  "Falcon");

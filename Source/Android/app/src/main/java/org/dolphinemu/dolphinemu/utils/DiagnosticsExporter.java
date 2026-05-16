@@ -22,6 +22,7 @@ import org.dolphinemu.dolphinemu.controller.ButtonMap;
 import org.dolphinemu.dolphinemu.controller.ControllerProfile;
 import org.dolphinemu.dolphinemu.gpu.GpuDriverManager;
 import org.dolphinemu.dolphinemu.replay.ReplayConfig;
+import org.dolphinemu.dolphinemu.replay.ReplayStore;
 import org.dolphinemu.dolphinemu.settings.DolphinSettings;
 import org.dolphinemu.dolphinemu.settings.GameSettingsOverride;
 import org.dolphinemu.dolphinemu.training.TrainingModeManager;
@@ -170,9 +171,10 @@ public final class DiagnosticsExporter {
             appendFile(sb, "Training Mode ISO", new File(training.isoPath));
         }
 
-        Count replayCount = countFiles(ReplayConfig.replaysDir(context), ".slp");
-        appendKV(sb, "Replay files", replayCount.files);
-        appendKV(sb, "Replay bytes", formatBytes(replayCount.bytes));
+        ReplayStore replayStore = new ReplayStore(context);
+        appendKV(sb, "Replay folder", ReplayConfig.replayFolderLabel(context));
+        appendKV(sb, "Replay files", replayStore.count());
+        appendKV(sb, "Replay bytes", formatBytes(replayStore.totalSize()));
     }
 
     private static void appendControllers(StringBuilder sb, Context context) {

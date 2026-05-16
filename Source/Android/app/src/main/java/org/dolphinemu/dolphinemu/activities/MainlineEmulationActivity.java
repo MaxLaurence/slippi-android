@@ -4,6 +4,7 @@ import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.FileObserver;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
@@ -115,6 +116,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     private Thread emuThread;
     private HandlerThread rawInputThread;
     private Handler rawInputHandler;
+    private FileObserver replayStagingObserver;
     private PerformanceHintManager.Session hintSession;
     private volatile boolean emuStarted;
     private volatile boolean rawInputPolling;
@@ -290,6 +292,10 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             useGcAdapter = false;
         }
         ControllerDiagnosticsCapture.recordLaunch(this, "mainline", launchMode, useGcAdapter);
+        if (!isReplayMode && !isTrainingMode) {
+            replayStagingObserver = ReplayConfig.createStagingDrainObserver(this, ui);
+            if (replayStagingObserver != null) replayStagingObserver.startWatching();
+        }
         if (TextUtils.isEmpty(isoPath) || !new File(isoPath).isFile()) {
             Toast.makeText(this, "No ISO path passed", Toast.LENGTH_LONG).show();
             finish();
@@ -363,6 +369,10 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         shutdownRawInputThread();
         ui.removeCallbacks(controllerDetectorPoll);
         ui.removeCallbacks(bootStatusPoll);
+        if (replayStagingObserver != null) {
+            replayStagingObserver.stopWatching();
+            replayStagingObserver = null;
+        }
         if (replayHud != null) replayHud.stopPolling();
         if (isReplayMode) {
             try {
@@ -376,6 +386,11 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             }
         }
         shutdownEmuThreadSync();
+        if (isReplayMode) {
+            ReplayConfig.clearPlaybackCache(this);
+        } else {
+            ReplayConfig.drainNativeReplayStaging(this);
+        }
         if (hintSession != null) {
             try {
                 hintSession.close();
@@ -511,6 +526,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         int audioBursts = prefs.getInt(PREF_KEY_AUDIO_BUFFER_BURSTS, AUDIO_BURSTS_BALANCED);
         String displayLatencyMode =
                 prefs.getString(PREF_KEY_DISPLAY_LATENCY_MODE, DISPLAY_LATENCY_SMOOTH);
+        String replayDir = ReplayConfig.nativeReplayWriteDir(this).getAbsolutePath();
         int port0 = useGcAdapter ? SI_WIIU_ADAPTER : SI_GC_CONTROLLER;
         int portN = useGcAdapter ? SI_WIIU_ADAPTER : SI_NONE;
 
@@ -532,6 +548,18 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core", "SIDevice3", portN);
         NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Slippi",
                 "EnableJukebox", false);
+        NativeConfig.setString(NativeConfig.LAYER_BASE, "Dolphin", "Slippi",
+                "ReplayDir", replayDir);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Slippi",
+                "SaveReplays", true);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Slippi",
+                "ReplayMonthlyFolders", false);
+        NativeConfig.setString(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "SlippiReplayDir", replayDir);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "SlippiSaveReplays", true);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "SlippiReplayMonthFolders", false);
         applyMainlineExiRuntimeConfig();
         NativeConfig.save(NativeConfig.LAYER_BASE);
         if (useGcAdapter) {
@@ -540,6 +568,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     }
 
     private void applyMainlineStartupConfigFiles() {
+        ReplayConfig.ensureReplayDirectory(this);
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
         String backend = prefs.getString(PREF_KEY_BACKEND, BACKEND_VULKAN);
         String audioBackend = sanitizeAudioBackend(prefs.getString(PREF_KEY_AUDIO_BACKEND,
@@ -547,6 +576,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         int audioBursts = prefs.getInt(PREF_KEY_AUDIO_BUFFER_BURSTS, AUDIO_BURSTS_BALANCED);
         String displayLatencyMode =
                 prefs.getString(PREF_KEY_DISPLAY_LATENCY_MODE, DISPLAY_LATENCY_SMOOTH);
+        String replayDir = ReplayConfig.nativeReplayWriteDir(this).getAbsolutePath();
         int port0 = useGcAdapter ? SI_WIIU_ADAPTER : SI_GC_CONTROLLER;
         int portN = useGcAdapter ? SI_WIIU_ADAPTER : SI_NONE;
         int efbScale = DolphinSettings.getEfbScale(this);
@@ -565,6 +595,12 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         writeIniValue(dolphinIni, "DSP", "AndroidAudioBufferBursts",
                 Integer.toString(audioBursts));
         writeIniValue(dolphinIni, "Slippi", "EnableJukebox", "False");
+        writeIniValue(dolphinIni, "Slippi", "ReplayDir", replayDir);
+        writeIniValue(dolphinIni, "Slippi", "SaveReplays", "True");
+        writeIniValue(dolphinIni, "Slippi", "ReplayMonthlyFolders", "False");
+        writeIniValue(dolphinIni, "Core", "SlippiReplayDir", replayDir);
+        writeIniValue(dolphinIni, "Core", "SlippiSaveReplays", "True");
+        writeIniValue(dolphinIni, "Core", "SlippiReplayMonthFolders", "False");
 
         File gfxIni = new File(configDir, "GFX.ini");
         writeIniValue(gfxIni, "Settings", "DriverLibName",

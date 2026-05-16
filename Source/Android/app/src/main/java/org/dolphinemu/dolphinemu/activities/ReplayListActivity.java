@@ -31,7 +31,6 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.appbar.MaterialToolbar;
-import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
 import com.google.android.material.materialswitch.MaterialSwitch;
 
 import org.dolphinemu.dolphinemu.EmulatorCore;
@@ -41,14 +40,11 @@ import org.dolphinemu.dolphinemu.R;
 import org.dolphinemu.dolphinemu.UserDirectoryBootstrap;
 import org.dolphinemu.dolphinemu.gpu.GpuDriverManager;
 import org.dolphinemu.dolphinemu.replay.ReplayConfig;
+import org.dolphinemu.dolphinemu.replay.ReplayItem;
 import org.dolphinemu.dolphinemu.replay.ReplayMetadata;
 import org.dolphinemu.dolphinemu.replay.ReplayStore;
 
 import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -71,18 +67,23 @@ public class ReplayListActivity extends AppCompatActivity {
     private ReplayAdapter adapter;
     private MaterialToolbar toolbar;
     private TextView emptyView;
+    private TextView folderStatus;
     private final ExecutorService metaExecutor = Executors.newSingleThreadExecutor();
     private final Handler ui = new Handler(Looper.getMainLooper());
 
-    private final ActivityResultLauncher<String[]> importLauncher =
-            registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
+    private final ActivityResultLauncher<Uri> folderLauncher =
+            registerForActivityResult(new ActivityResultContracts.OpenDocumentTree(), uri -> {
                 if (uri == null) return;
-                File dst = importFromUri(uri);
-                if (dst == null) {
-                    toast(getString(R.string.replay_row_unparseable));
-                } else {
-                    refresh();
+                if (!ReplayConfig.setCustomReplayFolder(this, uri)) {
+                    toast(getString(R.string.replay_folder_select_failed));
+                    return;
                 }
+                ReplayConfig.MoveResult moved = ReplayConfig.exportLocalReplaysToCustomFolder(this);
+                ReplayConfig.MoveResult staged = ReplayConfig.drainNativeReplayStaging(this);
+                applyReplayNativeConfig();
+                toast(getString(R.string.replay_folder_selected_toast,
+                        moved.moved + staged.moved));
+                refresh();
             });
 
     @Override
@@ -95,6 +96,7 @@ public class ReplayListActivity extends AppCompatActivity {
         toolbar.setOnMenuItemClickListener(this::onTopMenuItem);
 
         emptyView = findViewById(R.id.replay_empty);
+        folderStatus = findViewById(R.id.replay_folder_status);
 
         store = new ReplayStore(this);
         adapter = new ReplayAdapter();
@@ -102,11 +104,9 @@ public class ReplayListActivity extends AppCompatActivity {
         rv.setLayoutManager(new LinearLayoutManager(this));
         rv.setAdapter(adapter);
 
-        ExtendedFloatingActionButton fab = findViewById(R.id.replay_fab);
-        fab.setOnClickListener(v -> importLauncher.launch(new String[]{"*/*"}));
-
         // "Save netplay replays" — INI-backed. Read the C++ default so
         // the visible state matches what BootCore will see.
+        applyReplayNativeConfig();
         MaterialSwitch saveSwitch = findViewById(R.id.save_replays_switch);
         String saved = NativeLibrary.GetConfig(
                 "Dolphin.ini", "Core", "SlippiSaveReplays", "True");
@@ -131,10 +131,14 @@ public class ReplayListActivity extends AppCompatActivity {
     }
 
     private void refresh() {
-        List<File> files = store.list();
+        List<ReplayItem> files = store.list();
         adapter.setItems(files);
         toolbar.setTitle(getString(R.string.replay_list_header,
                 files.size(), ReplayStore.humanSize(store.totalSize())));
+        if (folderStatus != null) {
+            folderStatus.setText(getString(R.string.replay_folder_status,
+                    ReplayConfig.replayFolderLabel(this)));
+        }
         boolean noIso = !hasIso();
         if (files.isEmpty()) {
             emptyView.setVisibility(View.VISIBLE);
@@ -155,8 +159,8 @@ public class ReplayListActivity extends AppCompatActivity {
 
     private boolean onTopMenuItem(MenuItem item) {
         int id = item.getItemId();
-        if (id == R.id.menu_replay_import) {
-            importLauncher.launch(new String[]{"*/*"});
+        if (id == R.id.menu_replay_folder) {
+            showReplayFolder();
             return true;
         }
         if (id == R.id.menu_replay_delete_30) {
@@ -174,11 +178,29 @@ public class ReplayListActivity extends AppCompatActivity {
         return false;
     }
 
+    private void showReplayFolder() {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.replay_folder_title)
+                .setMessage(getString(R.string.replay_folder_body,
+                        ReplayConfig.replayFolderLabel(this)))
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(R.string.replay_folder_choose, (d, w) ->
+                        folderLauncher.launch(null))
+                .show();
+    }
+
+    private void applyReplayNativeConfig() {
+        ReplayConfig.ensureReplayDirectory(this);
+        NativeLibrary.SetConfig("Dolphin.ini", "Core", "SlippiReplayDir",
+                ReplayConfig.nativeReplayWriteDir(this).getAbsolutePath());
+        NativeLibrary.SetConfig("Dolphin.ini", "Core", "SlippiReplayMonthFolders", "False");
+    }
+
     private void confirmDeleteOlder(int days) {
         long ageMs = (long) days * 24L * 60L * 60L * 1000L;
         long cutoff = System.currentTimeMillis() - ageMs;
         int matched = 0;
-        for (File f : store.list()) if (f.lastModified() < cutoff) matched++;
+        for (ReplayItem f : store.list()) if (f.lastModified() < cutoff) matched++;
         if (matched == 0) {
             toast("Nothing older than " + days + " days");
             return;
@@ -211,7 +233,7 @@ public class ReplayListActivity extends AppCompatActivity {
                 .show();
     }
 
-    private void confirmDeleteSelected(List<File> selected) {
+    private void confirmDeleteSelected(List<ReplayItem> selected) {
         int n = selected.size();
         if (n == 0) return;
         new AlertDialog.Builder(this)
@@ -232,13 +254,18 @@ public class ReplayListActivity extends AppCompatActivity {
         return !TextUtils.isEmpty(iso) && new File(iso).exists();
     }
 
-    private void playReplay(File slp) {
+    private void playReplay(ReplayItem replay) {
         if (!hasIso()) {
             toast(getString(R.string.replay_list_empty_no_iso));
             return;
         }
-        ReplayMetadata meta = ReplayMetadata.parse(slp);
+        ReplayMetadata meta = ReplayMetadata.parse(this, replay);
         if (!meta.isPlayable()) {
+            toast(getString(R.string.replay_unparseable_toast));
+            return;
+        }
+        File slp = ReplayConfig.prepareReplayForPlayback(this, replay);
+        if (slp == null || !slp.isFile()) {
             toast(getString(R.string.replay_unparseable_toast));
             return;
         }
@@ -276,63 +303,20 @@ public class ReplayListActivity extends AppCompatActivity {
         startActivity(it);
     }
 
-    private void shareReplay(File slp) {
+    private void shareReplay(ReplayItem replay) {
         try {
-            Uri uri = FileProvider.getUriForFile(this,
-                    getPackageName() + ".replays", slp);
+            Uri uri = replay.isLocalFile()
+                    ? FileProvider.getUriForFile(this, getPackageName() + ".replays", replay.file())
+                    : replay.uri();
             Intent it = new Intent(Intent.ACTION_SEND);
             it.setType("application/octet-stream");
             it.putExtra(Intent.EXTRA_STREAM, uri);
             it.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             startActivity(Intent.createChooser(it, getString(R.string.replay_share_chooser)));
         } catch (Throwable t) {
-            Log.w(TAG, "share " + slp + ": " + t);
+            Log.w(TAG, "share " + replay.name() + ": " + t);
             toast("Couldn't share");
         }
-    }
-
-    private File importFromUri(Uri uri) {
-        File dir = ReplayConfig.replaysDir(this);
-        if (!dir.exists() && !dir.mkdirs()) return null;
-        String name = displayNameOf(uri);
-        if (name == null) name = "imported-" + System.currentTimeMillis() + ".slp";
-        File dst = uniqueFile(dir, name);
-        try (InputStream in = getContentResolver().openInputStream(uri);
-             OutputStream out = new FileOutputStream(dst)) {
-            if (in == null) return null;
-            byte[] buf = new byte[1 << 16];
-            int n;
-            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-            return dst;
-        } catch (IOException e) {
-            Log.e(TAG, "import " + uri + ": " + e);
-            return null;
-        }
-    }
-
-    private String displayNameOf(Uri uri) {
-        try (android.database.Cursor c = getContentResolver().query(uri,
-                new String[]{android.provider.OpenableColumns.DISPLAY_NAME},
-                null, null, null)) {
-            if (c != null && c.moveToFirst()) {
-                String name = c.getString(0);
-                if (name != null && !name.isEmpty()) return name;
-            }
-        } catch (Throwable ignored) {}
-        return null;
-    }
-
-    private static File uniqueFile(File dir, String name) {
-        File f = new File(dir, name);
-        if (!f.exists()) return f;
-        int dot = name.lastIndexOf('.');
-        String stem = dot > 0 ? name.substring(0, dot) : name;
-        String ext = dot > 0 ? name.substring(dot) : "";
-        for (int i = 1; i < 1000; i++) {
-            f = new File(dir, stem + " (" + i + ")" + ext);
-            if (!f.exists()) return f;
-        }
-        return new File(dir, stem + "-" + System.currentTimeMillis() + ext);
     }
 
     private void toast(String msg) {
@@ -343,10 +327,10 @@ public class ReplayListActivity extends AppCompatActivity {
     // --- adapter ----------------------------------------------------------
 
     private class ReplayAdapter extends RecyclerView.Adapter<ReplayRow> {
-        private final List<File> items = new ArrayList<>();
-        private final Set<File> selected = new HashSet<>();
+        private final List<ReplayItem> items = new ArrayList<>();
+        private final Set<ReplayItem> selected = new HashSet<>();
 
-        void setItems(List<File> next) {
+        void setItems(List<ReplayItem> next) {
             items.clear();
             items.addAll(next);
             selected.retainAll(items);
@@ -368,7 +352,7 @@ public class ReplayListActivity extends AppCompatActivity {
 
         @Override
         public void onBindViewHolder(@NonNull ReplayRow h, int position) {
-            File f = items.get(position);
+            ReplayItem f = items.get(position);
             boolean isSelected = selected.contains(f);
             h.bind(f, isSelected);
 
@@ -386,7 +370,7 @@ public class ReplayListActivity extends AppCompatActivity {
             h.overflow.setOnClickListener(v -> showRowMenu(v, f));
         }
 
-        private void toggleSelection(File f, int position) {
+        private void toggleSelection(ReplayItem f, int position) {
             if (selected.contains(f)) selected.remove(f);
             else selected.add(f);
             if (position >= 0) notifyItemChanged(position);
@@ -418,7 +402,7 @@ public class ReplayListActivity extends AppCompatActivity {
         @Override
         public int getItemCount() { return items.size(); }
 
-        private void showRowMenu(View anchor, File f) {
+        private void showRowMenu(View anchor, ReplayItem f) {
             PopupMenu pm = new PopupMenu(ReplayListActivity.this, anchor);
             pm.getMenuInflater().inflate(R.menu.menu_replay_row, pm.getMenu());
             pm.setOnMenuItemClickListener(item -> {
@@ -453,7 +437,7 @@ public class ReplayListActivity extends AppCompatActivity {
         final TextView subtitle;
         final TextView duration;
         final ImageButton overflow;
-        File current;
+        ReplayItem current;
 
         ReplayRow(@NonNull View itemView) {
             super(itemView);
@@ -463,9 +447,9 @@ public class ReplayListActivity extends AppCompatActivity {
             overflow = itemView.findViewById(R.id.row_overflow);
         }
 
-        void bind(File f, boolean isSelected) {
+        void bind(ReplayItem f, boolean isSelected) {
             current = f;
-            title.setText(f.getName());
+            title.setText(f.name());
             subtitle.setText(DateUtils.formatDateTime(itemView.getContext(),
                     f.lastModified(),
                     DateUtils.FORMAT_SHOW_DATE | DateUtils.FORMAT_SHOW_TIME
@@ -473,7 +457,7 @@ public class ReplayListActivity extends AppCompatActivity {
             duration.setText("");
             itemView.setActivated(isSelected);
             metaExecutor.execute(() -> {
-                ReplayMetadata m = ReplayMetadata.parse(f);
+                ReplayMetadata m = ReplayMetadata.parse(ReplayListActivity.this, f);
                 ui.post(() -> {
                     if (current != f) return;  // row was recycled
                     if (m.isPlayable()) {
@@ -481,7 +465,7 @@ public class ReplayListActivity extends AppCompatActivity {
                         duration.setText(m.durationLabel());
                     } else {
                         title.setText(getString(R.string.replay_row_unparseable)
-                                + " · " + f.getName());
+                                + " · " + f.name());
                     }
                 });
             });

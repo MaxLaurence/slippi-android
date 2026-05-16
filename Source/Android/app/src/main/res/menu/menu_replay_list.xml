@@ -2,10 +2,9 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
     <item
-        android:id="@+id/menu_replay_import"
-        android:title="@string/replay_list_import"
-        android:icon="@android:drawable/ic_input_add"
-        app:showAsAction="ifRoom"/>
+        android:id="@+id/menu_replay_folder"
+        android:title="@string/replay_folder_menu"
+        app:showAsAction="never"/>
     <item
         android:id="@+id/menu_replay_delete_7"
         android:title="@string/replay_delete_older_7"

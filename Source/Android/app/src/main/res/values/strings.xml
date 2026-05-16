@@ -159,9 +159,15 @@
 
     <string name="replay_list_title">Replays</string>
     <string name="replay_list_header">Replays · %1$d · %2$s</string>
-    <string name="replay_list_import">Import .slp</string>
+    <string name="replay_folder_menu">Replay folder</string>
+    <string name="replay_folder_status">Folder: %1$s</string>
+    <string name="replay_folder_title">Replay folder</string>
+    <string name="replay_folder_body">Auto-saved replays are stored here. Any .slp files in this folder appear in the replay browser:\n\n%1$s</string>
+    <string name="replay_folder_choose">Choose folder</string>
+    <string name="replay_folder_select_failed">Couldn\'t use that folder</string>
+    <string name="replay_folder_selected_toast">Replay folder set · moved %1$d existing replay(s)</string>
     <string name="replay_list_empty_no_iso">Pick an ISO from the launcher first</string>
-    <string name="replay_list_empty">No replays yet · Tap + to import or finish a netplay match to auto-save one.</string>
+    <string name="replay_list_empty">No replays yet · finish a netplay match or place .slp files in the replay folder.</string>
     <string name="replay_row_unparseable">Unparseable replay</string>
     <string name="replay_action_play">Play</string>
     <string name="replay_action_delete">Delete</string>

@@ -5,6 +5,8 @@ import android.util.Log;
 import android.view.InputDevice;
 import android.view.MotionEvent;
 
+import org.dolphinemu.dolphinemu.replay.ReplayConfig;
+
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
@@ -35,6 +37,8 @@ public final class SlippiDefaults {
      * concern — there's no settings UI yet, so anyone touching the ini files
      * directly is implicitly opting out of the version bump.
      */
+    // v8 moves auto-saved replays to app-owned device storage so updates keep
+    // the archive in a findable filesystem folder without duplicate copies.
     // v7 moves the Android low-latency audio default to Oboe and exposes a
     // configurable audio buffer burst count. Latency stays 2f.
     // v6 enables the Android low-latency profile: AAudio output, 120Hz-capable
@@ -45,7 +49,7 @@ public final class SlippiDefaults {
     // sees auto-saved netplay matches. Bump whenever any canned config
     // below changes — users with hand-edited overrides keep theirs only
     // until the next bump.
-    private static final int DEFAULTS_VERSION = 7;
+    private static final int DEFAULTS_VERSION = 8;
     private static final int MAINLINE_DEFAULTS_VERSION = 1;
     private static final String DEFAULTS_VERSION_FILE = "defaults_version";
     private static final String MAINLINE_DEFAULTS_VERSION_FILE = "mainline_defaults_version";
@@ -68,7 +72,7 @@ public final class SlippiDefaults {
         // falls back from cleanly.
         String replayDir = ctx == null
                 ? ""  // C++ side defaults to userdir/Slippi when empty
-                : new File(ctx.getFilesDir(), "dolphin/Slippi/Replays").getAbsolutePath();
+                : ReplayConfig.nativeReplayWriteDir(ctx).getAbsolutePath();
         String dolphinIni = DOLPHIN_INI.replace("%REPLAY_DIR%", replayDir);
         writeOrUpgrade(new File(configDir, "Dolphin.ini"), dolphinIni, force);
         writeOrUpgrade(new File(configDir, "GFX.ini"), GFX_INI, force);

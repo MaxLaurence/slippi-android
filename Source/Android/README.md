@@ -211,14 +211,18 @@ $ADB devices                   # confirm
 6. **Play** — launches `EmulationActivity`, which gives a
    `SurfaceView` to the chosen backend and starts the emu thread.
 7. **Replays** — `▶ REPLAYS` opens `ReplayListActivity`. Netplay
-   matches auto-save to `<files>/dolphin/Slippi/Replays/`; the same
-   folder is the importer destination and the browser's source of
-   truth. See **Replay playback** below.
+   matches auto-save to the replay folder shown there. By default
+   that is app-owned device storage at
+   `<external-files>/Slippi/Replays/`; when the user chooses a folder
+   through Android's folder picker, native Slippi writes into
+   `<external-files>/Slippi/ReplayStaging/`, then Java moves completed
+   `.slp` files into the selected folder and deletes the staging copy.
+   See **Replay playback** below.
 
 ## Defaults written on first launch
 
 `SlippiDefaults.java` (auto-rewrites on bump of `DEFAULTS_VERSION`,
-currently `7`) writes opinionated `Dolphin.ini` / `GFX.ini` /
+currently `8`) writes opinionated `Dolphin.ini` / `GFX.ini` /
 `WiimoteNew.ini` / `Logger.ini` into `<files>/dolphin/Config/`:
 
 - `GFXBackend=Vulkan` — Vulkan is now the default; launcher toggle
@@ -242,13 +246,17 @@ currently `7`) writes opinionated `Dolphin.ini` / `GFX.ini` /
   raising GPU cost on the Thor.
 - `ShowFPS=False`, `ShowNetPlayPing=False` — cleaner display by
   default.
-- `SlippiSaveReplays=True` + `SlippiReplayDir=<files>/dolphin/Slippi/Replays`
+- `SlippiSaveReplays=True` + `SlippiReplayDir=<external-files>/Slippi/Replays`
   + `SlippiReplayMonthFolders=False` — auto-save netplay `.slp` files
-  into the directory the in-app browser scans. `MonthFolders=False`
-  keeps the dir flat so listing is one `File.listFiles` call. The
-  `SlippiReplayDir` value is the only Dolphin.ini key that's not
-  canned — it gets the absolute path substituted at write time in
-  `SlippiDefaults.writeIfMissing(File, Context)`.
+  into a native-writable real path. Mainline launch also writes the
+  matching `[Slippi] SaveReplays`, `ReplayDir`, and
+  `ReplayMonthlyFolders` keys. With a custom replay folder selected,
+  launch code rewrites the native replay dir to the staging path because
+  SAF folders are `content://` trees, not native filesystem paths.
+  `MonthFolders=False` keeps staging/default folders flat. On upgrade,
+  `UserDirectoryBootstrap` migrates older internal
+  `<files>/dolphin/Slippi/Replays/` files into the current replay
+  destination.
 
 Calibration defaults (per-stick, applied even with no saved profile):
 - Main stick: deadzone 2%, curve 1.5
@@ -356,19 +364,23 @@ The C++ machinery (`Source/Core/Core/Slippi/SlippiPlayback.{h,cpp}` +
 **Where it lives** (`Source/Android/app/src/main/java/.../replay/`):
 
 - `ReplayConfig` — knows the on-device paths (`Slippi/playback.json`,
-  `Slippi/Replays/`) and writes the playback JSON. Per-launch
+  default app-owned `Slippi/Replays/`, custom SAF folder URI, native
+  staging, playback cache) and writes the playback JSON. Per-launch
   `commandId` is the `isNewReplay()` discriminator — without it,
   replaying the same `.slp` twice would be a no-op.
+- `ReplayItem` — replay-row wrapper for either a `File` or a SAF
+  `DocumentFile`, so the browser can read a selected public folder
+  without permanently copying the archive.
 - `ReplayMetadata` — pure-Java `.slp` header parser using
-  `RandomAccessFile`. Reads the first ~600 bytes (UBJSON preamble +
+  `RandomAccessFile` for real files and `ContentResolver` range reads
+  for SAF documents. Reads the first ~600 bytes (UBJSON preamble +
   `EVENT_GAME_INIT` 0x36, 320 bytes per `SlippiLib/SlippiGame.h`
   `asmEvents` map → stage id, per-port `characterId/characterColor/
   playerType/displayName/connectCode`) and the tail metadata block
   (`startAt` ISO 8601, `lastFrame`). Cached by `(file, mtime, size)`.
-- `ReplayStore` — owns the replay directory: `list()`, `delete`,
-  `deleteOlderThan`, `deleteAll`, `totalSize`, `count`. All
-  filesystem mutation goes through here so the activity has no
-  scattered `File.delete` calls.
+- `ReplayStore` — owns the replay source: selected SAF folder when
+  present, otherwise default app-owned storage. It provides `list()`,
+  `delete`, `deleteOlderThan`, `deleteAll`, `totalSize`, and `count`.
 - `GeckoOverride` — swaps the netplay codeset for the playback
   codeset at launch. Slippi's gecko codes differ between live and
   replay modes (playback needs the frame-walk + savestate codes that
@@ -379,13 +391,14 @@ The C++ machinery (`Source/Core/Core/Slippi/SlippiPlayback.{h,cpp}` +
 **Activities:**
 
 - `ReplayListActivity` — `RecyclerView` of rows from `ReplayStore`.
-  Top-bar overflow has `Import .slp`, `Delete older than 7/30 days`,
-  `Delete all` (all gated behind Material confirm dialogs).
-  Per-row 3-dot menu has `Play`, `Delete`, `Share`. Long-press
-  enters multi-select ActionMode. The `Share` action returns a
-  `content://` URI through the FileProvider declared in
-  `AndroidManifest.xml` (rooted at `<files>/dolphin/Slippi/Replays/`,
-  paths file in `res/xml/file_provider_paths.xml`).
+  Top-bar overflow has `Replay folder` (Android folder picker),
+  `Delete older than 7/30 days`, and `Delete all` (all gated behind
+  Material confirm dialogs). Users import by placing `.slp` files in
+  the selected replay folder. Per-row 3-dot menu has `Play`, `Delete`,
+  `Share`. Long-press enters multi-select ActionMode. For selected-folder
+  rows, `Share` forwards the SAF document URI; for real-file rows it
+  returns a `content://` URI through the FileProvider declared in
+  `AndroidManifest.xml`.
 - `EmulationActivity` accepts `EXTRA_REPLAY_PATH`. When present, it
   writes `playback.json` via `ReplayConfig.writeNormal`, calls
   `NativeLibrary.SetSlippiInputPath(...)` with the absolute JSON

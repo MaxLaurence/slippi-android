@@ -36,6 +36,18 @@
             android:textColor="@color/text_primary"
             android:textSize="14sp"
             android:background="@color/dark_bg"/>
+
+        <TextView
+            android:id="@+id/replay_folder_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingHorizontal="16dp"
+            android:paddingBottom="10dp"
+            android:textColor="@color/text_secondary"
+            android:textSize="12sp"
+            android:singleLine="true"
+            android:ellipsize="middle"
+            android:background="@color/dark_bg"/>
     </com.google.android.material.appbar.AppBarLayout>
 
     <androidx.recyclerview.widget.RecyclerView
@@ -43,7 +55,7 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:clipToPadding="false"
-        android:paddingBottom="96dp"
+        android:paddingBottom="16dp"
         app:layout_behavior="@string/appbar_scrolling_view_behavior"/>
 
     <TextView
@@ -58,12 +70,4 @@
         android:visibility="gone"
         app:layout_behavior="@string/appbar_scrolling_view_behavior"/>
 
-    <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
-        android:id="@+id/replay_fab"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="bottom|end"
-        android:layout_margin="20dp"
-        android:text="@string/replay_list_import"
-        app:icon="@android:drawable/ic_input_add"/>
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

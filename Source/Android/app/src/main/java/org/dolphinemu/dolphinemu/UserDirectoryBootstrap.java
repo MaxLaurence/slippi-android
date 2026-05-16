@@ -4,6 +4,8 @@ import android.content.Context;
 import android.content.res.AssetManager;
 import android.util.Log;
 
+import org.dolphinemu.dolphinemu.replay.ReplayConfig;
+
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -59,6 +61,12 @@ public final class UserDirectoryBootstrap {
                 Log.w(TAG, "could not create " + d);
             }
         }
+        int migratedReplays = ReplayConfig.migrateLegacyInternalReplays(ctx);
+        if (migratedReplays > 0) {
+            Log.i(TAG, "migrated " + migratedReplays + " replay(s) to "
+                    + ReplayConfig.replaysDir(ctx));
+        }
+        ReplayConfig.ensureReplayDirectory(ctx);
         File sysDir = new File(root, SYS_DIR_NAME);
         File versionFile = new File(root, SYS_VERSION_FILE);
         int existingVersion = readVersion(versionFile);

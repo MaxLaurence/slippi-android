@@ -1,12 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Slippi/Replays under getFilesDir(). The whole tree is exposed
+    <!-- Slippi/Replays under app-owned internal/external storage. The tree is exposed
          because the user picks specific files via the share menu;
-         "files/dolphin/Slippi/Replays" is the only thing in this tree
-         we hand out URIs for. -->
+         these are the only paths in these roots we hand out URIs for. -->
     <files-path
-        name="replays"
+        name="legacy_replays"
         path="dolphin/Slippi/Replays/"/>
+    <external-files-path
+        name="replays"
+        path="Slippi/Replays/"/>
     <files-path
         name="diagnostics"
         path="diagnostics/"/>
