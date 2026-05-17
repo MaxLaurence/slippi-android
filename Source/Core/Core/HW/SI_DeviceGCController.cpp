@@ -21,6 +21,7 @@
 #include "Core/HW/ProcessorInterface.h"
 #include "Core/HW/SI_DeviceGCController.h"
 #include "Core/HW/SystemTimers.h"
+#include "Common/AndroidInputDiagnostics.h"
 #include "Core/Movie.h"
 #include "Core/NetPlayProto.h"
 #include "InputCommon/GCPadStatus.h"
@@ -54,6 +55,83 @@ uint64_t NowUs()
 	        std::chrono::steady_clock::now().time_since_epoch())
 	        .count());
 }
+
+#ifdef __ANDROID__
+struct PadDiagnosticSignature
+{
+	uint16_t button = 0;
+	uint8_t stickX = 128;
+	uint8_t stickY = 128;
+	uint8_t substickX = 128;
+	uint8_t substickY = 128;
+	uint8_t triggerLeft = 0;
+	uint8_t triggerRight = 0;
+	uint8_t analogA = 0;
+	uint8_t analogB = 0;
+	bool active = false;
+};
+
+bool SamePadDiagnosticSignature(const PadDiagnosticSignature& a, const PadDiagnosticSignature& b)
+{
+	return a.button == b.button && a.stickX == b.stickX && a.stickY == b.stickY &&
+	       a.substickX == b.substickX && a.substickY == b.substickY &&
+	       a.triggerLeft == b.triggerLeft && a.triggerRight == b.triggerRight &&
+	       a.analogA == b.analogA && a.analogB == b.analogB && a.active == b.active;
+}
+
+void RecordPadStatusDiagnostic(int stage_idx, const char* stage, int port,
+                               const GCPadStatus& status, bool active, uint64_t age_us)
+{
+	if (stage_idx < 0 || stage_idx >= 3 || port < 0 || port >= 4)
+		return;
+
+	static std::mutex s_diag_mutex;
+	static PadDiagnosticSignature s_last[3][4];
+	static bool s_have_last[3][4] = {};
+	static int s_count[3][4] = {};
+
+	PadDiagnosticSignature sig;
+	sig.button = static_cast<uint16_t>(status.button);
+	sig.stickX = status.stickX;
+	sig.stickY = status.stickY;
+	sig.substickX = status.substickX;
+	sig.substickY = status.substickY;
+	sig.triggerLeft = status.triggerLeft;
+	sig.triggerRight = status.triggerRight;
+	sig.analogA = status.analogA;
+	sig.analogB = status.analogB;
+	sig.active = active;
+
+	bool should_log = false;
+	{
+		std::lock_guard<std::mutex> lock(s_diag_mutex);
+		++s_count[stage_idx][port];
+		should_log = !s_have_last[stage_idx][port] ||
+		             !SamePadDiagnosticSignature(s_last[stage_idx][port], sig) ||
+		             s_count[stage_idx][port] == 1 ||
+		             (s_count[stage_idx][port] % 120) == 0;
+		if (should_log)
+		{
+			s_last[stage_idx][port] = sig;
+			s_have_last[stage_idx][port] = true;
+		}
+	}
+
+	if (!should_log)
+		return;
+
+	Common::AndroidInputDiagnostics::Record(
+	    "SlippiPadStatus",
+	    "%s port=%d active=%d age_us=%llu button=0x%04x main=(%u,%u) c=(%u,%u) "
+	    "triggers=(%u,%u) analog=(%u,%u)",
+	    stage, port, active ? 1 : 0, static_cast<unsigned long long>(age_us),
+	    static_cast<unsigned>(status.button), static_cast<unsigned>(status.stickX),
+	    static_cast<unsigned>(status.stickY), static_cast<unsigned>(status.substickX),
+	    static_cast<unsigned>(status.substickY), static_cast<unsigned>(status.triggerLeft),
+	    static_cast<unsigned>(status.triggerRight), static_cast<unsigned>(status.analogA),
+	    static_cast<unsigned>(status.analogB));
+}
+#endif
 }  // namespace
 
 namespace SI_PadOverride
@@ -81,6 +159,20 @@ void Set(int port, uint16_t button,
 	o.setTimeUs.store(NowUs(), std::memory_order_release);
 	o.active.store(true);
 
+#ifdef __ANDROID__
+	GCPadStatus status = {};
+	status.button = button;
+	status.stickX = stickX;
+	status.stickY = stickY;
+	status.substickX = substickX;
+	status.substickY = substickY;
+	status.triggerLeft = triggerLeft;
+	status.triggerRight = triggerRight;
+	status.analogA = analogA;
+	status.analogB = analogB;
+	RecordPadStatusDiagnostic(0, "override_set", port, status, true, 0);
+#endif
+
 	if (kPadOverrideDiagnostics)
 	{
 		int count = s_set_count.fetch_add(1) + 1;
@@ -100,6 +192,14 @@ void Clear(int port)
 {
 	if (port < 0 || port >= 4) return;
 	s_pad_overrides[port].active.store(false);
+#ifdef __ANDROID__
+	GCPadStatus status = {};
+	status.stickX = GCPadStatus::MAIN_STICK_CENTER_X;
+	status.stickY = GCPadStatus::MAIN_STICK_CENTER_Y;
+	status.substickX = GCPadStatus::MAIN_STICK_CENTER_X;
+	status.substickY = GCPadStatus::MAIN_STICK_CENTER_Y;
+	RecordPadStatusDiagnostic(0, "override_clear", port, status, false, 0);
+#endif
 	if (kPadOverrideDiagnostics)
 	{
 #ifdef __ANDROID__
@@ -142,6 +242,9 @@ bool Get(int port, GCPadStatus* out)
 	out->triggerRight = o.triggerRight.load();
 	out->analogA      = o.analogA.load();
 	out->analogB      = o.analogB.load();
+#ifdef __ANDROID__
+	RecordPadStatusDiagnostic(1, "override_get", port, *out, true, LatestSetAgeUs(port));
+#endif
 	return true;
 }
 
@@ -303,21 +406,8 @@ GCPadStatus CSIDevice_GCController::GetPadStatus()
 
 
 #ifdef __ANDROID__
-	// Sample the FINAL bytes being returned to the emulator at ~1Hz.
-	// If override=1 but stick=(128,128) here, an upstream caller
-	// captured the value BEFORE we got the override (rollback / movie).
-	// If override=0, something cleared the active flag.
-	static std::atomic<int> s_out_count{0};
-	int oc = s_out_count.fetch_add(1) + 1;
-	if (oc % 120 == 0 || oc == 1)
-	{
-		__android_log_print(ANDROID_LOG_INFO, "PadStatusOut",
-		    "port=%d override=%d stick=(%u,%u) sub=(%u,%u) btn=0x%04x",
-		    m_iDeviceNumber, from_override ? 1 : 0,
-		    (unsigned)pad_status.stickX, (unsigned)pad_status.stickY,
-		    (unsigned)pad_status.substickX, (unsigned)pad_status.substickY,
-		    (unsigned)pad_status.button);
-	}
+	RecordPadStatusDiagnostic(2, "si_gc_out", m_iDeviceNumber, pad_status, from_override,
+	                          SI_PadOverride::LatestSetAgeUs(m_iDeviceNumber));
 #endif
 
 	return pad_status;

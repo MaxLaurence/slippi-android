@@ -10,9 +10,12 @@
 #include <SlippiLib/SlippiGame.h>
 
 #include <semver/include/semver200.h>
+#include <cstring>
+#include <mutex>
 #include <utility> // std::move
 
 #include "Common/CommonPaths.h"
+#include "Common/AndroidInputDiagnostics.h"
 #include "Common/CommonTypes.h"
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
@@ -66,6 +69,43 @@ int localChatMessageId = 0;
 // Are we waiting for input on this frame?
 //  Is set to true between frames
 bool g_needInputForFrame = false;
+
+#ifdef __ANDROID__
+namespace
+{
+void RecordSlippiPadBuffer(s32 frame, u8 delay, s32 checksumFrame, u32 checksum, const u8* inputs)
+{
+	if (!inputs)
+		return;
+
+	static std::mutex s_diag_mutex;
+	static u8 s_last[8] = {};
+	static bool s_have_last = false;
+	static int s_count = 0;
+
+	bool changed = false;
+	{
+		std::lock_guard<std::mutex> lock(s_diag_mutex);
+		++s_count;
+		changed = !s_have_last || std::memcmp(s_last, inputs, 8) != 0;
+		if (changed)
+		{
+			std::memcpy(s_last, inputs, 8);
+			s_have_last = true;
+		}
+		if (!changed && s_count != 1 && (s_count % 60) != 0)
+			return;
+	}
+
+	Common::AndroidInputDiagnostics::Record(
+	    "SlippiPadBuffer",
+	    "handle_send_inputs frame=%d delay=%u checksum_frame=%d checksum=0x%08x "
+	    "pad=%02x%02x%02x%02x%02x%02x%02x%02x changed=%d",
+	    frame, static_cast<unsigned>(delay), checksumFrame, checksum, inputs[0], inputs[1], inputs[2],
+	    inputs[3], inputs[4], inputs[5], inputs[6], inputs[7], changed ? 1 : 0);
+}
+}  // namespace
+#endif
 
 template <typename T> bool isFutureReady(std::future<T> &t)
 {
@@ -1536,6 +1576,9 @@ bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
 
 void CEXISlippi::handleSendInputs(s32 frame, u8 delay, s32 checksumFrame, u32 checksum, u8 *inputs)
 {
+#ifdef __ANDROID__
+	RecordSlippiPadBuffer(frame, delay, checksumFrame, checksum, inputs);
+#endif
 	// On the first frame sent, we need to queue up empty dummy pads for as many
 	//	frames as we have delay
 	if (frame == 1)

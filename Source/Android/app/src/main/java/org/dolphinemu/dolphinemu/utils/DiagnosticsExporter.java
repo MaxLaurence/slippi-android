@@ -10,6 +10,7 @@ import android.os.Build;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.view.InputDevice;
+import android.view.MotionEvent;
 
 import androidx.preference.PreferenceManager;
 
@@ -98,6 +99,7 @@ public final class DiagnosticsExporter {
         appendLaunchSession(sb, context);
         appendAdapterConfiguration(sb, context);
         appendLatestControllerCapture(sb, context);
+        appendNativeInputDiagnostics(sb);
         appendRecentControllerLogs(sb);
         appendNative(sb);
         return sb.toString();
@@ -392,6 +394,17 @@ public final class DiagnosticsExporter {
         if (!logs.endsWith("\n")) sb.append('\n');
     }
 
+    private static void appendNativeInputDiagnostics(StringBuilder sb) {
+        appendSection(sb, "Native Input Diagnostics");
+        String logs = safeNativeString(NativeLibrary::GetInputDiagnosticsLog);
+        if (TextUtils.isEmpty(logs)) {
+            appendKV(sb, "Native input log", "none");
+            return;
+        }
+        sb.append(logs);
+        if (!logs.endsWith("\n")) sb.append('\n');
+    }
+
     private static void appendUsbDevices(StringBuilder sb, Context context) {
         UsbManager manager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
         if (manager == null) {
@@ -431,8 +444,39 @@ public final class DiagnosticsExporter {
                     "id=%d name=%s descriptor=%s sources=0x%08X vendor=%d product=%d",
                     id, safe(device.getName()), safe(device.getDescriptor()),
                     sources, device.getVendorId(), device.getProductId()));
+            appendKV(sb, "Android input " + count + " axes",
+                    describeGamepadAxes(device, sources));
         }
         appendKV(sb, "Android gamepad count", count);
+    }
+
+    private static String describeGamepadAxes(InputDevice device, int sources) {
+        StringBuilder sb = new StringBuilder();
+        int source = (sources & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
+                ? InputDevice.SOURCE_JOYSTICK : InputDevice.SOURCE_GAMEPAD;
+        int[] axes = {
+                MotionEvent.AXIS_X, MotionEvent.AXIS_Y,
+                MotionEvent.AXIS_Z, MotionEvent.AXIS_RZ,
+                MotionEvent.AXIS_RX, MotionEvent.AXIS_RY,
+                MotionEvent.AXIS_LTRIGGER, MotionEvent.AXIS_RTRIGGER,
+                MotionEvent.AXIS_BRAKE, MotionEvent.AXIS_GAS,
+                MotionEvent.AXIS_HAT_X, MotionEvent.AXIS_HAT_Y
+        };
+        for (int axis : axes) {
+            InputDevice.MotionRange range = device.getMotionRange(axis, source);
+            if (range == null) {
+                range = device.getMotionRange(axis);
+            }
+            if (range == null) continue;
+            if (sb.length() > 0) sb.append("; ");
+            sb.append(MotionEvent.axisToString(axis))
+                    .append("=[min=").append(formatFloat(range.getMin()))
+                    .append(",max=").append(formatFloat(range.getMax()))
+                    .append(",flat=").append(formatFloat(range.getFlat()))
+                    .append(",fuzz=").append(formatFloat(range.getFuzz()))
+                    .append("]");
+        }
+        return sb.length() == 0 ? "none" : sb.toString();
     }
 
     private static void appendNative(StringBuilder sb) {
@@ -521,6 +565,9 @@ public final class DiagnosticsExporter {
 
     private static boolean isControllerLogLine(String line) {
         return line.contains("SlippiGCAdapter")
+                || line.contains("SlippiInputDiag")
+                || line.contains("SlippiPadStatus")
+                || line.contains("SlippiPadBuffer")
                 || line.contains("SlippiEmu")
                 || line.contains("MainlineEmu")
                 || line.contains("SlippiRawInput")
@@ -581,6 +628,10 @@ public final class DiagnosticsExporter {
         double mib = kib / 1024.0;
         if (mib < 1024.0) return String.format(Locale.US, "%.1f MiB", mib);
         return String.format(Locale.US, "%.2f GiB", mib / 1024.0);
+    }
+
+    private static String formatFloat(float value) {
+        return String.format(Locale.US, "%.3f", value);
     }
 
     private static String safeNativeString(NativeStringCall call) {

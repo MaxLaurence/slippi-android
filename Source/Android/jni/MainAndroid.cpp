@@ -28,6 +28,7 @@
 #include <unistd.h>
 
 #include "ButtonManager.h"
+#include "Common/AndroidInputDiagnostics.h"
 #include "InputCommon/GCAdapter.h"
 #include "Core/HW/SI_DeviceGCController.h"
 #include "Core/HW/Memmap.h"
@@ -831,6 +832,8 @@ JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetSlippiInp
     JNIEnv* env, jobject obj, jstring jPath);
 JNIEXPORT jlong JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetPadOverrideAgeUs(
     JNIEnv* env, jobject obj, jint port);
+JNIEXPORT jstring JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetInputDiagnosticsLog(
+    JNIEnv* env, jobject obj);
 JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_ClearSlippiInputPath(
     JNIEnv* env, jobject obj);
 JNIEXPORT jint JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetReplayLatestFrame(
@@ -996,6 +999,12 @@ JNIEXPORT jlong JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetPadOverr
     JNIEnv* env, jobject obj, jint port)
 {
   return static_cast<jlong>(SI_PadOverride::LatestSetAgeUs(port));
+}
+
+JNIEXPORT jstring JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetInputDiagnosticsLog(
+    JNIEnv* env, jobject)
+{
+  return env->NewStringUTF(Common::AndroidInputDiagnostics::Dump().c_str());
 }
 
 // ─── Gecko-style direct write into Melee's HSDPad array ───

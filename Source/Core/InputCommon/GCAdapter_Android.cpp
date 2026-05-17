@@ -13,6 +13,7 @@
 
 #include "Common/Event.h"
 #include "Common/Flag.h"
+#include "Common/AndroidInputDiagnostics.h"
 #include "Common/Logging/Log.h"
 #include "Common/Thread.h"
 #include "Core/ConfigManager.h"
@@ -46,6 +47,8 @@ static u8 s_controller_rumble[4];
 static std::mutex s_read_mutex;
 static u8 s_controller_payload[37];
 static std::atomic<int> s_controller_payload_size{0};
+static std::atomic<u64> s_controller_payload_sequence{0};
+static std::atomic<u64> s_controller_payload_time_us{0};
 
 // Output handling
 static std::mutex s_write_mutex;
@@ -80,6 +83,80 @@ static uint16_t ApplyButtonRemap(int chan, uint16_t in_buttons)
     }
   }
   return out;
+}
+
+static u64 NowUs()
+{
+  return static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
+                              std::chrono::steady_clock::now().time_since_epoch())
+                              .count());
+}
+
+struct PadSignature
+{
+  u16 button = 0;
+  u8 stickX = 128;
+  u8 stickY = 128;
+  u8 substickX = 128;
+  u8 substickY = 128;
+  u8 triggerLeft = 0;
+  u8 triggerRight = 0;
+  u8 type = 0;
+};
+
+static bool SameSignature(const PadSignature& a, const PadSignature& b)
+{
+  return a.button == b.button && a.stickX == b.stickX && a.stickY == b.stickY &&
+         a.substickX == b.substickX && a.substickY == b.substickY &&
+         a.triggerLeft == b.triggerLeft && a.triggerRight == b.triggerRight && a.type == b.type;
+}
+
+static void RecordDecodedPad(int chan, u8 type_byte, u8 b1, u8 b2, const GCPadStatus& pad,
+                             bool get_origin, u64 sequence, u64 age_us)
+{
+  static std::mutex s_diag_mutex;
+  static PadSignature s_last[4];
+  static bool s_have_last[4] = {};
+  static int s_count[4] = {};
+
+  if (chan < 0 || chan >= 4)
+    return;
+
+  PadSignature sig;
+  sig.button = static_cast<u16>(pad.button);
+  sig.stickX = pad.stickX;
+  sig.stickY = pad.stickY;
+  sig.substickX = pad.substickX;
+  sig.substickY = pad.substickY;
+  sig.triggerLeft = pad.triggerLeft;
+  sig.triggerRight = pad.triggerRight;
+  sig.type = type_byte >> 4;
+
+  bool should_log = false;
+  {
+    std::lock_guard<std::mutex> lock(s_diag_mutex);
+    ++s_count[chan];
+    should_log = !s_have_last[chan] || !SameSignature(s_last[chan], sig) ||
+                 s_count[chan] == 1 || (s_count[chan] % 120) == 0;
+    if (should_log)
+    {
+      s_last[chan] = sig;
+      s_have_last[chan] = true;
+    }
+  }
+
+  if (!should_log)
+    return;
+
+  Common::AndroidInputDiagnostics::Record(
+      "SlippiGCAdapter",
+      "wup_decoded port=%d seq=%llu age_us=%llu type_byte=0x%02x type=%u raw_buttons=0x%02x%02x "
+      "button=0x%04x get_origin=%d main=(%u,%u) c=(%u,%u) triggers=(%u,%u)",
+      chan, static_cast<unsigned long long>(sequence), static_cast<unsigned long long>(age_us),
+      type_byte, type_byte >> 4, b1, b2, static_cast<unsigned>(pad.button), get_origin ? 1 : 0,
+      static_cast<unsigned>(pad.stickX), static_cast<unsigned>(pad.stickY),
+      static_cast<unsigned>(pad.substickX), static_cast<unsigned>(pad.substickY),
+      static_cast<unsigned>(pad.triggerLeft), static_cast<unsigned>(pad.triggerRight));
 }
 
 // Adapter running thread
@@ -222,6 +299,8 @@ static void Read()
         // decimal 37.
         memcpy(s_controller_payload, java_data, sizeof(s_controller_payload));
         s_controller_payload_size.store(read_size);
+        s_controller_payload_time_us.store(NowUs());
+        s_controller_payload_sequence.fetch_add(1);
       }
       env->ReleaseByteArrayElements(*java_controller_payload, java_data, 0);
 
@@ -345,6 +424,8 @@ GCPadStatus Input(int chan, std::chrono::high_resolution_clock::time_point* tp)
     return {};
 
   int payload_size = 0;
+  u64 payload_sequence = 0;
+  u64 payload_time_us = 0;
   u8 controller_payload_copy[37];
 
   {
@@ -352,13 +433,22 @@ GCPadStatus Input(int chan, std::chrono::high_resolution_clock::time_point* tp)
     std::copy(std::begin(s_controller_payload), std::end(s_controller_payload),
               std::begin(controller_payload_copy));
     payload_size = s_controller_payload_size.load();
+    payload_sequence = s_controller_payload_sequence.load();
+    payload_time_us = s_controller_payload_time_us.load();
   }
+  const u64 now_us = NowUs();
+  const u64 age_us = payload_time_us > 0 && now_us > payload_time_us ? now_us - payload_time_us : 0;
 
   GCPadStatus pad = {};
   if (payload_size != sizeof(controller_payload_copy))
   {
     ERROR_LOG(SERIALINTERFACE, "error reading payload (size: %d, type: %02x)", payload_size,
               controller_payload_copy[0]);
+    Common::AndroidInputDiagnostics::Record(
+        "SlippiGCAdapter", "wup_payload_invalid chan=%d size=%d type=0x%02x seq=%llu age_us=%llu",
+        chan, payload_size, controller_payload_copy[0],
+        static_cast<unsigned long long>(payload_sequence),
+        static_cast<unsigned long long>(age_us));
     Reset();
   }
   else
@@ -424,6 +514,8 @@ GCPadStatus Input(int chan, std::chrono::high_resolution_clock::time_point* tp)
       const uint16_t preserve = pad.button & PAD_GET_ORIGIN;
       pad.button = ApplyButtonRemap(chan, static_cast<uint16_t>(pad.button & ~PAD_GET_ORIGIN))
                    | preserve;
+      RecordDecodedPad(chan, controller_payload_copy[1 + (9 * chan)], b1, b2, pad, get_origin,
+                       payload_sequence, age_us);
     }
     else
     {

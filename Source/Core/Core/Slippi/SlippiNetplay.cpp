@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include "Core/Slippi/SlippiNetplay.h"
+#include "Common/AndroidInputDiagnostics.h"
 #include "Common/CommonTypes.h"
 #include "Common/ENetUtil.h"
 #include "Common/MsgHandler.h"
@@ -17,6 +18,7 @@
 #include <algorithm>
 #include <climits>
 #include <cinttypes>
+#include <cstring>
 #include <fstream>
 #include <memory>
 #include <thread>
@@ -50,6 +52,38 @@ namespace
 {
 #ifdef __ANDROID__
 constexpr const char* LATENCY_TAG = "SlippiLatency";
+
+void RecordLocalPadQueueDiagnostic(const char* stage, const SlippiPad* pad, size_t queue_size)
+{
+	if (!pad)
+		return;
+
+	static std::mutex s_diag_mutex;
+	static u8 s_last[SLIPPI_PAD_DATA_SIZE] = {};
+	static bool s_have_last = false;
+	static int s_count = 0;
+
+	bool changed = false;
+	{
+		std::lock_guard<std::mutex> lock(s_diag_mutex);
+		++s_count;
+		changed = !s_have_last || std::memcmp(s_last, pad->padBuf, SLIPPI_PAD_DATA_SIZE) != 0;
+		if (changed)
+		{
+			std::memcpy(s_last, pad->padBuf, SLIPPI_PAD_DATA_SIZE);
+			s_have_last = true;
+		}
+		if (!changed && s_count != 1 && (s_count % 60) != 0)
+			return;
+	}
+
+	Common::AndroidInputDiagnostics::Record(
+	    "SlippiPadBuffer",
+	    "%s frame=%d queue=%zu pad=%02x%02x%02x%02x%02x%02x%02x%02x changed=%d",
+	    stage, pad->frame, queue_size, pad->padBuf[0], pad->padBuf[1], pad->padBuf[2],
+	    pad->padBuf[3], pad->padBuf[4], pad->padBuf[5], pad->padBuf[6], pad->padBuf[7],
+	    changed ? 1 : 0);
+}
 
 bool AndroidDebugPropertyEnabled(const char* name)
 {
@@ -1301,7 +1335,11 @@ void SlippiNetplayClient::SendSlippiPad(std::unique_ptr<SlippiPad> pad)
 				m_max_pad_override_age_us = age_us;
 		}
 #endif
+		auto* pad_for_diag = pad.get();
 		localPadQueue.push_front(std::move(pad));
+#ifdef __ANDROID__
+		RecordLocalPadQueueDiagnostic("local_queue_push", pad_for_diag, localPadQueue.size());
+#endif
 	}
 
 	// Remove pad reports that have been received and acked. Skip disconnected players,
@@ -1339,6 +1377,11 @@ void SlippiNetplayClient::SendSlippiPad(std::unique_ptr<SlippiPad> pad)
 		// If pad queue is empty now, there's no reason to send anything
 		return;
 	}
+
+#ifdef __ANDROID__
+	RecordLocalPadQueueDiagnostic("local_queue_send_front", localPadQueue.front().get(),
+	                              localPadQueue.size());
+#endif
 
 	auto frame = localPadQueue.front()->frame;
 

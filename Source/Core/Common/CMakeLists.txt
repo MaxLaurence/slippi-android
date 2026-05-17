@@ -1,6 +1,7 @@
 include_directories(${CMAKE_SOURCE_DIR}/Externals/SlippiRustExtensions/ffi/includes)
 
-set(SRCS Analytics.cpp
+set(SRCS AndroidInputDiagnostics.cpp
+		 Analytics.cpp
 		 BreakPoints.cpp
 		 CDUtils.cpp
 		 ColorUtil.cpp

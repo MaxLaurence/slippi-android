@@ -458,6 +458,8 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         pushPad();
         ControllerDiagnosticsCapture.recordInputEvent("key",
                 "device=" + safeDeviceName(event.getDevice())
+                        + " deviceId=" + event.getDeviceId()
+                        + " descriptor=" + safeDeviceDescriptor(event.getDevice())
                         + " keyCode=" + event.getKeyCode()
                         + " action=" + action
                         + " repeat=" + event.getRepeatCount()
@@ -863,7 +865,11 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
 
     private String describeMotionEvent(MotionEvent event) {
         return "device=" + safeDeviceName(event.getDevice())
+                + " deviceId=" + event.getDeviceId()
+                + " descriptor=" + safeDeviceDescriptor(event.getDevice())
                 + " source=0x" + Integer.toHexString(event.getSource())
+                + " action=" + event.getActionMasked()
+                + " buttonState=0x" + Integer.toHexString(event.getButtonState())
                 + " history=" + event.getHistorySize()
                 + " axes={x=" + formatAxis(event.getAxisValue(MotionEvent.AXIS_X))
                 + ",y=" + formatAxis(event.getAxisValue(MotionEvent.AXIS_Y))
@@ -879,6 +885,10 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
 
     private static String safeDeviceName(android.view.InputDevice device) {
         return device == null ? "" : device.getName();
+    }
+
+    private static String safeDeviceDescriptor(android.view.InputDevice device) {
+        return device == null ? "" : device.getDescriptor();
     }
 
     private static String formatAxis(Float value) {

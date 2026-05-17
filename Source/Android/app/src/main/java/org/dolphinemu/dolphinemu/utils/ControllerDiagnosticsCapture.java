@@ -5,6 +5,7 @@ import android.os.SystemClock;
 import android.text.TextUtils;
 import android.util.Log;
 
+import org.dolphinemu.dolphinemu.NativeLibrary;
 import org.dolphinemu.dolphinemu.controller.ButtonMap;
 
 import java.io.BufferedReader;
@@ -65,7 +66,7 @@ public final class ControllerDiagnosticsCapture {
         if (capture.isFile()) {
             return "Latest capture will be included in the next export";
         }
-        return "Record a bounded WUP-028 capture on next launch";
+        return "Record a bounded controller capture on next launch";
     }
 
     public static File latestCaptureFile(Context context) {
@@ -265,6 +266,7 @@ public final class ControllerDiagnosticsCapture {
                         bytesWritten += writeLine(writer, "stop_reason=" + stopReason);
                         bytesWritten += writeLine(writer, "samples=" + samples);
                         bytesWritten += writeLine(writer, "generic_events=" + genericEvents);
+                        appendNativeInputLog(writer);
                         bytesWritten += writeLine(writer, "bytes_approx=" + bytesWritten);
                         captureWriter = null;
                     }
@@ -316,6 +318,26 @@ public final class ControllerDiagnosticsCapture {
             }
         }
 
+        private void appendNativeInputLog(BufferedWriter writer) throws IOException {
+            try {
+                String nativeLog = NativeLibrary.GetInputDiagnosticsLog();
+                if (TextUtils.isEmpty(nativeLog)) {
+                    bytesWritten += writeLine(writer, "native_input_log=none");
+                    return;
+                }
+                bytesWritten += writeLine(writer, "");
+                bytesWritten += writeLine(writer, "== Native Input Diagnostics ==");
+                for (String line : nativeLog.split("\\r?\\n")) {
+                    if (TextUtils.isEmpty(line)) continue;
+                    bytesWritten += writeLine(writer, line);
+                    if (bytesWritten >= MAX_CAPTURE_BYTES) break;
+                }
+            } catch (Throwable t) {
+                bytesWritten += writeLine(writer, "native_input_log="
+                        + t.getClass().getSimpleName() + ": " + t.getMessage());
+            }
+        }
+
         private static boolean isHighPriorityEvent(String source) {
             if (source == null) return false;
             return source.contains("key")
@@ -337,6 +359,10 @@ public final class ControllerDiagnosticsCapture {
                 .append(" open=").append(snapshot.adapterOpen)
                 .append(" size=").append(snapshot.inputSize)
                 .append(" age_ms=").append(snapshot.ageMs)
+                .append(" input_count=").append(snapshot.inputCount)
+                .append(" null_reads=").append(snapshot.nullReads)
+                .append(" short_reads=").append(snapshot.shortReads)
+                .append(" queue_failures=").append(snapshot.queueFailures)
                 .append(" payload=").append(hex(snapshot.payload));
         for (int port = 0; port < 4; port++) {
             appendPort(sb, snapshot.payload, port);

@@ -156,6 +156,9 @@ public final class NativeLibrary {
             int port, float stickX, float stickY,
             float substickX, float substickY);
 
+    /** Bounded native controller/input trace included in support diagnostics. */
+    public static native String GetInputDiagnosticsLog();
+
     public static native String GetConfig(String configFile, String section, String key, String defaultValue);
     public static native void SetConfig(String configFile, String section, String key, String value);
     public static native void SetMeleeForceWidescreen(boolean enabled);

@@ -121,7 +121,9 @@ public final class GameCubePadState {
                 + " main=(" + stickX + "," + stickY + ")"
                 + " c=(" + substickX + "," + substickY + ")"
                 + " triggers=(" + triggerL + "," + triggerR + ")"
-                + " analogTriggers=(" + analogTriggerL + "," + analogTriggerR + ")";
+                + " analogTriggers=(" + analogTriggerL + "," + analogTriggerR + ")"
+                + " meleeMain=(" + formatUnit(meleeMainX) + "," + formatUnit(meleeMainY) + ")"
+                + " meleeC=(" + formatUnit(meleeCX) + "," + formatUnit(meleeCY) + ")";
     }
 
     private static String buttonNames(int buttons) {
@@ -157,5 +159,9 @@ public final class GameCubePadState {
         if (v < -1f) return -1f;
         if (v > 1f) return 1f;
         return v;
+    }
+
+    private static String formatUnit(float v) {
+        return String.format(Locale.US, "%+.3f", v);
     }
 }

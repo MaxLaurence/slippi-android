@@ -763,6 +763,8 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         pushPad();
         ControllerDiagnosticsCapture.recordInputEvent("key",
                 "device=" + safeDeviceName(event.getDevice())
+                        + " deviceId=" + event.getDeviceId()
+                        + " descriptor=" + safeDeviceDescriptor(event.getDevice())
                         + " keyCode=" + keyCode
                         + " action=" + action
                         + " repeat=" + event.getRepeatCount()
@@ -884,7 +886,11 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
 
     private String describeMotionEvent(MotionEvent ev) {
         return "device=" + safeDeviceName(ev.getDevice())
+                + " deviceId=" + ev.getDeviceId()
+                + " descriptor=" + safeDeviceDescriptor(ev.getDevice())
                 + " source=0x" + Integer.toHexString(ev.getSource())
+                + " action=" + ev.getActionMasked()
+                + " buttonState=0x" + Integer.toHexString(ev.getButtonState())
                 + " history=" + ev.getHistorySize()
                 + " axes={x=" + formatAxis(ev.getAxisValue(MotionEvent.AXIS_X))
                 + ",y=" + formatAxis(ev.getAxisValue(MotionEvent.AXIS_Y))
@@ -900,6 +906,10 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
 
     private static String safeDeviceName(android.view.InputDevice device) {
         return device == null ? "" : device.getName();
+    }
+
+    private static String safeDeviceDescriptor(android.view.InputDevice device) {
+        return device == null ? "" : device.getDescriptor();
     }
 
     private static String formatAxis(Float value) {

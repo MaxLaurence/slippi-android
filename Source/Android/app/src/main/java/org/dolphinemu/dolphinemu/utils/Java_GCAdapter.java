@@ -65,6 +65,10 @@ public final class Java_GCAdapter {
     public static final byte[] controller_payload = new byte[37];
     private static int sLastInputSize;
     private static long sLastInputElapsedMs;
+    private static long sInputCount;
+    private static long sNullReadCount;
+    private static long sShortReadCount;
+    private static long sQueueFailureCount;
     private static boolean sReceiverRegistered;
 
     // Async receive pipeline: keep a small number of UsbRequests queued on
@@ -246,8 +250,17 @@ public final class Java_GCAdapter {
         // requestWait() is called outside the class lock so concurrent
         // Output() / QueryAdapter() calls don't pile up behind it.
         UsbRequest done = conn.requestWait();
-        if (done == null) return 0;
+        if (done == null) {
+            synchronized (Java_GCAdapter.class) {
+                sNullReadCount++;
+                if (sNullReadCount <= 3 || (sNullReadCount % 60) == 0) {
+                    Log.w(TAG, "Input requestWait returned null count=" + sNullReadCount);
+                }
+            }
+            return 0;
+        }
         synchronized (Java_GCAdapter.class) {
+            sInputCount++;
             Object clientData = done.getClientData();
             if (!(clientData instanceof Integer) || sBuffers == null) return 0;
             int slot = (Integer) clientData;
@@ -258,10 +271,21 @@ public final class Java_GCAdapter {
             buf.get(controller_payload, 0, len);
             sLastInputSize = len;
             sLastInputElapsedMs = SystemClock.elapsedRealtime();
+            if (len != controller_payload.length) {
+                sShortReadCount++;
+                if (sShortReadCount <= 3 || (sShortReadCount % 60) == 0) {
+                    Log.w(TAG, "Input short read len=" + len
+                            + " expected=" + controller_payload.length
+                            + " count=" + sShortReadCount);
+                }
+            }
             // Re-queue immediately so the kernel always has IN_FLIGHT
             // outstanding URBs.
             buf.clear();
-            done.queue(buf, controller_payload.length);
+            if (!done.queue(buf, controller_payload.length)) {
+                sQueueFailureCount++;
+                Log.w(TAG, "Input UsbRequest.queue failed count=" + sQueueFailureCount);
+            }
             return len;
         }
     }
@@ -282,6 +306,10 @@ public final class Java_GCAdapter {
                 sConnection != null,
                 sLastInputSize,
                 ageMs,
+                sInputCount,
+                sNullReadCount,
+                sShortReadCount,
+                sQueueFailureCount,
                 Arrays.copyOf(controller_payload, controller_payload.length));
     }
 
@@ -312,12 +340,22 @@ public final class Java_GCAdapter {
         public final boolean adapterOpen;
         public final int inputSize;
         public final long ageMs;
+        public final long inputCount;
+        public final long nullReads;
+        public final long shortReads;
+        public final long queueFailures;
         public final byte[] payload;
 
-        private DiagnosticsSnapshot(boolean adapterOpen, int inputSize, long ageMs, byte[] payload) {
+        private DiagnosticsSnapshot(boolean adapterOpen, int inputSize, long ageMs,
+                                    long inputCount, long nullReads, long shortReads,
+                                    long queueFailures, byte[] payload) {
             this.adapterOpen = adapterOpen;
             this.inputSize = inputSize;
             this.ageMs = ageMs;
+            this.inputCount = inputCount;
+            this.nullReads = nullReads;
+            this.shortReads = shortReads;
+            this.queueFailures = queueFailures;
             this.payload = payload;
         }
     }
