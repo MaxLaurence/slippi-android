@@ -49,6 +49,7 @@ static u8 s_controller_payload[37];
 static std::atomic<int> s_controller_payload_size{0};
 static std::atomic<u64> s_controller_payload_sequence{0};
 static std::atomic<u64> s_controller_payload_time_us{0};
+static constexpr u64 STALE_PAYLOAD_NEUTRAL_US = 25000;
 
 // Output handling
 static std::mutex s_write_mutex;
@@ -157,6 +158,46 @@ static void RecordDecodedPad(int chan, u8 type_byte, u8 b1, u8 b2, const GCPadSt
       static_cast<unsigned>(pad.stickX), static_cast<unsigned>(pad.stickY),
       static_cast<unsigned>(pad.substickX), static_cast<unsigned>(pad.substickY),
       static_cast<unsigned>(pad.triggerLeft), static_cast<unsigned>(pad.triggerRight));
+}
+
+static GCPadStatus NeutralPadForStalePayload(int chan, u8 type_byte, u64 sequence, u64 age_us)
+{
+  GCPadStatus pad = {};
+  s_controller_type[chan] = type_byte >> 4;
+  if (s_controller_type[chan] == ControllerTypes::CONTROLLER_NONE)
+  {
+    pad.button = PAD_ERR_STATUS;
+    return pad;
+  }
+
+  pad.stickX = GCPadStatus::MAIN_STICK_CENTER_X;
+  pad.stickY = GCPadStatus::MAIN_STICK_CENTER_Y;
+  pad.substickX = GCPadStatus::C_STICK_CENTER_X;
+  pad.substickY = GCPadStatus::C_STICK_CENTER_Y;
+  static std::mutex s_stale_diag_mutex;
+  static u64 s_last_stale_sequence[4] = {};
+  static u64 s_last_stale_log_us[4] = {};
+  const u64 now_us = NowUs();
+  bool should_log = false;
+  {
+    std::lock_guard<std::mutex> lock(s_stale_diag_mutex);
+    should_log = s_last_stale_sequence[chan] != sequence ||
+                 now_us - s_last_stale_log_us[chan] > 500000;
+    if (should_log)
+    {
+      s_last_stale_sequence[chan] = sequence;
+      s_last_stale_log_us[chan] = now_us;
+    }
+  }
+  if (should_log)
+  {
+    Common::AndroidInputDiagnostics::Record(
+        "SlippiGCAdapter",
+        "wup_stale_neutralized port=%d seq=%llu age_us=%llu threshold_us=%llu type_byte=0x%02x",
+        chan, static_cast<unsigned long long>(sequence), static_cast<unsigned long long>(age_us),
+        static_cast<unsigned long long>(STALE_PAYLOAD_NEUTRAL_US), type_byte);
+  }
+  return pad;
 }
 
 // Adapter running thread
@@ -450,6 +491,11 @@ GCPadStatus Input(int chan, std::chrono::high_resolution_clock::time_point* tp)
         static_cast<unsigned long long>(payload_sequence),
         static_cast<unsigned long long>(age_us));
     Reset();
+  }
+  else if (payload_time_us > 0 && age_us > STALE_PAYLOAD_NEUTRAL_US)
+  {
+    return NeutralPadForStalePayload(chan, controller_payload_copy[1 + (9 * chan)],
+                                     payload_sequence, age_us);
   }
   else
   {

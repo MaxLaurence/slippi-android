@@ -1,0 +1,133 @@
+diff --git a/Source/Core/InputCommon/GCAdapter.cpp b/Source/Core/InputCommon/GCAdapter.cpp
+index c30c542..e48f3a7 100644
+--- a/Source/Core/InputCommon/GCAdapter.cpp
++++ b/Source/Core/InputCommon/GCAdapter.cpp
+@@ -13,6 +13,7 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <chrono>
+ #include <mutex>
+ #include <optional>
+ 
+@@ -112,12 +113,21 @@ constexpr size_t CONTROLLER_OUTPUT_INIT_PAYLOAD_SIZE = 1;
+ #endif
+ constexpr size_t CONTROLLER_OUTPUT_RUMBLE_PAYLOAD_SIZE = 5;
+ 
++#if GCADAPTER_USE_ANDROID_IMPLEMENTATION
++constexpr u64 STALE_PAYLOAD_NEUTRAL_US = 25000;
++#endif
++
+ struct PortState
+ {
+   GCPadStatus origin = {};
+   GCPadStatus status = {};
+ 
+   ControllerType controller_type = ControllerType::None;
++#if GCADAPTER_USE_ANDROID_IMPLEMENTATION
++  u8 type_byte = 0;
++  u64 last_payload_time_us = 0;
++  u64 last_stale_log_time_us = 0;
++#endif
+   bool is_new_connection = false;
+ };
+ 
+@@ -176,6 +186,44 @@ static u64 s_consecutive_slow_transfers = 0;
+ static double s_read_rate = 0.0;
+ // slippi change: for poll rate display
+ 
++#if GCADAPTER_USE_ANDROID_IMPLEMENTATION
++static u64 NowUs()
++{
++  return static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
++                              std::chrono::steady_clock::now().time_since_epoch())
++                              .count());
++}
++
++static GCPadStatus NeutralPadForStalePayload(int chan, PortState& pad_state, u64 now_us)
++{
++  GCPadStatus pad = {};
++  if (pad_state.controller_type == ControllerType::None)
++  {
++    if (!Core::WantsDeterminism())
++      pad.button = PAD_ERR_STATUS;
++    return pad;
++  }
++
++  pad.stickX = GCPadStatus::MAIN_STICK_CENTER_X;
++  pad.stickY = GCPadStatus::MAIN_STICK_CENTER_Y;
++  pad.substickX = GCPadStatus::C_STICK_CENTER_X;
++  pad.substickY = GCPadStatus::C_STICK_CENTER_Y;
++
++  if (pad_state.last_stale_log_time_us == 0 ||
++      now_us - pad_state.last_stale_log_time_us > 500000)
++  {
++    pad_state.last_stale_log_time_us = now_us;
++    const u64 age_us =
++        now_us > pad_state.last_payload_time_us ? now_us - pad_state.last_payload_time_us : 0;
++    WARN_LOG_FMT(CONTROLLERINTERFACE,
++                 "Android WUP stale report neutralized port={} age_us={} threshold_us={} "
++                 "type_byte={:02x}",
++                 chan, age_us, STALE_PAYLOAD_NEUTRAL_US, pad_state.type_byte);
++  }
++  return pad;
++}
++#endif
++
+ static void ReadThreadFunc()
+ {
+   Common::SetCurrentThreadName("GCAdapter Read Thread");
+@@ -817,6 +865,15 @@ GCPadStatus Input(int chan)
+ 
+   auto& pad_state = s_port_states[chan];
+ 
++#if GCADAPTER_USE_ANDROID_IMPLEMENTATION
++  const u64 now_us = NowUs();
++  if (pad_state.last_payload_time_us > 0 && now_us > pad_state.last_payload_time_us &&
++      now_us - pad_state.last_payload_time_us > STALE_PAYLOAD_NEUTRAL_US)
++  {
++    return NeutralPadForStalePayload(chan, pad_state, now_us);
++  }
++#endif
++
+   // Return the "origin" state for the first input on a new connection.
+   if (pad_state.is_new_connection)
+   {
+@@ -857,12 +914,16 @@ void ProcessInputPayload(const u8* data, std::size_t size)
+   else
+   {
+     std::lock_guard lk(s_read_mutex);
++#if GCADAPTER_USE_ANDROID_IMPLEMENTATION
++    const u64 payload_time_us = NowUs();
++#endif
+ 
+     for (int chan = 0; chan != SerialInterface::MAX_SI_CHANNELS; ++chan)
+     {
+       const u8* const channel_data = &data[1 + (9 * chan)];
+ 
+-      const auto type = IdentifyControllerType(channel_data[0]);
++      const u8 type_byte = channel_data[0];
++      const auto type = IdentifyControllerType(type_byte);
+ 
+       auto& pad_state = s_port_states[chan];
+ 
+@@ -918,7 +979,7 @@ void ProcessInputPayload(const u8* data, std::size_t size)
+       if (type != ControllerType::None && pad_state.controller_type == ControllerType::None)
+       {
+         NOTICE_LOG_FMT(CONTROLLERINTERFACE, "New device connected to Port {} of Type: {:02x}",
+-                       chan + 1, channel_data[0]);
++                       chan + 1, type_byte);
+ 
+         pad.button |= PAD_GET_ORIGIN;
+         pad_state.origin = pad;
+@@ -927,6 +988,10 @@ void ProcessInputPayload(const u8* data, std::size_t size)
+ 
+       pad_state.controller_type = type;
+       pad_state.status = pad;
++#if GCADAPTER_USE_ANDROID_IMPLEMENTATION
++      pad_state.type_byte = type_byte;
++      pad_state.last_payload_time_us = payload_time_us;
++#endif
+     }
+   }
+ }

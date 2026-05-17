@@ -8,7 +8,7 @@ plugins {
 // credentials in the binary.
 def forceTouchControls = project.findProperty('forceTouchControls')?.toString()?.toBoolean() ?: false
 def skipMainlineCoreBuild = project.findProperty('skipMainlineCoreBuild')?.toString()?.toBoolean() ?: false
-def androidVersionPattern = ~/^v?([0-9]+)\.([0-9]+)\.([0-9]+)-android-r([0-9]+)$/
+def androidVersionPattern = ~/^v?([0-9]+)\.([0-9]+)\.([0-9]+)-android-r([0-9]+)(-[A-Za-z0-9][A-Za-z0-9._-]*)?$/
 def runGit = { List<String> args ->
     def standardOutputBytes = new ByteArrayOutputStream()
     def errorOutputBytes = new ByteArrayOutputStream()
@@ -29,7 +29,7 @@ def normalizeAndroidVersionName = { Object rawValue ->
     def matcher = value =~ androidVersionPattern
     if (!matcher.matches()) {
         throw new GradleException(
-                "Android version must look like 3.6.0-android-r7, got '${value}'")
+                "Android version must look like 3.6.0-android-r7 or 3.6.0-android-r7-experimental, got '${value}'")
     }
     return value.startsWith('v') ? value.substring(1) : value
 }
@@ -37,7 +37,7 @@ def versionCodeForAndroidVersion = { String versionName ->
     def matcher = versionName =~ androidVersionPattern
     if (!matcher.matches()) {
         throw new GradleException(
-                "Android version must look like 3.6.0-android-r7, got '${versionName}'")
+                "Android version must look like 3.6.0-android-r7 or 3.6.0-android-r7-experimental, got '${versionName}'")
     }
     return matcher.group(1).toInteger() * 1000000 +
             matcher.group(2).toInteger() * 10000 +
