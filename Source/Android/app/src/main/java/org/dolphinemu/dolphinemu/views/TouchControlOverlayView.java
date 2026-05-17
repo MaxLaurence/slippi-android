@@ -15,6 +15,9 @@ import org.dolphinemu.dolphinemu.controller.TouchOverlayLayoutStore;
 import org.dolphinemu.dolphinemu.controller.TouchOverlayLayoutStore.Control;
 import org.dolphinemu.dolphinemu.controller.TouchOverlayLayoutStore.Layout;
 
+import java.util.HashMap;
+import java.util.Map;
+
 public class TouchControlOverlayView extends View {
     public interface Listener {
         void onOverlayButton(int gcBit, boolean pressed);
@@ -27,11 +30,14 @@ public class TouchControlOverlayView extends View {
     private static final int COLOR_RING = 0xCCF0F3F1;
     private static final int COLOR_FILL = 0xAA111817;
     private static final int COLOR_SELECTED = 0xFFFFC857;
+    private static final int COLOR_PRESSED = 0xFFE8FFF6;
+    private static final int COLOR_GUIDE = 0x66F0F3F1;
 
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final SparseArray<ActiveTouch> activeTouches = new SparseArray<>();
+    private final Map<Integer, Integer> buttonPressCounts = new HashMap<>();
 
     private Layout layout;
     private Layout savedEditLayout;
@@ -131,13 +137,14 @@ public class TouchControlOverlayView extends View {
         float cy = control.y * getHeight();
         float radius = radius(control);
         int alpha = Math.round(layout.opacity * 255f);
+        boolean active = isControlActive(control);
 
         fill.setStyle(Paint.Style.FILL);
         fill.setColor(controlColor(control));
-        fill.setAlpha(alpha);
-        stroke.setColor(COLOR_RING);
-        stroke.setAlpha(Math.min(255, alpha + 45));
-        stroke.setStrokeWidth(dp(2));
+        fill.setAlpha(active ? Math.min(255, alpha + 58) : alpha);
+        stroke.setColor(active ? COLOR_PRESSED : COLOR_RING);
+        stroke.setAlpha(active ? 255 : Math.min(255, alpha + 45));
+        stroke.setStrokeWidth(active ? dp(4) : dp(2));
 
         canvas.drawCircle(cx, cy, radius, fill);
         canvas.drawCircle(cx, cy, radius, stroke);
@@ -145,20 +152,22 @@ public class TouchControlOverlayView extends View {
         if (control.kind == TouchOverlayLayoutStore.KIND_STICK) {
             float sx = TouchOverlayLayoutStore.MAIN_STICK.equals(control.id) ? mainStickX : cStickX;
             float sy = TouchOverlayLayoutStore.MAIN_STICK.equals(control.id) ? mainStickY : cStickY;
+            drawStickGuides(canvas, control, cx, cy, radius);
             float knobRadius = radius * 0.42f;
             fill.setColor(0xCCF0F3F1);
-            fill.setAlpha(Math.min(230, alpha + 60));
+            fill.setAlpha(active ? 255 : Math.min(230, alpha + 60));
             canvas.drawCircle(cx + sx * radius * 0.58f, cy - sy * radius * 0.58f,
                     knobRadius, fill);
         } else if (control.kind == TouchOverlayLayoutStore.KIND_DPAD) {
-            stroke.setColor(0xEEF0F3F1);
+            stroke.setColor(active ? COLOR_PRESSED : 0xEEF0F3F1);
             stroke.setStrokeWidth(dp(5));
             canvas.drawLine(cx - radius * 0.54f, cy, cx + radius * 0.54f, cy, stroke);
             canvas.drawLine(cx, cy - radius * 0.54f, cx, cy + radius * 0.54f, stroke);
+            drawDpadNotches(canvas, cx, cy, radius);
         }
 
         text.setColor(Color.WHITE);
-        text.setAlpha(Math.min(255, alpha + 70));
+        text.setAlpha(255);
         text.setFakeBoldText(true);
         text.setTextSize(Math.max(dp(12), radius * 0.48f));
         Paint.FontMetrics fm = text.getFontMetrics();
@@ -268,7 +277,15 @@ public class TouchControlOverlayView extends View {
                 ActiveTouch touch = activeTouches.get(event.getPointerId(i));
                 if (touch == null) continue;
                 Control control = layout.get(touch.controlId);
-                if (control != null) updateActiveTouch(touch, control, event.getX(i), event.getY(i));
+                if (control == null) continue;
+                float x = event.getX(i);
+                float y = event.getY(i);
+                Control swipeTarget = swipeTargetFor(control, x, y);
+                if (swipeTarget != null && swipeTarget != control) {
+                    switchButtonTouch(touch, control, swipeTarget);
+                    control = swipeTarget;
+                }
+                updateActiveTouch(touch, control, x, y);
             }
             invalidate();
             return activeTouches.size() > 0;
@@ -357,9 +374,7 @@ public class TouchControlOverlayView extends View {
 
     private void updateActiveTouch(ActiveTouch touch, Control control, float x, float y) {
         if (control.kind == TouchOverlayLayoutStore.KIND_BUTTON) {
-            if (!touch.pressed && listener != null) {
-                listener.onOverlayButton(control.gcBit, true);
-            }
+            if (!touch.pressed) pressButton(control);
             touch.pressed = true;
             return;
         }
@@ -404,9 +419,9 @@ public class TouchControlOverlayView extends View {
     private void releaseTouch(ActiveTouch touch) {
         if (touch == null) return;
         Control control = layout.get(touch.controlId);
-        if (control == null || listener == null) return;
+        if (control == null) return;
         if (control.kind == TouchOverlayLayoutStore.KIND_BUTTON && touch.pressed) {
-            listener.onOverlayButton(control.gcBit, false);
+            releaseButton(control);
         } else if (control.kind == TouchOverlayLayoutStore.KIND_STICK) {
             if (TouchOverlayLayoutStore.MAIN_STICK.equals(control.id)) {
                 mainStickX = 0f;
@@ -415,10 +430,11 @@ public class TouchControlOverlayView extends View {
                 cStickX = 0f;
                 cStickY = 0f;
             }
-            listener.onOverlayStick(control.id, 0f, 0f);
+            if (listener != null) listener.onOverlayStick(control.id, 0f, 0f);
         } else if (control.kind == TouchOverlayLayoutStore.KIND_DPAD) {
-            listener.onOverlayDpad(false, false, false, false);
+            if (listener != null) listener.onOverlayDpad(false, false, false, false);
         }
+        touch.pressed = false;
     }
 
     private void releaseAllControls() {
@@ -426,6 +442,7 @@ public class TouchControlOverlayView extends View {
             releaseTouch(activeTouches.valueAt(i));
         }
         activeTouches.clear();
+        releaseAllButtons();
         mainStickX = 0f;
         mainStickY = 0f;
         cStickX = 0f;
@@ -433,19 +450,102 @@ public class TouchControlOverlayView extends View {
     }
 
     private Control hitControl(float x, float y) {
+        return hitControl(x, y, null);
+    }
+
+    private Control hitControl(float x, float y, String requiredSwipeGroup) {
         Control best = null;
         float bestDistance = Float.MAX_VALUE;
         for (Control control : layout.controls()) {
+            if (requiredSwipeGroup != null && !requiredSwipeGroup.equals(control.swipeGroup)) {
+                continue;
+            }
             float dx = x - control.x * getWidth();
             float dy = y - control.y * getHeight();
             float distance = dx * dx + dy * dy;
-            float radius = radius(control) + (editMode ? dp(10) : 0);
+            float radius = hitRadius(control);
             if (distance <= radius * radius && distance < bestDistance) {
                 best = control;
                 bestDistance = distance;
             }
         }
         return best;
+    }
+
+    private Control swipeTargetFor(Control current, float x, float y) {
+        if (current.kind != TouchOverlayLayoutStore.KIND_BUTTON || current.swipeGroup == null) {
+            return null;
+        }
+        Control target = hitControl(x, y, current.swipeGroup);
+        if (target == null || target == current) return target;
+
+        float currentDistance = distanceSquared(current, x, y);
+        float targetDistance = distanceSquared(target, x, y);
+        float hysteresis = dp(12);
+        boolean currentStillComfortable = currentDistance <= square(hitRadius(current) + hysteresis);
+        if (currentStillComfortable && targetDistance + square(hysteresis) >= currentDistance) {
+            return current;
+        }
+        return target;
+    }
+
+    private void switchButtonTouch(ActiveTouch touch, Control from, Control to) {
+        if (!TouchOverlayLayoutStore.sameSwipeGroup(from, to)) return;
+        if (touch.pressed) releaseButton(from);
+        touch.controlId = to.id;
+        touch.pressed = false;
+    }
+
+    private void pressButton(Control control) {
+        if (control.gcBit == 0) return;
+        int count = buttonPressCounts.containsKey(control.gcBit)
+                ? buttonPressCounts.get(control.gcBit) : 0;
+        buttonPressCounts.put(control.gcBit, count + 1);
+        if (count == 0 && listener != null) {
+            listener.onOverlayButton(control.gcBit, true);
+        }
+    }
+
+    private void releaseButton(Control control) {
+        if (control.gcBit == 0) return;
+        int count = buttonPressCounts.containsKey(control.gcBit)
+                ? buttonPressCounts.get(control.gcBit) : 0;
+        if (count <= 1) {
+            buttonPressCounts.remove(control.gcBit);
+            if (listener != null) listener.onOverlayButton(control.gcBit, false);
+            return;
+        }
+        buttonPressCounts.put(control.gcBit, count - 1);
+    }
+
+    private void releaseAllButtons() {
+        if (listener != null) {
+            for (Integer gcBit : buttonPressCounts.keySet()) {
+                listener.onOverlayButton(gcBit, false);
+            }
+        }
+        buttonPressCounts.clear();
+    }
+
+    private boolean isControlActive(Control control) {
+        if (control.kind == TouchOverlayLayoutStore.KIND_BUTTON) {
+            Integer count = buttonPressCounts.get(control.gcBit);
+            return count != null && count > 0;
+        }
+        if (control.kind == TouchOverlayLayoutStore.KIND_STICK) {
+            float x = TouchOverlayLayoutStore.MAIN_STICK.equals(control.id) ? mainStickX : cStickX;
+            float y = TouchOverlayLayoutStore.MAIN_STICK.equals(control.id) ? mainStickY : cStickY;
+            return Math.abs(x) > 0.04f || Math.abs(y) > 0.04f;
+        }
+        return hasActiveTouch(control.id);
+    }
+
+    private boolean hasActiveTouch(String controlId) {
+        for (int i = 0; i < activeTouches.size(); i++) {
+            ActiveTouch touch = activeTouches.valueAt(i);
+            if (touch != null && controlId.equals(touch.controlId)) return true;
+        }
+        return false;
     }
 
     private boolean hitEditButton(float x, float y) {
@@ -481,6 +581,47 @@ public class TouchControlOverlayView extends View {
             default:
                 return COLOR_FILL;
         }
+    }
+
+    private void drawStickGuides(Canvas canvas, Control control, float cx, float cy, float radius) {
+        stroke.setColor(COLOR_GUIDE);
+        stroke.setAlpha(255);
+        stroke.setStrokeWidth(dp(1.5f));
+
+        if (TouchOverlayLayoutStore.MAIN_STICK.equals(control.id)) {
+            drawGuideLine(canvas, cx, cy, radius, 1f, 0f, 0.86f);
+            drawGuideLine(canvas, cx, cy, radius, -1f, 0f, 0.86f);
+            drawGuideLine(canvas, cx, cy, radius, 0f, -1f, 0.72f);
+            drawGuideLine(canvas, cx, cy, radius, 0.74f, -0.56f, 0.92f);
+            drawGuideLine(canvas, cx, cy, radius, -0.74f, -0.56f, 0.92f);
+        } else {
+            drawGuideLine(canvas, cx, cy, radius, 1f, 0f, 0.78f);
+            drawGuideLine(canvas, cx, cy, radius, -1f, 0f, 0.78f);
+            drawGuideLine(canvas, cx, cy, radius, 0f, 1f, 0.78f);
+            drawGuideLine(canvas, cx, cy, radius, 0f, -1f, 0.78f);
+        }
+    }
+
+    private void drawGuideLine(Canvas canvas, float cx, float cy, float radius,
+                               float gameX, float gameY, float scale) {
+        float length = (float) Math.sqrt(gameX * gameX + gameY * gameY);
+        if (length <= 0f) return;
+        float x = gameX / length;
+        float y = gameY / length;
+        canvas.drawLine(cx + x * radius * 0.28f, cy - y * radius * 0.28f,
+                cx + x * radius * scale, cy - y * radius * scale, stroke);
+    }
+
+    private void drawDpadNotches(Canvas canvas, float cx, float cy, float radius) {
+        stroke.setColor(COLOR_GUIDE);
+        stroke.setAlpha(255);
+        stroke.setStrokeWidth(dp(2));
+        float inner = radius * 0.28f;
+        float outer = radius * 0.78f;
+        canvas.drawLine(cx, cy - inner, cx, cy - outer, stroke);
+        canvas.drawLine(cx, cy + inner, cx, cy + outer, stroke);
+        canvas.drawLine(cx - inner, cy, cx - outer, cy, stroke);
+        canvas.drawLine(cx + inner, cy, cx + outer, cy, stroke);
     }
 
     private void updateEditorRects() {
@@ -539,6 +680,29 @@ public class TouchControlOverlayView extends View {
         return Math.max(dp(18), control.size * Math.min(getWidth(), getHeight()) * 0.5f);
     }
 
+    private float hitRadius(Control control) {
+        float base = radius(control);
+        if (editMode) return base + dp(10);
+        if (control.kind == TouchOverlayLayoutStore.KIND_BUTTON) {
+            float multiplier = control.swipeGroup == null ? 1.26f : 1.44f;
+            return Math.max(base * multiplier, base + dp(14));
+        }
+        if (control.kind == TouchOverlayLayoutStore.KIND_STICK) {
+            return Math.max(base * 1.12f, base + dp(8));
+        }
+        return Math.max(base * 1.18f, base + dp(8));
+    }
+
+    private float distanceSquared(Control control, float x, float y) {
+        float dx = x - control.x * getWidth();
+        float dy = y - control.y * getHeight();
+        return dx * dx + dy * dy;
+    }
+
+    private static float square(float value) {
+        return value * value;
+    }
+
     private float dp(float value) {
         return value * getResources().getDisplayMetrics().density;
     }
@@ -550,7 +714,7 @@ public class TouchControlOverlayView extends View {
     }
 
     private static final class ActiveTouch {
-        final String controlId;
+        String controlId;
         boolean pressed;
         boolean up;
         boolean down;

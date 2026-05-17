@@ -24,8 +24,10 @@ public final class TouchOverlayLayoutStore {
     public static final int KIND_DPAD = 2;
     public static final int KIND_BUTTON = 3;
 
+    public static final String SWIPE_GROUP_MELEE_TECH = "melee_tech";
+
     private static final String PREF_FILE = "touch_overlay_layout";
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
 
     private TouchOverlayLayoutStore() {
     }
@@ -35,23 +37,30 @@ public final class TouchOverlayLayoutStore {
         public final String label;
         public final int kind;
         public final int gcBit;
+        public final String swipeGroup;
         public float x;
         public float y;
         public float size;
 
         private Control(String id, String label, int kind, int gcBit,
                         float x, float y, float size) {
+            this(id, label, kind, gcBit, null, x, y, size);
+        }
+
+        private Control(String id, String label, int kind, int gcBit, String swipeGroup,
+                        float x, float y, float size) {
             this.id = id;
             this.label = label;
             this.kind = kind;
             this.gcBit = gcBit;
+            this.swipeGroup = swipeGroup;
             this.x = x;
             this.y = y;
             this.size = size;
         }
 
         public Control copy() {
-            return new Control(id, label, kind, gcBit, x, y, size);
+            return new Control(id, label, kind, gcBit, swipeGroup, x, y, size);
         }
     }
 
@@ -123,17 +132,24 @@ public final class TouchOverlayLayoutStore {
 
     public static Layout defaults() {
         Layout layout = new Layout();
-        layout.opacity = 0.58f;
-        layout.add(new Control(MAIN_STICK, "L", KIND_STICK, 0, 0.16f, 0.68f, 0.20f));
-        layout.add(new Control(DPAD, "D", KIND_DPAD, 0, 0.16f, 0.36f, 0.17f));
-        layout.add(new Control(C_STICK, "C", KIND_STICK, 0, 0.70f, 0.70f, 0.14f));
-        layout.add(new Control(A, "A", KIND_BUTTON, ButtonMap.GC_BTN_A, 0.84f, 0.52f, 0.105f));
-        layout.add(new Control(B, "B", KIND_BUTTON, ButtonMap.GC_BTN_B, 0.75f, 0.61f, 0.085f));
-        layout.add(new Control(X, "X", KIND_BUTTON, ButtonMap.GC_BTN_X, 0.92f, 0.43f, 0.080f));
-        layout.add(new Control(Y, "Y", KIND_BUTTON, ButtonMap.GC_BTN_Y, 0.80f, 0.38f, 0.080f));
-        layout.add(new Control(L, "L", KIND_BUTTON, ButtonMap.GC_TRIG_L, 0.14f, 0.13f, 0.12f));
-        layout.add(new Control(R, "R", KIND_BUTTON, ButtonMap.GC_TRIG_R, 0.86f, 0.13f, 0.12f));
-        layout.add(new Control(Z, "Z", KIND_BUTTON, ButtonMap.GC_TRIG_Z, 0.94f, 0.24f, 0.075f));
+        layout.opacity = 0.62f;
+        layout.add(new Control(MAIN_STICK, "L", KIND_STICK, 0, 0.15f, 0.70f, 0.23f));
+        layout.add(new Control(DPAD, "D", KIND_DPAD, 0, 0.10f, 0.43f, 0.10f));
+        layout.add(new Control(C_STICK, "C", KIND_STICK, 0, 0.66f, 0.78f, 0.13f));
+        layout.add(new Control(Y, "Y", KIND_BUTTON, ButtonMap.GC_BTN_Y,
+                SWIPE_GROUP_MELEE_TECH, 0.78f, 0.43f, 0.110f));
+        layout.add(new Control(R, "R", KIND_BUTTON, ButtonMap.GC_TRIG_R,
+                SWIPE_GROUP_MELEE_TECH, 0.84f, 0.54f, 0.110f));
+        layout.add(new Control(B, "B", KIND_BUTTON, ButtonMap.GC_BTN_B,
+                SWIPE_GROUP_MELEE_TECH, 0.77f, 0.66f, 0.098f));
+        layout.add(new Control(A, "A", KIND_BUTTON, ButtonMap.GC_BTN_A,
+                SWIPE_GROUP_MELEE_TECH, 0.91f, 0.64f, 0.115f));
+        layout.add(new Control(X, "X", KIND_BUTTON, ButtonMap.GC_BTN_X,
+                SWIPE_GROUP_MELEE_TECH, 0.94f, 0.52f, 0.080f));
+        layout.add(new Control(L, "L", KIND_BUTTON, ButtonMap.GC_TRIG_L,
+                SWIPE_GROUP_MELEE_TECH, 0.14f, 0.13f, 0.115f));
+        layout.add(new Control(Z, "Z", KIND_BUTTON, ButtonMap.GC_TRIG_Z,
+                SWIPE_GROUP_MELEE_TECH, 0.95f, 0.28f, 0.080f));
         layout.add(new Control(START, "ST", KIND_BUTTON, ButtonMap.GC_BTN_START, 0.50f, 0.15f, 0.070f));
         return layout;
     }
@@ -148,6 +164,11 @@ public final class TouchOverlayLayoutStore {
             dst.y = src.y;
             dst.size = src.size;
         }
+    }
+
+    public static boolean sameSwipeGroup(Control first, Control second) {
+        if (first == null || second == null) return false;
+        return first.swipeGroup != null && first.swipeGroup.equals(second.swipeGroup);
     }
 
     private static float clamp(float value, float min, float max) {
