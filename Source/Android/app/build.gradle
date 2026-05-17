@@ -8,6 +8,7 @@ plugins {
 // credentials in the binary.
 def forceTouchControls = project.findProperty('forceTouchControls')?.toString()?.toBoolean() ?: false
 def skipMainlineCoreBuild = project.findProperty('skipMainlineCoreBuild')?.toString()?.toBoolean() ?: false
+def allowDirtyMainlineSource = project.findProperty('allowDirtyMainlineSource')?.toString()?.toBoolean() ?: false
 def androidVersionPattern = ~/^v?([0-9]+)\.([0-9]+)\.([0-9]+)-android-r([0-9]+)(-[A-Za-z0-9][A-Za-z0-9._-]*)?$/
 def runGit = { List<String> args ->
     def standardOutputBytes = new ByteArrayOutputStream()
@@ -20,6 +21,22 @@ def runGit = { List<String> args ->
         errorOutput = errorOutputBytes
     }
     return result.exitValue == 0 ? standardOutputBytes.toString('UTF-8').trim() : ''
+}
+def runGitInDir = { File workingDir, List<String> args ->
+    def standardOutputBytes = new ByteArrayOutputStream()
+    def errorOutputBytes = new ByteArrayOutputStream()
+    def result = exec {
+        setWorkingDir(workingDir)
+        commandLine(['git'] + args)
+        ignoreExitValue true
+        standardOutput = standardOutputBytes
+        errorOutput = errorOutputBytes
+    }
+    return [
+            exitValue: result.exitValue,
+            stdout: standardOutputBytes.toString('UTF-8').trim(),
+            stderr: errorOutputBytes.toString('UTF-8').trim()
+    ]
 }
 def latestAndroidReleaseTag = {
     runGit(['git', 'describe', '--tags', '--match', 'v*-android-r*', '--abbrev=0'])
@@ -268,13 +285,13 @@ def applyPatchQueue = { File sourceDir, File patchDir, String label ->
     }
 
     def gitCeilingDir = sourceDir.parentFile.absolutePath
-    def checkPatch = { List<String> gitApplyArgs ->
+    def runPatchCommand = { List<String> gitArgs ->
         def standardOutputBytes = new ByteArrayOutputStream()
         def errorOutputBytes = new ByteArrayOutputStream()
         def result = exec {
             workingDir sourceDir
             environment 'GIT_CEILING_DIRECTORIES', gitCeilingDir
-            commandLine gitApplyArgs
+            commandLine gitArgs
             ignoreExitValue true
             standardOutput = standardOutputBytes
             errorOutput = errorOutputBytes
@@ -286,12 +303,75 @@ def applyPatchQueue = { File sourceDir, File patchDir, String label ->
                 stderr: errorOutputBytes.toString('UTF-8').trim()
         ]
     }
+    def checkPatch = { List<String> gitApplyArgs ->
+        runPatchCommand(gitApplyArgs)
+    }
+    def isFormatPatch = { File patch ->
+        def header = patch.withReader('UTF-8') { reader ->
+            def lines = []
+            for (int i = 0; i < 40; i++) {
+                def line = reader.readLine()
+                if (line == null) break
+                lines << line
+            }
+            lines.join('\n')
+        }
+        return header.readLines().any { it.startsWith('Subject: ') }
+    }
+    def ensurePatchGitRepo = {
+        if (new File(sourceDir, '.git').exists()) {
+            return
+        }
+
+        def init = runPatchCommand(['git', 'init'])
+        if (init.exitValue != 0) {
+            throw new GradleException(
+                    "Could not initialize temporary git repo for ${label} patches." +
+                            ([init.stderr, init.stdout].findAll { it }.join(System.lineSeparator())
+                                    ? "${System.lineSeparator()}${[init.stderr, init.stdout].findAll { it }.join(System.lineSeparator())}"
+                                    : ""))
+        }
+        runPatchCommand(['git', 'config', 'user.name', 'Ishiiruka Android Patch Queue'])
+        runPatchCommand(['git', 'config', 'user.email', 'android-patches@localhost'])
+        def add = runPatchCommand(['git', 'add', '-A'])
+        if (add.exitValue != 0) {
+            throw new GradleException("Could not stage ${label} base tree for three-way patching.")
+        }
+        def commit = runPatchCommand(['git', 'commit', '--allow-empty', '-m', "${label} base"])
+        if (commit.exitValue != 0) {
+            def diagnostics = ([commit.stderr, commit.stdout].findAll { it }
+                    .join(System.lineSeparator()))
+            throw new GradleException(
+                    "Could not create ${label} base commit for three-way patching." +
+                            (diagnostics ? "${System.lineSeparator()}${diagnostics}" : ""))
+        }
+    }
 
     patches.each { patch ->
         def reverseCheck = checkPatch(['git', 'apply', '--reverse', '--check', patch.absolutePath])
         if (reverseCheck.exitValue == 0) {
             logger.lifecycle("${label} patch ${patch.name} is already applied")
             return
+        }
+
+        if (isFormatPatch(patch)) {
+            ensurePatchGitRepo()
+            def amResult = runPatchCommand(['git', 'am', '--3way', '--keep-cr', patch.absolutePath])
+            if (amResult.exitValue == 0) {
+                logger.lifecycle("Applied ${label} format patch ${patch.name}")
+                return
+            }
+
+            def statusResult = runPatchCommand(['git', 'status', '--short'])
+            def diagnostics = ([amResult.stderr, amResult.stdout, statusResult.stdout, statusResult.stderr]
+                    .findAll { it }
+                    .join(System.lineSeparator()))
+            throw new GradleException(
+                    "Could not apply ${label} format patch ${patch.name} with git am --3way. " +
+                    "Upstream probably changed one of the patched files; rebuild the patch " +
+                    "branch with scripts/mainline-patch.sh apply, resolve the conflict, then " +
+                    "run scripts/mainline-patch.sh export." +
+                    (diagnostics ? "${System.lineSeparator()}${diagnostics}" : ""))
         }
 
         def applyCheck = checkPatch(['git', 'apply', '--check', patch.absolutePath])
@@ -412,6 +492,28 @@ tasks.register('verifyMainlineSlippiSource') {
                     'from the repository root. Missing: ' +
                     missing.collect { it.path }.join(', '))
         }
+
+        if (!allowDirtyMainlineSource && new File(mainlineSlippiRoot, '.git').exists()) {
+            def status = runGitInDir(
+                    mainlineSlippiRoot,
+                    ['status', '--porcelain', '--untracked-files=all'])
+            if (status.exitValue == 0 && status.stdout) {
+                throw new GradleException(
+                        'Embedded mainline Slippi Dolphin has local changes. Build from a clean ' +
+                        'upstream checkout so Source/Android/mainline-patches is the only source ' +
+                        'of Android-specific mainline edits. Run `scripts/mainline-patch.sh export` ' +
+                        'if these edits are intentional, or pass -PallowDirtyMainlineSource=true ' +
+                        'for a deliberate local experiment. Current changes:' +
+                        "${System.lineSeparator()}${status.stdout}")
+            }
+            if (status.exitValue != 0) {
+                throw new GradleException(
+                        'Could not inspect embedded mainline Slippi Dolphin git status.' +
+                        ([status.stderr, status.stdout].findAll { it }.join(System.lineSeparator())
+                                ? "${System.lineSeparator()}${[status.stderr, status.stdout].findAll { it }.join(System.lineSeparator())}"
+                                : ""))
+            }
+        }
     }
 }
 
@@ -450,7 +552,9 @@ tasks.register('applyMainlineSlippiPatches') {
         if (patches.empty) {
             logger.lifecycle("No mainline Slippi patches to apply")
         } else {
-            applyPatchQueue(mainlineWorkDir.get().asFile, mainlinePatchDir, 'Mainline Slippi')
+            def sourceDir = mainlineWorkDir.get().asFile
+            delete new File(sourceDir, '.git')
+            applyPatchQueue(sourceDir, mainlinePatchDir, 'Mainline Slippi')
         }
 
         applyPatchQueue(

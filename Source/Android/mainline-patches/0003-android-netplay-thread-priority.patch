@@ -1,7 +1,17 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: laurenceputterman <mlputterman@gmail.com>
+Date: Sun, 17 May 2026 11:33:10 -0700
+Subject: [PATCH 3/5] android netplay thread priority
+
+---
+ Source/Core/Core/Slippi/SlippiNetplay.cpp | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
 diff --git a/Source/Core/Core/Slippi/SlippiNetplay.cpp b/Source/Core/Core/Slippi/SlippiNetplay.cpp
+index 2bd00d4a84348e0864c2fc07e2129a084a92118c..d1c20d3821b19ae354ac2d67ff1b81709acc8ab8 100644
 --- a/Source/Core/Core/Slippi/SlippiNetplay.cpp
 +++ b/Source/Core/Core/Slippi/SlippiNetplay.cpp
-@@ -7,6 +7,9 @@
+@@ -7,12 +7,16 @@
  #include <fstream>
  #include <memory>
  #include <thread>
@@ -11,7 +21,6 @@ diff --git a/Source/Core/Core/Slippi/SlippiNetplay.cpp b/Source/Core/Core/Slippi
  
  #include "Common/CommonTypes.h"
  #include "Common/Config/Config.h"
-@@ -14,6 +17,7 @@
  #include "Common/ENet.h"
  #include "Common/Logging/Log.h"
  #include "Common/MsgHandler.h"

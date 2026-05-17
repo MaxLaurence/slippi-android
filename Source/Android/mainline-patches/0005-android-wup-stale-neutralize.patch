@@ -1,5 +1,14 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: laurenceputterman <mlputterman@gmail.com>
+Date: Sun, 17 May 2026 11:33:10 -0700
+Subject: [PATCH 5/5] android wup stale neutralize
+
+---
+ Source/Core/InputCommon/GCAdapter.cpp | 69 ++++++++++++++++++++++++++-
+ 1 file changed, 67 insertions(+), 2 deletions(-)
+
 diff --git a/Source/Core/InputCommon/GCAdapter.cpp b/Source/Core/InputCommon/GCAdapter.cpp
-index c30c542..e48f3a7 100644
+index c30c542e96cdead0dc3daa20ac578bccdb04e5d0..e48f3a78144ffc41d948054188a5dc50af856ff8 100644
 --- a/Source/Core/InputCommon/GCAdapter.cpp
 +++ b/Source/Core/InputCommon/GCAdapter.cpp
 @@ -13,6 +13,7 @@

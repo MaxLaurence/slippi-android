@@ -86,10 +86,13 @@ show the Mainline option as missing.
 
 Before mainline CMake configure runs, Gradle copies the upstream checkout into
 `app/build/mainlineSlippi/source` and applies
-`Source/Android/mainline-patches/*.patch` in lexical order. Keep Android
-embedding changes there instead of leaving hidden edits in
-`Externals/MainlineSlippiDolphin`; the patch task reports upstream conflicts
-early and skips patches that are already present in a local development copy.
+`Source/Android/mainline-patches/*.patch` in lexical order. Format-patch files
+are applied with `git am --3way` inside the generated build copy, while older
+raw diffs still use `git apply` for compatibility. Keep Android embedding
+changes in the patch queue instead of leaving hidden edits in
+`Externals/MainlineSlippiDolphin`; the build fails on a dirty mainline checkout
+unless `-PallowDirtyMainlineSource=true` is passed for a deliberate local
+experiment.
 
 Ranked matchmaking is intentionally disabled for Android in both native cores.
 Ishiiruka carries the guard in this checkout's `EXI_DeviceSlippi` and
@@ -482,6 +485,43 @@ On first mainline launch, `UserDirectoryBootstrap.ensureMainlineLayout()` copies
 Slippi login blob from `<files>/dolphin/Slippi/user.json` to
 `<files>/mainline_dolphin/Slippi/user.json`.
 
+## Mainline patch workflow
+
+Use `scripts/mainline-patch.sh` as the main entrypoint for Android changes that
+must be carried on top of embedded Project Slippi mainline Dolphin:
+
+```sh
+scripts/mainline-patch.sh status
+scripts/mainline-patch.sh apply
+scripts/mainline-patch.sh new android-input-fix
+scripts/mainline-patch.sh export
+scripts/mainline-patch.sh verify --patch-only
+```
+
+The parent repo pins `Externals/MainlineSlippiDolphin` to the upstream base
+commit. The local `android-patches` branch inside that submodule is an authoring
+branch: one commit per Android patch. `apply` rebuilds that branch from
+`Source/Android/mainline-patches`, `new <slug>` adds an empty commit slot to
+amend while editing, and `export` regenerates the queue with
+`git format-patch`. After exporting, return the submodule checkout to the pinned
+upstream base before building or committing parent-repo changes.
+
+For an existing Ishiiruka core fix, the normal flow is:
+
+```sh
+scripts/mainline-patch.sh apply
+scripts/mainline-patch.sh new android-same-fix-name
+# edit Externals/MainlineSlippiDolphin and amend the empty patch commit
+git -C Externals/MainlineSlippiDolphin commit --amend -a
+scripts/mainline-patch.sh export
+git -C Externals/MainlineSlippiDolphin checkout "$(git ls-files -s Externals/MainlineSlippiDolphin | awk '$1 == "160000" {print $2}')"
+scripts/mainline-patch.sh verify --patch-only
+```
+
+`scripts/refresh-mainline-patches.sh` remains as a legacy compatibility helper
+for exporting a dirty checkout diff into one patch file, but new patch work
+should use the commit-backed `mainline-patch.sh` flow.
+
 ## Updating the embedded mainline core
 
 Run the update helper from the repo root:
@@ -505,14 +545,18 @@ scripts/update-mainline-slippi.sh --no-build
 ```
 
 The helper refuses to update a dirty mainline submodule. If you intentionally
-changed upstream files for Android embedding, refresh the patch queue first:
+changed upstream files for Android embedding, export the patch queue first:
 
 ```sh
-scripts/refresh-mainline-patches.sh
+scripts/mainline-patch.sh export
 ```
 
-Then clean the submodule once you have confirmed the regenerated patch captures
-the intended delta, and rerun the update helper.
+Then return the submodule to the pinned upstream base once you have confirmed
+the regenerated patches capture the intended delta, and rerun the update helper.
+When upstream changes arrive, update the submodule base, rebuild
+`android-patches` with `scripts/mainline-patch.sh apply`, resolve any rebase or
+apply conflicts in normal Git, export the refreshed queue, and run
+`scripts/mainline-patch.sh verify`.
 
 ## Raw stick input providers
 

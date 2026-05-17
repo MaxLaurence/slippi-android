@@ -1,5 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: laurenceputterman <mlputterman@gmail.com>
+Date: Sun, 17 May 2026 11:33:10 -0700
+Subject: [PATCH 1/5] android embedded input bridge
+
+---
+ Source/Android/jni/MainAndroid.cpp            | 461 ++++++++++++++++++
+ Source/Core/AudioCommon/AAudioStream.cpp      | 138 ++++++
+ Source/Core/AudioCommon/AAudioStream.h        |  23 +
+ Source/Core/AudioCommon/AudioCommon.cpp       |  38 +-
+ Source/Core/AudioCommon/CMakeLists.txt        |  33 ++
+ Source/Core/AudioCommon/OboeStream.cpp        | 146 ++++++
+ Source/Core/AudioCommon/OboeStream.h          |  44 ++
+ Source/Core/AudioCommon/OpenSLESStream.cpp    |  71 ++-
+ Source/Core/Common/FileUtil.cpp               |   5 +-
+ Source/Core/Core/Config/MainSettings.cpp      |   3 +
+ Source/Core/Core/Config/MainSettings.h        |   3 +
+ Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp  |  54 +-
+ .../Core/Core/HW/SI/SI_DeviceGCController.cpp | 112 ++++-
+ .../Core/Core/HW/SI/SI_DeviceGCController.h   |  10 +
+ Source/Core/Core/Slippi/SlippiPlayback.cpp    |  16 +-
+ Source/Core/Core/Slippi/SlippiReplayComm.cpp  |  45 +-
+ .../Core/VideoBackends/Vulkan/VKSwapChain.cpp |  50 +-
+ 17 files changed, 1215 insertions(+), 37 deletions(-)
+ create mode 100644 Source/Core/AudioCommon/AAudioStream.cpp
+ create mode 100644 Source/Core/AudioCommon/AAudioStream.h
+ create mode 100644 Source/Core/AudioCommon/OboeStream.cpp
+ create mode 100644 Source/Core/AudioCommon/OboeStream.h
+
 diff --git a/Source/Android/jni/MainAndroid.cpp b/Source/Android/jni/MainAndroid.cpp
-index 973b49233021e48b559230ee8981576b6181b1b0..5c1e717cfb3fa243160ceb08d43ac6feedc01dba 100644
+index 973b49233021e48b559230ee8981576b6181b1b0..005f1b50cd3fc53af8936d08fb14ddd9d5d0f3e9 100644
 --- a/Source/Android/jni/MainAndroid.cpp
 +++ b/Source/Android/jni/MainAndroid.cpp
 @@ -2,21 +2,36 @@
@@ -506,7 +535,7 @@ index 973b49233021e48b559230ee8981576b6181b1b0..5c1e717cfb3fa243160ceb08d43ac6fe
  JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_Initialize(JNIEnv*, jclass)
  {
    HostThreadLock guard;
-@@ -619,6 +1062,9 @@ static float GetRenderSurfaceScale(JNIEnv* env)
+@@ -619,6 +1069,9 @@ static float GetRenderSurfaceScale(JNIEnv* env)
  
  static void Run(JNIEnv* env, std::unique_ptr<BootParameters>&& boot, bool riivolution)
  {
@@ -516,7 +545,7 @@ index 973b49233021e48b559230ee8981576b6181b1b0..5c1e717cfb3fa243160ceb08d43ac6fe
    HostThreadLock host_identity_guard;
  
    if (riivolution && std::holds_alternative<BootParameters::Disc>(boot->parameters))
-@@ -631,6 +1077,13 @@ static void Run(JNIEnv* env, std::unique_ptr<BootParameters>&& boot, bool riivol
+@@ -631,6 +1084,13 @@ static void Run(JNIEnv* env, std::unique_ptr<BootParameters>&& boot, bool riivol
                                            volume.GetDiscNumber()));
    }
  
@@ -530,7 +559,7 @@ index 973b49233021e48b559230ee8981576b6181b1b0..5c1e717cfb3fa243160ceb08d43ac6fe
    s_need_nonblocking_alert_msg = true;
    std::unique_lock<std::mutex> surface_guard(s_surface_lock);
  
-@@ -660,6 +1113,7 @@ static void Run(JNIEnv* env, std::unique_ptr<BootParameters>&& boot, bool riivol
+@@ -660,6 +1120,7 @@ static void Run(JNIEnv* env, std::unique_ptr<BootParameters>&& boot, bool riivol
  
    s_game_metadata_is_valid = false;
    Core::Shutdown(Core::System::GetInstance());
@@ -1353,7 +1382,7 @@ index a2d0a26a13102d014c9969dc8b8035bedd282c3b..6372b79245876f5532358d383b36fe2e
      case CMD_ONLINE_INPUTS:
        handleOnlineInputs(&mem_ptr[buf_loc + 1]);
 diff --git a/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp b/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp
-index beb633f499294f27b910d1b493027e43e9f4832d..c3a29b20ad6114ab53d1862ba387eaf77fe41219 100644
+index beb633f499294f27b910d1b493027e43e9f4832d..512f944699b7583788b28d9e51ef6b8a08012386 100644
 --- a/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp
 +++ b/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp
 @@ -3,6 +3,9 @@
@@ -1471,7 +1500,7 @@ index beb633f499294f27b910d1b493027e43e9f4832d..c3a29b20ad6114ab53d1862ba387eaf7
  // --- standard GameCube controller ---
  CSIDevice_GCController::CSIDevice_GCController(Core::System& system, SIDevices device,
                                                 int device_number)
-@@ -147,11 +247,14 @@ GCPadStatus CSIDevice_GCController::GetPadStatus()
+@@ -147,11 +248,14 @@ GCPadStatus CSIDevice_GCController::GetPadStatus()
  {
    GCPadStatus pad_status = {};
  
@@ -1491,7 +1520,7 @@ index beb633f499294f27b910d1b493027e43e9f4832d..c3a29b20ad6114ab53d1862ba387eaf7
  
    HandleMoviePadStatus(m_system.GetMovie(), m_device_number, &pad_status);
 diff --git a/Source/Core/Core/HW/SI/SI_DeviceGCController.h b/Source/Core/Core/HW/SI/SI_DeviceGCController.h
-index 19b5bdb14b21ae7042f6d9cfb6e843467810c9fe..d0bf1542ea1e3343286c177dc73ac12eaa055a6c 100644
+index 19b5bdb14b21ae7042f6d9cfb6e843467810c9fe..18a5a6dd7a039485fe9245c6bd968e8960f6694a 100644
 --- a/Source/Core/Core/HW/SI/SI_DeviceGCController.h
 +++ b/Source/Core/Core/HW/SI/SI_DeviceGCController.h
 @@ -16,6 +16,16 @@ class MovieManager;
@@ -1657,10 +1686,11 @@ index 8c625a6587ba327b2cd4a78cbf0ac72760ee39a5..daa259cfef32ac4650c6d4666f2037db
    if (m_comm_file_settings.mode == "queue")
    {
 diff --git a/Source/Core/VideoBackends/Vulkan/VKSwapChain.cpp b/Source/Core/VideoBackends/Vulkan/VKSwapChain.cpp
-index 589d9a447ba176b6c6ca5f18ccf3ec7ba9d3af11..11963237121ed2e0f92cc797c5ad6cc0f9fe804f 100644
+index 589d9a447ba176b6c6ca5f18ccf3ec7ba9d3af11..13f3cd42ee8efe2a3b166c40c9997397ad625ed7 100644
 --- a/Source/Core/VideoBackends/Vulkan/VKSwapChain.cpp
 +++ b/Source/Core/VideoBackends/Vulkan/VKSwapChain.cpp
-@@ -9,6 +9,9 @@
+@@ -8,7 +8,10 @@
+ 
  #include "Common/Assert.h"
  #include "Common/CommonFuncs.h"
 +#include "Common/CommonPaths.h"
@@ -1670,10 +1700,7 @@ index 589d9a447ba176b6c6ca5f18ccf3ec7ba9d3af11..11963237121ed2e0f92cc797c5ad6cc0
  #include "Common/Logging/Log.h"
  #include "Common/MsgHandler.h"
  
-@@ -21,9 +24,25 @@
- #if defined(VK_USE_PLATFORM_XLIB_KHR)
- #include <X11/Xlib.h>
- #endif
+@@ -24,6 +27,22 @@
  
  namespace Vulkan
  {
@@ -1696,10 +1723,7 @@ index 589d9a447ba176b6c6ca5f18ccf3ec7ba9d3af11..11963237121ed2e0f92cc797c5ad6cc0
  SwapChain::SwapChain(const WindowSystemInfo& wsi, VkSurfaceKHR surface, bool vsync)
      : m_wsi(wsi), m_surface(surface), m_vsync_enabled(vsync),
        m_fullscreen_supported(g_vulkan_context->SupportsExclusiveFullscreen(wsi, surface))
-@@ -250,12 +270,21 @@ bool SwapChain::SelectPresentMode()
-   if (m_vsync_enabled && Common::Contains(present_modes, VK_PRESENT_MODE_FIFO_KHR))
-   {
-     m_present_mode = VK_PRESENT_MODE_FIFO_KHR;
+@@ -253,8 +272,17 @@ bool SwapChain::SelectPresentMode()
      return true;
    }
  
@@ -1718,8 +1742,7 @@ index 589d9a447ba176b6c6ca5f18ccf3ec7ba9d3af11..11963237121ed2e0f92cc797c5ad6cc0
    {
      m_present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
      return true;
-   }
-@@ -288,13 +299,29 @@ bool SwapChain::CreateSwapChain()
+@@ -288,13 +316,29 @@ bool SwapChain::CreateSwapChain()
    if (!SelectSurfaceFormat() || !SelectPresentMode())
      return false;
  

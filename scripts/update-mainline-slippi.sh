@@ -74,8 +74,10 @@ if ! git -C "$submodule" diff --quiet || ! git -C "$submodule" diff --cached --q
   cat >&2 <<'MSG'
 Cannot update Externals/MainlineSlippiDolphin because it has local edits.
 
-Move any intended vendor changes into Source/Android/mainline-patches first,
-or clean the submodule manually after you have saved the changes you need.
+Move intended vendor changes into Source/Android/mainline-patches first:
+  scripts/mainline-patch.sh export
+
+Or clean the submodule manually after you have saved the changes you need.
 Current submodule status:
 MSG
   git -C "$submodule" status --short >&2
@@ -105,15 +107,21 @@ fi
 rm -rf "$android_dir/app/build/mainlineSlippi"
 
 if [[ "$no_build" -eq 0 ]]; then
-  if [[ -z "${JAVA_HOME:-}" ]]; then
-    if command -v /usr/libexec/java_home >/dev/null 2>&1 &&
-        /usr/libexec/java_home -v 17 >/dev/null 2>&1; then
-      JAVA_HOME="$(/usr/libexec/java_home -v 17)"
-      export JAVA_HOME
-    elif [[ -d /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ]]; then
-      export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
-    elif [[ -d /usr/local/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ]]; then
-      export JAVA_HOME=/usr/local/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+  java17_selected=0
+  for candidate in \
+    /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home \
+    /usr/local/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home; do
+    if [[ -x "$candidate/bin/java" ]]; then
+      export JAVA_HOME="$candidate"
+      java17_selected=1
+      break
+    fi
+  done
+  if [[ "$java17_selected" -eq 0 ]] && command -v /usr/libexec/java_home >/dev/null 2>&1; then
+    candidate="$(/usr/libexec/java_home -v 17 2>/dev/null || true)"
+    if [[ -n "$candidate" && -x "$candidate/bin/java" ]] &&
+        "$candidate/bin/java" -version 2>&1 | grep -q 'version "17\.'; then
+      export JAVA_HOME="$candidate"
     fi
   fi
 
