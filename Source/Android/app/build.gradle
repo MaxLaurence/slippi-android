@@ -457,7 +457,6 @@ def mainlineSubmodulePaths = [
         'Externals/minizip-ng/minizip-ng',
         'Externals/hidapi/hidapi-src',
         'Externals/zstd/zstd',
-        'Externals/rcheevos/rcheevos',
         'Externals/implot/implot',
         'Externals/libadrenotools',
         'Externals/SDL/SDL',
@@ -618,7 +617,9 @@ tasks.register('configureMainlineSlippiCore', Exec) {
                 '-DANDROID_STL=c++_static',
                 '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON',
                 '-DCMAKE_CXX_FLAGS=-DDOLPHIN_DATA_DIR=\\"SlippiOnline\\"',
-                '-DCMAKE_BUILD_TYPE=RelWithDebInfo',
+                '-DCMAKE_BUILD_TYPE=Release',
+                '-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG',
+                '-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG',
                 '-DENABLE_GENERIC=OFF',
                 '-DENABLE_HEADLESS=OFF',
                 '-DENABLE_NOGUI=OFF',
@@ -627,7 +628,7 @@ tasks.register('configureMainlineSlippiCore', Exec) {
                 '-DENABLE_TESTS=OFF',
                 '-DENABLE_VULKAN=ON',
                 "-DMAINLINE_OBOE_PREFAB_DIR=${oboeModuleDir.absolutePath}",
-                '-DUSE_RETRO_ACHIEVEMENTS=ON',
+                '-DUSE_RETRO_ACHIEVEMENTS=OFF',
                 '-DUSE_UPNP=OFF'
         ] + rustToolchainArgsFor(sourceDir)
         commandLine cmakeArgs

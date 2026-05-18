@@ -19,4 +19,7 @@ public final class NativeConfig {
 
     public static native void setInt(
             int layer, String file, String section, String key, int value);
+
+    public static native void setFloat(
+            int layer, String file, String section, String key, float value);
 }

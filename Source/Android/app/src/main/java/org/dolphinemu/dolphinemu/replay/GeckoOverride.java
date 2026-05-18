@@ -165,8 +165,9 @@ public final class GeckoOverride {
 
     public static void applyTrainingMode(Context ctx, File userDir, boolean slippiParityDelay) {
         applyTrainingMode(userDir, slippiParityDelay);
-        GameSettingsOverride.applyUserChoices(ctx, userDir, GameSettingsOverride.MELEE_INI_NAMES);
-        GameSettingsOverride.forceCodeState(userDir, GameSettingsOverride.MELEE_INI_NAMES,
+        GameSettingsOverride.applyUserChoices(ctx, userDir,
+                GameSettingsOverride.MELEE_TRAINING_INI_NAMES);
+        GameSettingsOverride.forceCodeState(userDir, GameSettingsOverride.MELEE_TRAINING_INI_NAMES,
                 APPLY_DELAY_CODE, slippiParityDelay);
     }
 
@@ -180,7 +181,7 @@ public final class GeckoOverride {
             Log.w(TAG, "could not create " + dir);
             return;
         }
-        for (String name : INI_NAMES) {
+        for (String name : GameSettingsOverride.MELEE_TRAINING_INI_NAMES) {
             File dst = new File(dir, name);
             try (FileWriter w = new FileWriter(dst)) {
                 writeTrainingIni(w, slippiParityDelay);

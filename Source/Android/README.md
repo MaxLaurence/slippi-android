@@ -332,13 +332,21 @@ The latency story across the build, top-down:
   the panel can do 120Hz). Restored in `onDestroy`. Requires
   `WRITE_SETTINGS` granted manually on sideloaded builds — silently
   noop if not granted.
+- **Surface frame-rate vote** (`EmulationActivity` /
+  `MainlineEmulationActivity`): the Surface declares Melee's content
+  cadence (`60000/1001`, about 59.94Hz), while the window still requests
+  the best high-refresh display mode. Mode selection prefers the highest
+  integer multiple of content cadence, then the smallest cadence error,
+  so a 119.88Hz mode wins over a nominal 120.00Hz mode when both exist.
 - **PerformanceHintManager** (`EmulationActivity.discoverPerfHintThreadTids`):
   creates a multi-thread hint session at 60Hz cadence, targeting the
   TIDs of the named native worker threads (emu, GPU, audio). Auto-
   discovers them by walking `/proc/<pid>/task` and matching against
   a known name list, with a fallback path that just uses the emu TID
   if discovery fails. Updates on resume via
-  `hintSession.setThreads(...)` (UPSIDE_DOWN_CAKE+).
+  `hintSession.setThreads(...)` (UPSIDE_DOWN_CAKE+). Debug builds can
+  A/B this path with
+  `adb shell setprop debug.slippi.disable_perf_hints 1`.
 - **NetPlay client thread** (`NetPlayClient.cpp::ThreadFunc`): named
   `NetPlay Client` for `top`/profiler readability and given
   `setpriority(PRIO_PROCESS, 0, -8)` on Android — nudges the
@@ -350,11 +358,58 @@ The latency story across the build, top-down:
   interface now exposes a `default RawStickState waitForSnapshot(int
   timeoutMs)` and `default boolean supportsBlockingWait()`. Native
   evdev opts in: the JNI side does a `poll(2)` (capped at 100ms)
-  on the evdev fd before reading samples. Old behavior was busy
-  polling at 8ms intervals — the new path wakes immediately when
-  the kernel posts an `EV_ABS` event and sleeps otherwise. See
+  on the evdev fd before reading samples. The default blocking wait
+  is 8ms and debug builds can override it with
+  `adb shell setprop debug.slippi.raw_input_wait_ms 4` for latency
+  experiments. Old behavior was busy polling at 8ms intervals — the
+  new path wakes immediately when the kernel posts an `EV_ABS` event
+  and sleeps otherwise. See
   **Raw stick input providers** below for the rest of the
   contract.
+
+## Latency experiment workflow
+
+Use one device, one replay/offline scene, and one launcher setting change
+per pass. Keep `SlippiOnlineDelay=2`; the point is to measure the local
+display/input path around that fixed netplay delay.
+
+Build and install the debug APK:
+
+```sh
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+./Source/Android/gradlew -p Source/Android :app:assembleDebug
+adb install -r Source/Android/app/build/outputs/apk/debug/app-debug.apk
+adb shell monkey -p org.ishiiruka.slippidolphin.debug 1
+```
+
+Enable logs before each run:
+
+```sh
+adb shell setprop debug.slippi.latency_trace 1
+adb shell setprop debug.slippi.input_diag_logcat 1
+adb logcat -c
+adb logcat | grep -E 'SlippiLatency|SlippiVulkan|inputTrace|frameTrace|SlippiRawInput|PerformanceHint|refresh caps|surface content frame rate|selected display mode'
+```
+
+Recommended A/B order:
+
+1. Mainline core vs Ishiiruka core, same scene.
+2. Display latency `Smooth` vs `Fastest`; compare `SlippiVulkan`
+   present mode and image count.
+3. Raw input wait default vs `debug.slippi.raw_input_wait_ms=4`;
+   compare `padOverrideAgeUs`.
+4. Perf hints on vs `debug.slippi.disable_perf_hints=1`; compare
+   frame delta percentiles and subjective pacing.
+5. Oboe 4 bursts vs Oboe 2 / Oboe 1 after display/input results are
+   understood; watch `SlippiAudio` xrun fallback logs.
+
+Also capture display state for each run:
+
+```sh
+adb shell settings get system peak_refresh_rate
+adb shell settings get system min_refresh_rate
+adb shell dumpsys display | grep -i -E 'mode|refresh|fps'
+```
 
 ## Replay playback
 

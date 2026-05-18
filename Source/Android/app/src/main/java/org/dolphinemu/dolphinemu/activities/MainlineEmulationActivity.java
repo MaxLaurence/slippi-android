@@ -90,6 +90,10 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     private static final String AUDIO_BACKEND_AAUDIO = "AAudio";
     private static final String AUDIO_BACKEND_OPENSLES = "OpenSLES";
     private static final int AUDIO_BURSTS_BALANCED = 4;
+    private static final int MAINLINE_CPU_CORE_JITARM64 = 4;
+    private static final int MAINLINE_TIMING_VARIANCE_MS = 8;
+    private static final int MAINLINE_AUDIO_LATENCY_MS = 2;
+    private static final int MAINLINE_SLIPPI_ONLINE_DELAY_FRAMES = 2;
     private static final String SETTING_PEAK_REFRESH_RATE = "peak_refresh_rate";
     private static final String SETTING_MIN_REFRESH_RATE = "min_refresh_rate";
     private static final String[] PERF_HINT_THREAD_NAMES = {
@@ -112,7 +116,11 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     private static final int SI_WIIU_ADAPTER = 12;
     private static final long RAW_INPUT_FALLBACK_POLL_MS = 4L;
     private static final long RAW_INPUT_LIVE_FALLBACK_POLL_MS = 2L;
-    private static final int RAW_INPUT_WAIT_MS = 16;
+    private static final int RAW_INPUT_WAIT_DEFAULT_MS = 8;
+    private static final String PROP_RAW_INPUT_WAIT_MS = "debug.slippi.raw_input_wait_ms";
+    private static final String PROP_DISABLE_PERF_HINTS = "debug.slippi.disable_perf_hints";
+    private static final float MELEE_CONTENT_REFRESH_HZ = 60000f / 1001f;
+    private static final float DISPLAY_MODE_CADENCE_TOLERANCE_HZ = 0.25f;
     private static final boolean LATENCY_TRACE = BuildConfig.DEBUG;
     private static final long INPUT_LATENCY_LOG_INTERVAL_MS = 1000L;
     private static final long FRAME_LATENCY_LOG_INTERVAL_MS = 2000L;
@@ -150,6 +158,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     private boolean refreshRateSettingsOverridden;
     private String previousPeakRefreshRate;
     private String previousMinRefreshRate;
+    private int rawInputWaitMs = RAW_INPUT_WAIT_DEFAULT_MS;
     private long lastInputLatencyLogMs;
     private long lastFrameLatencyLogMs;
     private long previousFrameTimeNs;
@@ -236,7 +245,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             if (!rawInputPolling || !shouldPollRawStickSource()) return;
 
             RawStickState state = rawStickInput != null && rawStickInput.supportsBlockingWait()
-                    ? rawStickInput.waitForSnapshot(RAW_INPUT_WAIT_MS)
+                    ? rawStickInput.waitForSnapshot(rawInputWaitMs)
                     : (rawStickInput == null ? null : rawStickInput.snapshot());
             if (feedRawStickState(state)) {
                 traceInputEvent("raw:" + rawSourceLabel(), SystemClock.uptimeMillis(), 0);
@@ -270,6 +279,8 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
         setContentView(R.layout.activity_emulation);
+        rawInputWaitMs = getDebugIntProperty(PROP_RAW_INPUT_WAIT_MS,
+                RAW_INPUT_WAIT_DEFAULT_MS, 1, 16);
 
         touchOverlay = findViewById(R.id.touch_overlay);
         if (touchOverlay != null) {
@@ -543,22 +554,24 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
                 AUDIO_BACKEND_OBOE));
         int audioBursts = prefs.getInt(PREF_KEY_AUDIO_BUFFER_BURSTS, AUDIO_BURSTS_BALANCED);
         String displayLatencyMode = DolphinSettings.getDisplayLatencyMode(this).configValue;
+        String driverLibrary = GpuDriverManager.selectedLibraryNameForBackend(this, backend);
+        boolean enableGpuTextureDecoding =
+                shouldEnableMainlineGpuTextureDecoding(backend, driverLibrary);
         String replayDir = ReplayConfig.nativeReplayWriteDir(this).getAbsolutePath();
         int port0 = useGcAdapter ? SI_WIIU_ADAPTER : SI_GC_CONTROLLER;
         int portN = useGcAdapter ? SI_WIIU_ADAPTER : SI_NONE;
 
         NativeConfig.setString(NativeConfig.LAYER_BASE, "Dolphin", "Core", "GFXBackend", backend);
-        NativeConfig.setString(NativeConfig.LAYER_BASE, "GFX", "Settings", "DriverLibName",
-                GpuDriverManager.selectedLibraryNameForBackend(this, backend));
+        NativeConfig.setString(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "DriverLibName", driverLibrary);
         NativeConfig.setString(NativeConfig.LAYER_BASE, "GFX", "Settings",
                 "AndroidPresentMode", displayLatencyMode);
-        applyMainlineGraphicsStabilityConfig();
-        NativeConfig.setString(NativeConfig.LAYER_BASE, "Dolphin", "DSP", "Backend", audioBackend);
-        NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "DSP",
-                "AndroidAudioBufferBursts", audioBursts);
+        applyMainlineGraphicsStabilityConfig(enableGpuTextureDecoding);
+        applyMainlineLowLatencyCoreConfig(audioBackend, audioBursts);
         Log.i(TAG, "mainline runtime config gfx=" + backend
                 + " audio=" + audioBackend + "/" + audioBursts
-                + " displayLatency=" + displayLatencyMode);
+                + " displayLatency=" + displayLatencyMode
+                + " gpuTextureDecoding=" + enableGpuTextureDecoding);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core", "SIDevice0", port0);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core", "SIDevice1", portN);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core", "SIDevice2", portN);
@@ -592,6 +605,9 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
                 AUDIO_BACKEND_OBOE));
         int audioBursts = prefs.getInt(PREF_KEY_AUDIO_BUFFER_BURSTS, AUDIO_BURSTS_BALANCED);
         String displayLatencyMode = DolphinSettings.getDisplayLatencyMode(this).configValue;
+        String driverLibrary = GpuDriverManager.selectedLibraryNameForBackend(this, backend);
+        boolean enableGpuTextureDecoding =
+                shouldEnableMainlineGpuTextureDecoding(backend, driverLibrary);
         String replayDir = ReplayConfig.nativeReplayWriteDir(this).getAbsolutePath();
         int port0 = useGcAdapter ? SI_WIIU_ADAPTER : SI_GC_CONTROLLER;
         int portN = useGcAdapter ? SI_WIIU_ADAPTER : SI_NONE;
@@ -600,6 +616,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
 
         File configDir = new File(MainlineCore.userDir(this), "Config");
         File dolphinIni = new File(configDir, "Dolphin.ini");
+        writeMainlineLowLatencyCoreConfig(dolphinIni, audioBackend, audioBursts);
         writeIniValue(dolphinIni, "Core", "GFXBackend", backend);
         writeIniValue(dolphinIni, "Core", "MeleeForceWidescreen",
                 meleeWidescreen ? "True" : "False");
@@ -607,9 +624,6 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         writeIniValue(dolphinIni, "Core", "SIDevice1", Integer.toString(portN));
         writeIniValue(dolphinIni, "Core", "SIDevice2", Integer.toString(portN));
         writeIniValue(dolphinIni, "Core", "SIDevice3", Integer.toString(portN));
-        writeIniValue(dolphinIni, "DSP", "Backend", audioBackend);
-        writeIniValue(dolphinIni, "DSP", "AndroidAudioBufferBursts",
-                Integer.toString(audioBursts));
         writeIniValue(dolphinIni, "Slippi", "EnableJukebox", "False");
         writeIniValue(dolphinIni, "Slippi", "ReplayDir", replayDir);
         writeIniValue(dolphinIni, "Slippi", "SaveReplays", "True");
@@ -619,8 +633,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         writeIniValue(dolphinIni, "Core", "SlippiReplayMonthFolders", "False");
 
         File gfxIni = new File(configDir, "GFX.ini");
-        writeIniValue(gfxIni, "Settings", "DriverLibName",
-                GpuDriverManager.selectedLibraryNameForBackend(this, backend));
+        writeIniValue(gfxIni, "Settings", "DriverLibName", driverLibrary);
         writeIniValue(gfxIni, "Settings", "AndroidPresentMode", displayLatencyMode);
         writeIniValue(gfxIni, "Settings", "BackendMultithreading", "False");
         writeIniValue(gfxIni, "Settings", "ShaderCompilationMode", "0");
@@ -633,9 +646,123 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
                 Integer.toString(DolphinSettings.legacyInternalResolutionForEfbScale(efbScale)));
         writeIniValue(gfxIni, "Settings", "wideScreenHack",
                 DolphinSettings.isWidescreenHackEnabled(this) ? "True" : "False");
+        writeMainlineLowLatencyGraphicsConfig(gfxIni, enableGpuTextureDecoding);
+    }
+
+    private void applyMainlineLowLatencyCoreConfig(String audioBackend, int audioBursts) {
+        NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "CPUCore", MAINLINE_CPU_CORE_JITARM64);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "Fastmem", true);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "FastmemArena", true);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "LargeEntryPointsMap", true);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "AccurateCPUCache", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "DSPHLE", true);
+        NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "TimingVariance", MAINLINE_TIMING_VARIANCE_MS);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "CPUThread", true);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "SyncOnSkipIdle", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "SyncGPU", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "FPRF", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "AccurateNaNs", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "MMU", false);
+        NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "AudioLatency", MAINLINE_AUDIO_LATENCY_MS);
+        NativeConfig.setFloat(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "EmulationSpeed", 1.0f);
+        NativeConfig.setFloat(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "Overclock", 1.0f);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "OverclockEnable", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "AutoDiscChange", true);
+        NativeConfig.setString(NativeConfig.LAYER_BASE, "Dolphin", "DSP", "Backend",
+                audioBackend);
+        NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "DSP",
+                "AndroidAudioBufferBursts", audioBursts);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "DSP",
+                "EnableJIT", true);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "DSP",
+                "DumpAudio", false);
+        NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "DSP", "Volume", 100);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "DSP",
+                "DSPThread", true);
+        NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Slippi",
+                "OnlineDelay", MAINLINE_SLIPPI_ONLINE_DELAY_FRAMES);
+    }
+
+    private void writeMainlineLowLatencyCoreConfig(File dolphinIni, String audioBackend,
+            int audioBursts) {
+        writeIniValue(dolphinIni, "Core", "CPUCore",
+                Integer.toString(MAINLINE_CPU_CORE_JITARM64));
+        writeIniValue(dolphinIni, "Core", "Fastmem", "True");
+        writeIniValue(dolphinIni, "Core", "FastmemArena", "True");
+        writeIniValue(dolphinIni, "Core", "LargeEntryPointsMap", "True");
+        writeIniValue(dolphinIni, "Core", "AccurateCPUCache", "False");
+        writeIniValue(dolphinIni, "Core", "DSPHLE", "True");
+        writeIniValue(dolphinIni, "Core", "TimingVariance",
+                Integer.toString(MAINLINE_TIMING_VARIANCE_MS));
+        writeIniValue(dolphinIni, "Core", "CPUThread", "True");
+        writeIniValue(dolphinIni, "Core", "SyncOnSkipIdle", "False");
+        writeIniValue(dolphinIni, "Core", "SyncGPU", "False");
+        writeIniValue(dolphinIni, "Core", "FPRF", "False");
+        writeIniValue(dolphinIni, "Core", "AccurateNaNs", "False");
+        writeIniValue(dolphinIni, "Core", "MMU", "False");
+        writeIniValue(dolphinIni, "Core", "AudioLatency",
+                Integer.toString(MAINLINE_AUDIO_LATENCY_MS));
+        writeIniValue(dolphinIni, "Core", "EmulationSpeed", "1.00000000");
+        writeIniValue(dolphinIni, "Core", "Overclock", "1.0");
+        writeIniValue(dolphinIni, "Core", "OverclockEnable", "False");
+        writeIniValue(dolphinIni, "Core", "AutoDiscChange", "True");
+        writeIniValue(dolphinIni, "DSP", "Backend", audioBackend);
+        writeIniValue(dolphinIni, "DSP", "AndroidAudioBufferBursts",
+                Integer.toString(audioBursts));
+        writeIniValue(dolphinIni, "DSP", "EnableJIT", "True");
+        writeIniValue(dolphinIni, "DSP", "DumpAudio", "False");
+        writeIniValue(dolphinIni, "DSP", "Volume", "100");
+        writeIniValue(dolphinIni, "DSP", "DSPThread", "True");
+        writeIniValue(dolphinIni, "Slippi", "OnlineDelay",
+                Integer.toString(MAINLINE_SLIPPI_ONLINE_DELAY_FRAMES));
+    }
+
+    private void writeMainlineLowLatencyGraphicsConfig(File gfxIni,
+            boolean enableGpuTextureDecoding) {
+        writeIniValue(gfxIni, "Hardware", "VSync", "False");
+        writeIniValue(gfxIni, "Settings", "SafeTextureCacheColorSamples", "128");
+        writeIniValue(gfxIni, "Settings", "ShowFPS", "False");
+        writeIniValue(gfxIni, "Settings", "ShowNetPlayPing", "False");
+        writeIniValue(gfxIni, "Settings", "LogRenderTimeToFile", "False");
+        writeIniValue(gfxIni, "Settings", "OverlayStats", "False");
+        writeIniValue(gfxIni, "Settings", "OverlayProjStats", "False");
+        writeIniValue(gfxIni, "Settings", "DumpTextures", "False");
+        writeIniValue(gfxIni, "Settings", "HiresTextures", "False");
+        writeIniValue(gfxIni, "Settings", "CacheHiresTextures", "False");
+        writeIniValue(gfxIni, "Settings", "DumpEFBTarget", "False");
+        writeIniValue(gfxIni, "Settings", "EnablePixelLighting", "False");
+        writeIniValue(gfxIni, "Settings", "FastDepthCalc", "True");
+        writeIniValue(gfxIni, "Settings", "EnableGPUTextureDecoding",
+                enableGpuTextureDecoding ? "True" : "False");
+        writeIniValue(gfxIni, "Hacks", "EFBAccessEnable", "False");
+        writeIniValue(gfxIni, "Hacks", "BBoxEnable", "False");
+        writeIniValue(gfxIni, "Hacks", "ForceProgressive", "True");
+        writeIniValue(gfxIni, "Hacks", "EFBToTextureEnable", "True");
+        writeIniValue(gfxIni, "Hacks", "EFBScaledCopy", "False");
+        writeIniValue(gfxIni, "Hacks", "EFBEmulateFormatChanges", "False");
         writeIniValue(gfxIni, "Hacks", "ImmediateXFBEnable", "True");
         writeIniValue(gfxIni, "Hacks", "XFBToTextureEnable", "True");
         writeIniValue(gfxIni, "Hacks", "SkipDuplicateXFBs", "True");
+        writeIniValue(gfxIni, "Hacks", "FullAsyncShaderCompilation", "False");
+        writeIniValue(gfxIni, "Hacks", "WaitForShaderCompilation", "True");
     }
 
     private void writeIniValue(File file, String section, String key, String value) {
@@ -708,7 +835,15 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         lines.add(nextSection, key + " = " + value);
     }
 
-    private void applyMainlineGraphicsStabilityConfig() {
+    private boolean shouldEnableMainlineGpuTextureDecoding(String backend, String driverLibrary) {
+        // GPU texture decoding uses Vulkan compute descriptors. Some system Adreno drivers crash
+        // there; custom Vulkan drivers can opt into the faster path when selected.
+        return BACKEND_VULKAN.equalsIgnoreCase(backend)
+                && driverLibrary != null && !driverLibrary.isEmpty();
+    }
+
+    private void applyMainlineGraphicsStabilityConfig(boolean enableGpuTextureDecoding) {
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Hardware", "VSync", false);
         NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
                 "BackendMultithreading", false);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "GFX", "Settings",
@@ -717,6 +852,32 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
                 "WaitForShadersBeforeStarting", true);
         NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
                 "PreferVSForLinePointExpansion", true);
+        NativeConfig.setInt(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "SafeTextureCacheColorSamples", 128);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "ShowFPS", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "ShowNetPlayPing", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "LogRenderTimeToFile", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "OverlayStats", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "OverlayProjStats", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "DumpTextures", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "HiresTextures", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "CacheHiresTextures", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "DumpEFBTarget", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "EnablePixelLighting", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "FastDepthCalc", true);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
+                "EnableGPUTextureDecoding", enableGpuTextureDecoding);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "GFX", "Settings",
                 "AspectRatio", DolphinSettings.mainlineAspectRatioForLaunch(this));
         int efbScale = DolphinSettings.getEfbScale(this);
@@ -730,11 +891,27 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
                 "MeleeForceWidescreen", GameSettingsOverride.isMeleeWidescreenEnabled(this));
         NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Hacks",
+                "EFBAccessEnable", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Hacks",
+                "BBoxEnable", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Hacks",
+                "ForceProgressive", true);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Hacks",
+                "EFBToTextureEnable", true);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Hacks",
+                "EFBScaledCopy", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Hacks",
+                "EFBEmulateFormatChanges", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Hacks",
                 "ImmediateXFBEnable", true);
         NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Hacks",
                 "XFBToTextureEnable", true);
         NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Hacks",
                 "SkipDuplicateXFBs", true);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Hacks",
+                "FullAsyncShaderCompilation", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Hacks",
+                "WaitForShaderCompilation", true);
     }
 
     private String sanitizeAudioBackend(String backend) {
@@ -994,7 +1171,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             }
             Log.i(TAG, "mainline raw input thread tid=" + rawInputThreadTid
                     + " blocking=" + (rawStickInput != null && rawStickInput.supportsBlockingWait())
-                    + " waitMs=" + RAW_INPUT_WAIT_MS
+                    + " waitMs=" + rawInputWaitMs
                     + " fallbackPollMs=" + getRawInputFallbackPollMs());
             updatePerfHintThreads();
         });
@@ -1254,6 +1431,10 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
 
     private void registerPerfHintWhenReady() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return;
+        if (getDebugBooleanProperty(PROP_DISABLE_PERF_HINTS, false)) {
+            Log.i(TAG, "mainline PerformanceHintSession disabled by " + PROP_DISABLE_PERF_HINTS);
+            return;
+        }
         final PerformanceHintManager mgr =
                 (PerformanceHintManager) getSystemService(PERFORMANCE_HINT_SERVICE);
         if (mgr == null) return;
@@ -1303,17 +1484,19 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
 
     private void applyLowLatencySurfaceConfig(SurfaceHolder holder) {
         Display.Mode bestMode = findLowLatencyDisplayMode();
-        float targetRefreshRate = bestMode != null ? bestMode.getRefreshRate() : 60f;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    holder.getSurface().setFrameRate(targetRefreshRate,
+                    holder.getSurface().setFrameRate(MELEE_CONTENT_REFRESH_HZ,
                             Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
                             Surface.CHANGE_FRAME_RATE_ALWAYS);
                 } else {
-                    holder.getSurface().setFrameRate(targetRefreshRate,
+                    holder.getSurface().setFrameRate(MELEE_CONTENT_REFRESH_HZ,
                             Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
                 }
+                Log.i(TAG, "mainline surface content frame rate vote="
+                        + MELEE_CONTENT_REFRESH_HZ
+                        + "Hz displayMode=" + describeDisplayMode(bestMode));
             } catch (IllegalStateException ignored) {
             }
         }
@@ -1331,20 +1514,34 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         }
 
         Display.Mode best = null;
+        int bestMultiple = 0;
+        float bestCadenceError = Float.MAX_VALUE;
         for (Display.Mode mode : display.getSupportedModes()) {
             float refresh = mode.getRefreshRate();
-            float multiple = refresh / 60f;
-            float nearestMultiple = Math.round(multiple);
-            if (nearestMultiple < 1f || Math.abs(multiple - nearestMultiple) > 0.02f) {
+            int nearestMultiple = Math.round(refresh / MELEE_CONTENT_REFRESH_HZ);
+            if (nearestMultiple < 1) {
                 continue;
             }
+            float cadenceError = Math.abs(refresh - nearestMultiple * MELEE_CONTENT_REFRESH_HZ);
+            if (cadenceError > DISPLAY_MODE_CADENCE_TOLERANCE_HZ) continue;
             if (best == null
-                    || refresh > best.getRefreshRate()
-                    || (refresh == best.getRefreshRate()
+                    || nearestMultiple > bestMultiple
+                    || (nearestMultiple == bestMultiple && cadenceError < bestCadenceError)
+                    || (nearestMultiple == bestMultiple && cadenceError == bestCadenceError
                     && mode.getPhysicalWidth() * mode.getPhysicalHeight()
                     > best.getPhysicalWidth() * best.getPhysicalHeight())) {
                 best = mode;
+                bestMultiple = nearestMultiple;
+                bestCadenceError = cadenceError;
             }
+        }
+        if (best != null) {
+            Log.i(TAG, "mainline selected display mode for Melee cadence id="
+                    + best.getModeId()
+                    + " refresh=" + best.getRefreshRate()
+                    + " contentHz=" + MELEE_CONTENT_REFRESH_HZ
+                    + " multiple=" + bestMultiple
+                    + " cadenceErrorHz=" + bestCadenceError);
         }
         return best;
     }
@@ -1513,6 +1710,43 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             sb.append(tids[i]);
         }
         return sb.append(']').toString();
+    }
+
+    private String describeDisplayMode(Display.Mode mode) {
+        if (mode == null) return "none";
+        return "id=" + mode.getModeId()
+                + " refresh=" + mode.getRefreshRate()
+                + " size=" + mode.getPhysicalWidth() + "x" + mode.getPhysicalHeight();
+    }
+
+    private static int getDebugIntProperty(String name, int fallback, int min, int max) {
+        if (!BuildConfig.DEBUG) return fallback;
+        String value = getSystemProperty(name, "");
+        if (value == null || value.isEmpty()) return fallback;
+        try {
+            int parsed = Integer.parseInt(value.trim());
+            return Math.max(min, Math.min(max, parsed));
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    private static boolean getDebugBooleanProperty(String name, boolean fallback) {
+        if (!BuildConfig.DEBUG) return fallback;
+        String value = getSystemProperty(name, "");
+        if (value == null || value.isEmpty()) return fallback;
+        char c = value.charAt(0);
+        return c == '1' || c == 'y' || c == 'Y' || c == 't' || c == 'T';
+    }
+
+    private static String getSystemProperty(String name, String fallback) {
+        try {
+            Class<?> properties = Class.forName("android.os.SystemProperties");
+            return (String) properties.getMethod("get", String.class, String.class)
+                    .invoke(null, name, fallback);
+        } catch (Throwable ignored) {
+            return fallback;
+        }
     }
 
     private void applyImmersive() {

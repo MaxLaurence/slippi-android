@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: laurenceputterman <mlputterman@gmail.com>
 Date: Sun, 17 May 2026 15:52:26 -0700
-Subject: [PATCH 6/7] android latency input display polish
+Subject: [PATCH 6/8] android latency input display polish
 
 ---
  Source/Android/jni/MainAndroid.cpp    | 10 ++++++++--
@@ -10,7 +10,7 @@ Subject: [PATCH 6/7] android latency input display polish
  3 files changed, 26 insertions(+), 3 deletions(-)
 
 diff --git a/Source/Android/jni/MainAndroid.cpp b/Source/Android/jni/MainAndroid.cpp
-index 005f1b50cd3fc53af8936d08fb14ddd9d5d0f3e9..688f11c8b14bab1809e0093b41fee791d65717db 100644
+index 005f1b50cd3fc53af8936d08fb14ddd9d5d0f3e9..ab2b3e352435e653b16861c175d57db1df0c08b5 100644
 --- a/Source/Android/jni/MainAndroid.cpp
 +++ b/Source/Android/jni/MainAndroid.cpp
 @@ -826,13 +826,19 @@ JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SurfaceChang

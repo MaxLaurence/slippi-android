@@ -82,7 +82,11 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     private static final boolean LATENCY_TRACE = BuildConfig.DEBUG;
     private static final long RAW_INPUT_FALLBACK_POLL_MS = 4L;
     private static final long RAW_INPUT_LIVE_FALLBACK_POLL_MS = 2L;
-    private static final int RAW_INPUT_WAIT_MS = 16;
+    private static final int RAW_INPUT_WAIT_DEFAULT_MS = 8;
+    private static final String PROP_RAW_INPUT_WAIT_MS = "debug.slippi.raw_input_wait_ms";
+    private static final String PROP_DISABLE_PERF_HINTS = "debug.slippi.disable_perf_hints";
+    private static final float MELEE_CONTENT_REFRESH_HZ = 60000f / 1001f;
+    private static final float DISPLAY_MODE_CADENCE_TOLERANCE_HZ = 0.25f;
     private static final long INPUT_LATENCY_LOG_INTERVAL_MS = 2000L;
     private static final long FRAME_LATENCY_LOG_INTERVAL_MS = 5000L;
     private static final String SETTING_PEAK_REFRESH_RATE = "peak_refresh_rate";
@@ -155,6 +159,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     private String previousMinRefreshRate;
     private boolean refreshRateSettingsSaved;
     private boolean refreshRateSettingsOverridden;
+    private int rawInputWaitMs = RAW_INPUT_WAIT_DEFAULT_MS;
     private final Runnable rawInputPoll = new Runnable() {
         @Override
         public void run() {
@@ -162,7 +167,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
 
             long rawWaitStartMs = SystemClock.uptimeMillis();
             RawStickState state = rawStickInput != null && rawStickInput.supportsBlockingWait()
-                    ? rawStickInput.waitForSnapshot(RAW_INPUT_WAIT_MS)
+                    ? rawStickInput.waitForSnapshot(rawInputWaitMs)
                     : (rawStickInput == null ? null : rawStickInput.snapshot());
             if (feedRawStickState(state)) {
                 pushPad();
@@ -259,6 +264,8 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
         setContentView(R.layout.activity_emulation);
+        rawInputWaitMs = getDebugIntProperty(PROP_RAW_INPUT_WAIT_MS,
+                RAW_INPUT_WAIT_DEFAULT_MS, 1, 16);
         surfaceView = findViewById(R.id.emulation_surface);
         touchOverlay = findViewById(R.id.touch_overlay);
         touchOverlay.setListener(touchOverlayListener);
@@ -540,6 +547,10 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
      */
     private void registerPerfHintWhenReady() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return;
+        if (getDebugBooleanProperty(PROP_DISABLE_PERF_HINTS, false)) {
+            Log.i(TAG, "PerformanceHintSession disabled by " + PROP_DISABLE_PERF_HINTS);
+            return;
+        }
         final PerformanceHintManager mgr =
                 (PerformanceHintManager) getSystemService(PERFORMANCE_HINT_SERVICE);
         if (mgr == null) return;
@@ -587,20 +598,18 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     private void applyLowLatencySurfaceConfig(SurfaceHolder holder) {
         Trace.beginSection("SlippiSurfaceLowLatency");
         Display.Mode bestMode = findLowLatencyDisplayMode();
-        float targetRefreshRate = bestMode != null ? bestMode.getRefreshRate() : 60f;
-        // Melee is a fixed 60Hz workload, but high-refresh panels reduce
-        // scanout wait. Keep the surface vote aligned with the display mode
-        // request instead of letting a 60Hz layer vote pull the panel down.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    holder.getSurface().setFrameRate(targetRefreshRate,
+                    holder.getSurface().setFrameRate(MELEE_CONTENT_REFRESH_HZ,
                             Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
                             Surface.CHANGE_FRAME_RATE_ALWAYS);
                 } else {
-                    holder.getSurface().setFrameRate(targetRefreshRate,
+                    holder.getSurface().setFrameRate(MELEE_CONTENT_REFRESH_HZ,
                             Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
                 }
+                Log.i(TAG, "surface content frame rate vote=" + MELEE_CONTENT_REFRESH_HZ
+                        + "Hz displayMode=" + describeDisplayMode(bestMode));
             } catch (IllegalStateException ignored) {
             }
         }
@@ -619,20 +628,33 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         }
 
         Display.Mode best = null;
+        int bestMultiple = 0;
+        float bestCadenceError = Float.MAX_VALUE;
         for (Display.Mode mode : display.getSupportedModes()) {
             float refresh = mode.getRefreshRate();
-            float multiple = refresh / 60f;
-            float nearestMultiple = Math.round(multiple);
-            if (nearestMultiple < 1f || Math.abs(multiple - nearestMultiple) > 0.02f) {
+            int nearestMultiple = Math.round(refresh / MELEE_CONTENT_REFRESH_HZ);
+            if (nearestMultiple < 1) {
                 continue;
             }
+            float cadenceError = Math.abs(refresh - nearestMultiple * MELEE_CONTENT_REFRESH_HZ);
+            if (cadenceError > DISPLAY_MODE_CADENCE_TOLERANCE_HZ) continue;
             if (best == null
-                    || refresh > best.getRefreshRate()
-                    || (refresh == best.getRefreshRate()
+                    || nearestMultiple > bestMultiple
+                    || (nearestMultiple == bestMultiple && cadenceError < bestCadenceError)
+                    || (nearestMultiple == bestMultiple && cadenceError == bestCadenceError
                     && mode.getPhysicalWidth() * mode.getPhysicalHeight()
                     > best.getPhysicalWidth() * best.getPhysicalHeight())) {
                 best = mode;
+                bestMultiple = nearestMultiple;
+                bestCadenceError = cadenceError;
             }
+        }
+        if (best != null) {
+            Log.i(TAG, "selected display mode for Melee cadence id=" + best.getModeId()
+                    + " refresh=" + best.getRefreshRate()
+                    + " contentHz=" + MELEE_CONTENT_REFRESH_HZ
+                    + " multiple=" + bestMultiple
+                    + " cadenceErrorHz=" + bestCadenceError);
         }
         return best;
     }
@@ -1019,7 +1041,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
             }
             Log.i(TAG, "raw input thread tid=" + rawInputThreadTid
                     + " blocking=" + (rawStickInput != null && rawStickInput.supportsBlockingWait())
-                    + " waitMs=" + RAW_INPUT_WAIT_MS
+                    + " waitMs=" + rawInputWaitMs
                     + " fallbackPollMs=" + getRawInputFallbackPollMs());
             updatePerfHintThreads();
         });
@@ -1340,6 +1362,43 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
                 c.setSystemBarsBehavior(
                         WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
             }
+        }
+    }
+
+    private String describeDisplayMode(Display.Mode mode) {
+        if (mode == null) return "none";
+        return "id=" + mode.getModeId()
+                + " refresh=" + mode.getRefreshRate()
+                + " size=" + mode.getPhysicalWidth() + "x" + mode.getPhysicalHeight();
+    }
+
+    private static int getDebugIntProperty(String name, int fallback, int min, int max) {
+        if (!BuildConfig.DEBUG) return fallback;
+        String value = getSystemProperty(name, "");
+        if (value == null || value.isEmpty()) return fallback;
+        try {
+            int parsed = Integer.parseInt(value.trim());
+            return Math.max(min, Math.min(max, parsed));
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    private static boolean getDebugBooleanProperty(String name, boolean fallback) {
+        if (!BuildConfig.DEBUG) return fallback;
+        String value = getSystemProperty(name, "");
+        if (value == null || value.isEmpty()) return fallback;
+        char c = value.charAt(0);
+        return c == '1' || c == 'y' || c == 'Y' || c == 't' || c == 'T';
+    }
+
+    private static String getSystemProperty(String name, String fallback) {
+        try {
+            Class<?> properties = Class.forName("android.os.SystemProperties");
+            return (String) properties.getMethod("get", String.class, String.class)
+                    .invoke(null, name, fallback);
+        } catch (Throwable ignored) {
+            return fallback;
         }
     }
 }

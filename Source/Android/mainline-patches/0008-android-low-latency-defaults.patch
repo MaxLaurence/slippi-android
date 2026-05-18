@@ -1,0 +1,163 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: laurenceputterman <mlputterman@gmail.com>
+Date: Sun, 17 May 2026 21:05:49 -0700
+Subject: [PATCH 8/8] android: low latency defaults
+
+---
+ Source/Core/AudioCommon/OboeStream.cpp       | 21 +++++++++++++++++++-
+ Source/Core/Core/Config/GraphicsSettings.cpp |  6 +++---
+ Source/Core/Core/Config/MainSettings.cpp     | 12 +++++------
+ Source/Core/Core/Slippi/SlippiNetplay.cpp    |  7 +++----
+ 4 files changed, 32 insertions(+), 14 deletions(-)
+
+diff --git a/Source/Core/AudioCommon/OboeStream.cpp b/Source/Core/AudioCommon/OboeStream.cpp
+index c3ff080c716577672065cbace741034f77835ba1..7ea01103c85d363e2d4c08427f843e0b07896fc7 100644
+--- a/Source/Core/AudioCommon/OboeStream.cpp
++++ b/Source/Core/AudioCommon/OboeStream.cpp
+@@ -19,6 +19,7 @@ namespace
+ constexpr const char* TAG = "SlippiAudio";
+ constexpr int kMinBufferBursts = 1;
+ constexpr int kMaxBufferBursts = 12;
++constexpr int kStableFallbackBursts = 4;
+ 
+ int ConfiguredBufferBursts()
+ {
+@@ -128,11 +129,29 @@ oboe::DataCallbackResult OboeSoundStream::onAudioReady(oboe::AudioStream* stream
+   mixer->Mix(static_cast<s16*>(audio_data), static_cast<std::size_t>(num_frames));
+ 
+   oboe::ResultWithValue<int32_t> xrun_result = stream->getXRunCount();
+-  if (xrun_result && xrun_result.value() != m_last_xruns.load())
++  const bool xrun_changed = xrun_result && xrun_result.value() != m_last_xruns.load();
++  if (xrun_changed)
+   {
+     __android_log_print(ANDROID_LOG_WARN, TAG, "Oboe xruns=%d", xrun_result.value());
+     m_last_xruns.store(xrun_result.value());
+   }
++  if (xrun_changed && ConfiguredBufferBursts() < kStableFallbackBursts)
++  {
++    const int32_t frames_per_burst = stream->getFramesPerBurst();
++    if (frames_per_burst > 0)
++    {
++      const int32_t capacity = stream->getBufferCapacityInFrames();
++      int32_t target_frames = frames_per_burst * kStableFallbackBursts;
++      if (capacity > 0)
++        target_frames = std::min(target_frames, capacity);
++
++      oboe::ResultWithValue<int32_t> buffer_result = stream->setBufferSizeInFrames(target_frames);
++      if (buffer_result)
++        __android_log_print(ANDROID_LOG_INFO, TAG,
++                            "Oboe xrun fallback targetBuffer=%d actualBuffer=%d",
++                            target_frames, buffer_result.value());
++    }
++  }
+ 
+   return oboe::DataCallbackResult::Continue;
+ }
+diff --git a/Source/Core/Core/Config/GraphicsSettings.cpp b/Source/Core/Core/Config/GraphicsSettings.cpp
+index e7dbf8279f22e38f6826b8c1ff17872a4421cc14..a48dac93a9cbca59ebb9e752b1ef792f0ef11968 100644
+--- a/Source/Core/Core/Config/GraphicsSettings.cpp
++++ b/Source/Core/Core/Config/GraphicsSettings.cpp
+@@ -38,7 +38,7 @@ const Info<float> GFX_WIDESCREEN_HEURISTIC_WIDESCREEN_RATIO{
+ const Info<bool> GFX_CROP{{System::GFX, "Settings", "Crop"}, false};
+ const Info<int> GFX_SAFE_TEXTURE_CACHE_COLOR_SAMPLES{
+     {System::GFX, "Settings", "SafeTextureCacheColorSamples"}, 128};
+-const Info<bool> GFX_SHOW_FPS{{System::GFX, "Settings", "ShowFPS"}, true};
++const Info<bool> GFX_SHOW_FPS{{System::GFX, "Settings", "ShowFPS"}, false};
+ const Info<bool> GFX_SHOW_FTIMES{{System::GFX, "Settings", "ShowFTimes"}, false};
+ const Info<bool> GFX_SHOW_VPS{{System::GFX, "Settings", "ShowVPS"}, false};
+ const Info<bool> GFX_SHOW_VTIMES{{System::GFX, "Settings", "ShowVTimes"}, false};
+@@ -48,7 +48,7 @@ const Info<bool> GFX_SHOW_SPEED_COLORS{{System::GFX, "Settings", "ShowSpeedColor
+ const Info<bool> GFX_MOVABLE_PERFORMANCE_METRICS{
+     {System::GFX, "Settings", "MovablePerformanceMetrics"}, false};
+ const Info<int> GFX_PERF_SAMP_WINDOW{{System::GFX, "Settings", "PerfSampWindowMS"}, 1000};
+-const Info<bool> GFX_SHOW_NETPLAY_PING{{System::GFX, "Settings", "ShowNetPlayPing"}, true};
++const Info<bool> GFX_SHOW_NETPLAY_PING{{System::GFX, "Settings", "ShowNetPlayPing"}, false};
+ const Info<bool> GFX_SHOW_NETPLAY_MESSAGES{{System::GFX, "Settings", "ShowNetPlayMessages"}, false};
+ const Info<bool> GFX_LOG_RENDER_TIME_TO_FILE{{System::GFX, "Settings", "LogRenderTimeToFile"},
+                                              false};
+@@ -197,7 +197,7 @@ const Info<bool> GFX_HACK_DEFER_EFB_COPIES{{System::GFX, "Hacks", "DeferEFBCopie
+ const Info<bool> GFX_HACK_IMMEDIATE_XFB{{System::GFX, "Hacks", "ImmediateXFBEnable"}, true};
+ const Info<bool> GFX_HACK_SKIP_DUPLICATE_XFBS{{System::GFX, "Hacks", "SkipDuplicateXFBs"}, true};
+ const Info<bool> GFX_HACK_EARLY_XFB_OUTPUT{{System::GFX, "Hacks", "EarlyXFBOutput"}, true};
+-const Info<bool> GFX_HACK_COPY_EFB_SCALED{{System::GFX, "Hacks", "EFBScaledCopy"}, true};
++const Info<bool> GFX_HACK_COPY_EFB_SCALED{{System::GFX, "Hacks", "EFBScaledCopy"}, false};
+ const Info<bool> GFX_HACK_EFB_EMULATE_FORMAT_CHANGES{
+     {System::GFX, "Hacks", "EFBEmulateFormatChanges"}, false};
+ const Info<bool> GFX_HACK_VERTEX_ROUNDING{{System::GFX, "Hacks", "VertexRounding"}, false};
+diff --git a/Source/Core/Core/Config/MainSettings.cpp b/Source/Core/Core/Config/MainSettings.cpp
+index 7e3033f76508e7fc07e3b73cf3423ed3d30fffc2..d7336fbc7f6117681550c1571f74684d9e70b453 100644
+--- a/Source/Core/Core/Config/MainSettings.cpp
++++ b/Source/Core/Core/Config/MainSettings.cpp
+@@ -52,7 +52,7 @@ const Info<std::string> SLIPPI_REPLAY_DIR{{System::Main, "Slippi", "ReplayDir"},
+                                           File::GetHomeDirectory() + DIR_SEP + "Slippi"};
+ const Info<bool> SLIPPI_ENABLE_FRAME_INDEX{{System::Main, "Slippi", "EnableFrameIndex"}, false};
+ const Info<bool> SLIPPI_BLOCKING_PIPES{{System::Main, "Slippi", "BlockingPipes"}, false};
+-const Info<bool> SLIPPI_ENABLE_JUKEBOX{{System::Main, "Slippi", "EnableJukebox"}, true};
++const Info<bool> SLIPPI_ENABLE_JUKEBOX{{System::Main, "Slippi", "EnableJukebox"}, false};
+ const Info<int> SLIPPI_JUKEBOX_VOLUME{{System::Main, "Slippi", "JukeboxVolume"}, 100};
+ 
+ const Info<bool> SLIPPI_ENABLE_RANK_LOCAL{{System::Main, "Slippi", "ShowLocalRankInfo"}, true};
+@@ -75,7 +75,7 @@ const Info<bool> MAIN_DSP_HLE{{System::Main, "Core", "DSPHLE"}, true};
+ const Info<int> MAIN_MAX_FALLBACK{{System::Main, "Core", "MaxFallback"}, 100};
+ const Info<int> MAIN_TIMING_VARIANCE{{System::Main, "Core", "TimingVariance"}, 8};
+ const Info<bool> MAIN_CPU_THREAD{{System::Main, "Core", "CPUThread"}, true};
+-const Info<bool> MAIN_SYNC_ON_SKIP_IDLE{{System::Main, "Core", "SyncOnSkipIdle"}, true};
++const Info<bool> MAIN_SYNC_ON_SKIP_IDLE{{System::Main, "Core", "SyncOnSkipIdle"}, false};
+ const Info<std::string> MAIN_DEFAULT_ISO{{System::Main, "Core", "DefaultISO"}, ""};
+ const Info<bool> MAIN_ENABLE_CHEATS{{System::Main, "Core", "EnableCheats"}, true};
+ const Info<int> MAIN_GC_LANGUAGE{{System::Main, "Core", "SelectedLanguage"}, 0};
+@@ -84,7 +84,7 @@ const Info<bool> MAIN_OVERRIDE_REGION_SETTINGS{{System::Main, "Core", "OverrideR
+ const Info<bool> MAIN_DPL2_DECODER{{System::Main, "Core", "DPL2Decoder"}, false};
+ const Info<AudioCommon::DPL2Quality> MAIN_DPL2_QUALITY{{System::Main, "Core", "DPL2Quality"},
+                                                        AudioCommon::GetDefaultDPL2Quality()};
+-const Info<int> MAIN_AUDIO_LATENCY{{System::Main, "Core", "AudioLatency"}, 20};
++const Info<int> MAIN_AUDIO_LATENCY{{System::Main, "Core", "AudioLatency"}, 2};
+ const Info<int> MAIN_AUDIO_BUFFER_SIZE{{System::Main, "Core", "AudioBufferSize"}, 80};
+ const Info<bool> MAIN_AUDIO_FILL_GAPS{{System::Main, "Core", "AudioFillGaps"}, true};
+ const Info<std::string> MAIN_MEMCARD_A_PATH{{System::Main, "Core", "MemcardAPath"}, ""};
+@@ -297,7 +297,7 @@ const Info<u32> MAIN_CUSTOM_RTC_VALUE{{System::Main, "Core", "CustomRTCValue"},
+                                       (30 * 365 + 7) * 24 * 60 * 60};
+ const Info<DiscIO::Region> MAIN_FALLBACK_REGION{{System::Main, "Core", "FallbackRegion"},
+                                                 GetDefaultRegion()};
+-const Info<bool> MAIN_AUTO_DISC_CHANGE{{System::Main, "Core", "AutoDiscChange"}, false};
++const Info<bool> MAIN_AUTO_DISC_CHANGE{{System::Main, "Core", "AutoDiscChange"}, true};
+ const Info<bool> MAIN_ALLOW_SD_WRITES{{System::Main, "Core", "WiiSDCardAllowWrites"}, true};
+ const Info<bool> MAIN_ENABLE_SAVESTATES{{System::Main, "Core", "EnableSaveStates"}, false};
+ const Info<bool> MAIN_REAL_WII_REMOTE_REPEAT_REPORTS{
+@@ -328,7 +328,7 @@ const Info<bool> MAIN_DISABLE_SCREENSAVER{{System::Main, "Display", "DisableScre
+ 
+ // Main.DSP
+ 
+-const Info<bool> MAIN_DSP_THREAD{{System::Main, "DSP", "DSPThread"}, false};
++const Info<bool> MAIN_DSP_THREAD{{System::Main, "DSP", "DSPThread"}, true};
+ const Info<bool> MAIN_DSP_CAPTURE_LOG{{System::Main, "DSP", "CaptureLog"}, false};
+ const Info<bool> MAIN_DSP_JIT{{System::Main, "DSP", "EnableJIT"}, true};
+ const Info<bool> MAIN_DUMP_AUDIO{{System::Main, "DSP", "DumpAudio"}, false};
+@@ -336,7 +336,7 @@ const Info<bool> MAIN_DUMP_AUDIO_SILENT{{System::Main, "DSP", "DumpAudioSilent"}
+ const Info<bool> MAIN_DUMP_UCODE{{System::Main, "DSP", "DumpUCode"}, false};
+ const Info<std::string> MAIN_AUDIO_BACKEND{{System::Main, "DSP", "Backend"},
+                                            AudioCommon::GetDefaultSoundBackend()};
+-const Info<int> MAIN_AUDIO_VOLUME{{System::Main, "DSP", "Volume"}, 10};
++const Info<int> MAIN_AUDIO_VOLUME{{System::Main, "DSP", "Volume"}, 100};
+ const Info<int> MAIN_ANDROID_AUDIO_BUFFER_BURSTS{{System::Main, "DSP",
+                                                   "AndroidAudioBufferBursts"},
+                                                  4};
+diff --git a/Source/Core/Core/Slippi/SlippiNetplay.cpp b/Source/Core/Core/Slippi/SlippiNetplay.cpp
+index 1e245ec25103a2c1eb80faec8e8cb5dfcbfe6879..6d0a3ade80c5e9b1da20b61101db1e7a19e02a2e 100644
+--- a/Source/Core/Core/Slippi/SlippiNetplay.cpp
++++ b/Source/Core/Core/Slippi/SlippiNetplay.cpp
+@@ -76,11 +76,10 @@ bool AndroidLatencyTraceEnabled()
+ 
+ int AndroidActiveServiceTimeoutMs()
+ {
+-  // Keep the default much lower than upstream's 250 ms wake latency without forcing
+-  // the more aggressive 4 ms experiment on every device. Testers can set:
+-  // adb shell setprop debug.slippi.netplay_service_timeout_ms 4
++  // Match the bundled Ishiiruka core's low active-poll timeout instead of
++  // upstream's 250 ms wake latency.
+   static const int timeout_ms =
+-      AndroidPropertyInt("debug.slippi.netplay_service_timeout_ms", 16, 1, 250);
++      AndroidPropertyInt("debug.slippi.netplay_service_timeout_ms", 4, 1, 250);
+   return timeout_ms;
+ }
+ 

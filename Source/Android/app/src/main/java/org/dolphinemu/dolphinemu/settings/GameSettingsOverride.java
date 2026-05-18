@@ -41,6 +41,9 @@ public final class GameSettingsOverride {
     public static final String[] MELEE_INI_NAMES = {
             "GALE01r2.ini", "GALJ01r2.ini", "GALEXX.ini"
     };
+    public static final String[] MELEE_TRAINING_INI_NAMES = {
+            "GALE01r2.ini", "GALJ01r2.ini", "GALEXX.ini", "GTME01.ini"
+    };
 
     private GameSettingsOverride() {}
 
@@ -242,6 +245,10 @@ public final class GameSettingsOverride {
             if (enabledByUser) {
                 disabled.remove(line);
                 enabled.add(line);
+            } else if (isMeleeWidescreenCode(entry) && !hasOverride
+                    && !entry.defaultEnabled) {
+                enabled.remove(line);
+                disabled.remove(line);
             } else if (disabledByUser && entry.defaultEnabled) {
                 enabled.remove(line);
                 disabled.add(line);
