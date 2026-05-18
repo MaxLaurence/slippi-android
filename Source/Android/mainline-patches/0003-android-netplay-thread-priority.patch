@@ -8,7 +8,7 @@ Subject: [PATCH 3/9] android netplay thread priority
  1 file changed, 9 insertions(+)
 
 diff --git a/Source/Core/Core/Slippi/SlippiNetplay.cpp b/Source/Core/Core/Slippi/SlippiNetplay.cpp
-index 2bd00d4a84348e0864c2fc07e2129a084a92118c..d1c20d3821b19ae354ac2d67ff1b81709acc8ab8 100644
+index 0232489d6b33c214042f23b3a11a30d6f9e8a0d7..f84da0d4a2c033d1628d4ee9d84d3895a0b0b8e4 100644
 --- a/Source/Core/Core/Slippi/SlippiNetplay.cpp
 +++ b/Source/Core/Core/Slippi/SlippiNetplay.cpp
 @@ -7,12 +7,16 @@
@@ -28,7 +28,7 @@ index 2bd00d4a84348e0864c2fc07e2129a084a92118c..d1c20d3821b19ae354ac2d67ff1b8170
  #include "Common/Timer.h"
  #include "Core/Config/GraphicsSettings.h"
  #include "Core/Config/NetplaySettings.h"
-@@ -768,6 +772,11 @@ void SlippiNetplayClient::SendAsync(std::unique_ptr<sf::Packet> packet)
+@@ -784,6 +788,11 @@ void SlippiNetplayClient::SendAsync(std::unique_ptr<sf::Packet> packet)
  // called from ---NETPLAY--- thread
  void SlippiNetplayClient::ThreadFunc()
  {

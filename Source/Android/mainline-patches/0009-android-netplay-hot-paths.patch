@@ -8,12 +8,12 @@ Subject: [PATCH 9/9] android netplay hot paths
  Source/Core/Core/Config/MainSettings.h       |   1 +
  Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp | 359 ++++++++------
  Source/Core/Core/HW/EXI/EXI_DeviceSlippi.h   |  59 ++-
- Source/Core/Core/Slippi/SlippiNetplay.cpp    | 466 +++++++++++++------
+ Source/Core/Core/Slippi/SlippiNetplay.cpp    | 464 +++++++++++++------
  Source/Core/Core/Slippi/SlippiNetplay.h      |  66 ++-
  Source/Core/Core/Slippi/SlippiPad.cpp        |   4 +
  Source/Core/Core/Slippi/SlippiPad.h          |   1 +
  Source/Core/Core/Slippi/SlippiSpectate.cpp   |  15 +
- 9 files changed, 666 insertions(+), 306 deletions(-)
+ 9 files changed, 665 insertions(+), 305 deletions(-)
 
 diff --git a/Source/Core/Core/Config/MainSettings.cpp b/Source/Core/Core/Config/MainSettings.cpp
 index d7336fbc7f6117681550c1571f74684d9e70b453..5e2e68edda9aab599ee257f0e02b861d254d4c9a 100644
@@ -40,7 +40,7 @@ index 0c488dcb657dd5a773c325d47bf02422162321be..f9c09454a733b9218801231273f6b78a
  extern const Info<int> SLIPPI_SPECTATOR_LOCAL_PORT;
  extern const Info<bool> SLIPPI_SAVE_REPLAYS;
 diff --git a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
-index 48e11fb70b007e9663afa1792f1eaf7688d2fca9..1b0dbd43a4966e3981457dd9db9955f4f8949b0e 100644
+index 1c52c3632a9011dd2eeb79a69626221e2213afad..2ce7c753e88c89be62051d3a80ef4be8b6628262 100644
 --- a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
 +++ b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
 @@ -4,13 +4,14 @@
@@ -617,7 +617,7 @@ index 48e11fb70b007e9663afa1792f1eaf7688d2fca9..1b0dbd43a4966e3981457dd9db9955f4
  #ifdef LOCAL_TESTING
        slippi_netplay = std::make_unique<SlippiNetplayClient>(true);
  #else
-@@ -3317,18 +3390,15 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
+@@ -3324,18 +3397,15 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
      time(&game_start_time);  // Store game start time
      u8 receive_commands_len = mem_ptr[1];
      configureCommands(&mem_ptr[1], receive_commands_len);
@@ -639,7 +639,7 @@ index 48e11fb70b007e9663afa1792f1eaf7688d2fca9..1b0dbd43a4966e3981457dd9db9955f4
      g_need_input_for_frame = true;
      return;
    }
-@@ -3355,11 +3425,8 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
+@@ -3362,11 +3432,8 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
      switch (byte)
      {
      case CMD_RECEIVE_GAME_END:
@@ -653,7 +653,7 @@ index 48e11fb70b007e9663afa1792f1eaf7688d2fca9..1b0dbd43a4966e3981457dd9db9955f4
        break;
      case CMD_PREPARE_REPLAY:
        prepareGameInfo(&mem_ptr[buf_loc + 1]);
-@@ -3369,10 +3436,8 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
+@@ -3376,10 +3443,8 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
        break;
      case CMD_FRAME_BOOKEND:
        g_need_input_for_frame = true;
@@ -666,7 +666,7 @@ index 48e11fb70b007e9663afa1792f1eaf7688d2fca9..1b0dbd43a4966e3981457dd9db9955f4
        break;
      case CMD_IS_STOCK_STEAL:
        prepareIsStockSteal(&mem_ptr[buf_loc + 1]);
-@@ -3505,10 +3570,8 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
+@@ -3512,10 +3577,8 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
        break;
      }
      default:
@@ -782,7 +782,7 @@ index 9fb9fa397a3162214d83548e395261bbe5538d1f..51eced6e2fa5b0f1c6d93df2bf0c3293
    std::vector<u16> allowed_stages;
  };
 diff --git a/Source/Core/Core/Slippi/SlippiNetplay.cpp b/Source/Core/Core/Slippi/SlippiNetplay.cpp
-index 6d0a3ade80c5e9b1da20b61101db1e7a19e02a2e..2b8b3101c5c46a38b736222ed7d0839355aced07 100644
+index fce6bfdbd76e25164d6c15b1e7914dc30f16068e..b2d907feecefca97235b56f5579fe5399d8a6f49 100644
 --- a/Source/Core/Core/Slippi/SlippiNetplay.cpp
 +++ b/Source/Core/Core/Slippi/SlippiNetplay.cpp
 @@ -4,13 +4,13 @@
@@ -980,7 +980,7 @@ index 6d0a3ade80c5e9b1da20b61101db1e7a19e02a2e..2b8b3101c5c46a38b736222ed7d08393
  
    SLIPPI_NETPLAY = std::move(this);
  
-@@ -404,57 +556,42 @@ unsigned int SlippiNetplayClient::OnData(sf::Packet& packet, ENetPeer* peer)
+@@ -420,57 +572,42 @@ unsigned int SlippiNetplayClient::OnData(sf::Packet& packet, ENetPeer* peer)
      frame_offset_data[p_idx].idx =
          (frame_offset_data[p_idx].idx + 1) % SLIPPI_ONLINE_LOCKSTEP_INTERVAL;
  
@@ -1069,7 +1069,7 @@ index 6d0a3ade80c5e9b1da20b61101db1e7a19e02a2e..2b8b3101c5c46a38b736222ed7d08393
      // Only ack if inputsToCopy is greater than 0. Otherwise we are receiving an old input and
      // we should have already acked something in the future. This can also happen in the case
      // where a new game starts quickly before the remote queue is reset and if we ack the early
-@@ -560,7 +697,9 @@ unsigned int SlippiNetplayClient::OnData(sf::Packet& packet, ENetPeer* peer)
+@@ -576,7 +713,9 @@ unsigned int SlippiNetplayClient::OnData(sf::Packet& packet, ENetPeer* peer)
  
        // Reset remote pad queue such that next inputs that we get are not compared to inputs from
        // last game
@@ -1080,7 +1080,7 @@ index 6d0a3ade80c5e9b1da20b61101db1e7a19e02a2e..2b8b3101c5c46a38b736222ed7d08393
      }
    }
    break;
-@@ -804,6 +943,95 @@ void SlippiNetplayClient::Send(sf::Packet& packet)
+@@ -820,6 +959,95 @@ void SlippiNetplayClient::Send(sf::Packet& packet)
    }
  }
  
@@ -1176,7 +1176,7 @@ index 6d0a3ade80c5e9b1da20b61101db1e7a19e02a2e..2b8b3101c5c46a38b736222ed7d08393
  void SlippiNetplayClient::Disconnect()
  {
    ENetEvent net_event;
-@@ -1149,6 +1377,7 @@ void SlippiNetplayClient::ThreadFunc()
+@@ -1165,6 +1393,7 @@ void SlippiNetplayClient::ThreadFunc()
      int net = enet_host_service(m_client, &net_event, 250);
  #endif
      int drained_async_packets = 0;
@@ -1184,7 +1184,7 @@ index 6d0a3ade80c5e9b1da20b61101db1e7a19e02a2e..2b8b3101c5c46a38b736222ed7d08393
      while (!m_async_queue.Empty())
      {
        Send(*(m_async_queue.Front().get()));
-@@ -1303,7 +1532,7 @@ void SlippiNetplayClient::StartSlippiGame()
+@@ -1319,7 +1548,7 @@ void SlippiNetplayClient::StartSlippiGame()
    // Reset variables to start a new game
    has_game_started = false;
  
@@ -1193,7 +1193,7 @@ index 6d0a3ade80c5e9b1da20b61101db1e7a19e02a2e..2b8b3101c5c46a38b736222ed7d08393
  
    for (int i = 0; i < m_remote_player_count; i++)
    {
-@@ -1334,7 +1563,7 @@ void SlippiNetplayClient::SendConnectionSelected()
+@@ -1350,7 +1579,7 @@ void SlippiNetplayClient::SendConnectionSelected()
    SendAsync(std::move(spac));
  }
  
@@ -1202,7 +1202,7 @@ index 6d0a3ade80c5e9b1da20b61101db1e7a19e02a2e..2b8b3101c5c46a38b736222ed7d08393
  {
    auto status = slippi_connect_status.load(std::memory_order_acquire);
    bool connection_failed =
-@@ -1349,7 +1578,7 @@ void SlippiNetplayClient::SendSlippiPad(std::unique_ptr<SlippiPad> pad)
+@@ -1365,7 +1594,7 @@ void SlippiNetplayClient::SendSlippiPad(std::unique_ptr<SlippiPad> pad)
    if (pad)
    {
      // Add latest local pad report to queue
@@ -1211,7 +1211,7 @@ index 6d0a3ade80c5e9b1da20b61101db1e7a19e02a2e..2b8b3101c5c46a38b736222ed7d08393
    }
  
    // Remove pad reports that have been received and acked. Skip disconnected players,
-@@ -1367,45 +1596,35 @@ void SlippiNetplayClient::SendSlippiPad(std::unique_ptr<SlippiPad> pad)
+@@ -1383,45 +1612,35 @@ void SlippiNetplayClient::SendSlippiPad(std::unique_ptr<SlippiPad> pad)
    // Cap how far behind min_ack_frame is allowed to fall. This protects against a peer
    // that stops acking. The value used should be sensibly large enough to prevent
    // any issues
@@ -1272,7 +1272,7 @@ index 6d0a3ade80c5e9b1da20b61101db1e7a19e02a2e..2b8b3101c5c46a38b736222ed7d08393
    u64 time = Common::Timer::NowUs();
  
    has_game_started = true;
-@@ -1532,100 +1751,69 @@ u8 SlippiNetplayClient::GetSlippiRemoteSentChatMessage(bool isChatEnabled)
+@@ -1548,100 +1767,69 @@ u8 SlippiNetplayClient::GetSlippiRemoteSentChatMessage(bool isChatEnabled)
    return copied_message_id;
  }
  
@@ -1402,17 +1402,8 @@ index 6d0a3ade80c5e9b1da20b61101db1e7a19e02a2e..2b8b3101c5c46a38b736222ed7d08393
    }
  }
  
-@@ -1729,7 +1917,7 @@ int32_t SlippiNetplayClient::GetSlippiLatestRemoteFrame(int maxFrameCount)
-     }
- 
-     auto rp = GetSlippiRemotePad(i, maxFrameCount);
--    int f = rp->latest_frame;
-+    int f = rp.latest_frame;
-     if (f < lowest_frame || !is_frame_set)
-     {
-       lowest_frame = f;
 diff --git a/Source/Core/Core/Slippi/SlippiNetplay.h b/Source/Core/Core/Slippi/SlippiNetplay.h
-index a7f42620e28e471290793eadb866fe27467046b6..146ca65e0555ecf22c1c3302e8cf4ca1c0159317 100644
+index 0b3f9856a91683c93b33c27f4b9d89d88c95a184..908cfece68376c9a431ff6952933805318fe2884 100644
 --- a/Source/Core/Core/Slippi/SlippiNetplay.h
 +++ b/Source/Core/Core/Slippi/SlippiNetplay.h
 @@ -7,6 +7,7 @@
@@ -1458,7 +1449,7 @@ index a7f42620e28e471290793eadb866fe27467046b6..146ca65e0555ecf22c1c3302e8cf4ca1
    void DropOldRemoteInputs(int32_t finalized_frame);
    std::unordered_map<u8, bool> GetActivePlayerIndices();
    void ForceDisconnectPlayer(u8 playerIdx);
-@@ -271,11 +274,54 @@ protected:
+@@ -270,11 +273,54 @@ protected:
    // per-peer ENet disconnects for players force-dropped from the EXI side.
    std::atomic<bool> player_active[SLIPPI_PLAYER_COUNT_MAX] = {};
  
@@ -1517,7 +1508,7 @@ index a7f42620e28e471290793eadb866fe27467046b6..146ca65e0555ecf22c1c3302e8cf4ca1
    SlippiSyncedGameState remote_sync_states[SLIPPI_REMOTE_PLAYER_MAX];
    SlippiSyncedGameState local_sync_state;
    std::deque<SlippiGamePrepStepResults> game_prep_step_queue;
-@@ -299,6 +345,10 @@ private:
+@@ -298,6 +344,10 @@ private:
    u8 PlayerIdxFromPort(u8 port);
    unsigned int OnData(sf::Packet& packet, ENetPeer* peer);
    void Send(sf::Packet& packet);

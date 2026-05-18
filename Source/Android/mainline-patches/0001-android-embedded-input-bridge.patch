@@ -1249,7 +1249,7 @@ index eab36049e8dce5ee401b41d3a60267ae557a9028..0c488dcb657dd5a773c325d47bf02422
  extern const Info<bool> MAIN_AUDIO_MUTE_ON_DISABLED_SPEED_LIMIT;
  #ifdef _WIN32
 diff --git a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
-index a2d0a26a13102d014c9969dc8b8035bedd282c3b..6372b79245876f5532358d383b36fe2eb85e31c9 100644
+index 1955502b224872450c5759901be8dcd097d61a16..a06dc4b5b9e69df0e7117faa0caf083786d3a54d 100644
 --- a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
 +++ b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
 @@ -3,9 +3,14 @@
@@ -1373,7 +1373,7 @@ index a2d0a26a13102d014c9969dc8b8035bedd282c3b..6372b79245876f5532358d383b36fe2e
  
    // Clear playback control related vars
    g_playback_status->resetPlayback();
-@@ -3288,6 +3323,7 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
+@@ -3295,6 +3330,7 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
      case CMD_GET_GECKO_CODES:
        m_read_queue.clear();
        m_read_queue.insert(m_read_queue.begin(), gecko_list.begin(), gecko_list.end());

@@ -143,7 +143,7 @@ index 7e3033f76508e7fc07e3b73cf3423ed3d30fffc2..d7336fbc7f6117681550c1571f74684d
                                                    "AndroidAudioBufferBursts"},
                                                   4};
 diff --git a/Source/Core/Core/Slippi/SlippiNetplay.cpp b/Source/Core/Core/Slippi/SlippiNetplay.cpp
-index 1e245ec25103a2c1eb80faec8e8cb5dfcbfe6879..6d0a3ade80c5e9b1da20b61101db1e7a19e02a2e 100644
+index 03811417b063ba87d24da4310ff19220d43c9345..fce6bfdbd76e25164d6c15b1e7914dc30f16068e 100644
 --- a/Source/Core/Core/Slippi/SlippiNetplay.cpp
 +++ b/Source/Core/Core/Slippi/SlippiNetplay.cpp
 @@ -76,11 +76,10 @@ bool AndroidLatencyTraceEnabled()
