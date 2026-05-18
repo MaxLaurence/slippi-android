@@ -1,0 +1,603 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: laurenceputterman <mlputterman@gmail.com>
+Date: Sun, 17 May 2026 16:13:40 -0700
+Subject: [PATCH 7/7] android: mainline input diagnostics
+
+---
+ Source/Android/jni/MainAndroid.cpp            |   7 ++
+ .../Core/Common/AndroidInputDiagnostics.cpp   |  86 +++++++++++++
+ Source/Core/Common/AndroidInputDiagnostics.h  |  14 +++
+ Source/Core/Common/CMakeLists.txt             |   2 +
+ Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp  |  47 +++++++
+ Source/Core/Core/NetPlayClient.cpp            |  67 +++++++++-
+ Source/Core/InputCommon/GCAdapter.cpp         | 119 +++++++++++++++---
+ 7 files changed, 325 insertions(+), 17 deletions(-)
+ create mode 100644 Source/Core/Common/AndroidInputDiagnostics.cpp
+ create mode 100644 Source/Core/Common/AndroidInputDiagnostics.h
+
+diff --git a/Source/Android/jni/MainAndroid.cpp b/Source/Android/jni/MainAndroid.cpp
+index 688f11c8b14bab1809e0093b41fee791d65717db..1ff63dd1177b6dc5f26ccad403efe941d3ccadfc 100644
+--- a/Source/Android/jni/MainAndroid.cpp
++++ b/Source/Android/jni/MainAndroid.cpp
+@@ -34,6 +34,7 @@
+ #undef BRKINT
+ 
+ #include "Common/AndroidAnalytics.h"
++#include "Common/AndroidInputDiagnostics.h"
+ #include "Common/Assert.h"
+ #include "Common/CPUDetect.h"
+ #include "Common/CommonPaths.h"
+@@ -940,6 +941,24 @@ JNIEXPORT jlong JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetPadOverr
+   return static_cast<jlong>(SerialInterface::SI_PadOverride::LatestSetAgeUs(port));
+ }
+ 
++JNIEXPORT jstring JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetInputDiagnosticsLog(
++    JNIEnv* env, jclass)
++{
++  return env->NewStringUTF(Common::AndroidInputDiagnostics::Dump().c_str());
++}
++
++JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetInputDiagnosticsEnabled(
++    JNIEnv*, jclass, jboolean enabled, jboolean logcat_enabled)
++{
++  const bool should_enable = enabled == JNI_TRUE;
++  if (should_enable)
++    Common::AndroidInputDiagnostics::Clear();
++  Common::AndroidInputDiagnostics::SetLogcatEnabled(logcat_enabled == JNI_TRUE);
++  Common::AndroidInputDiagnostics::SetEnabled(should_enable);
++  if (!should_enable)
++    Common::AndroidInputDiagnostics::SetLogcatEnabled(false);
++}
++
+ JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetMeleePadFloats(
+     JNIEnv*, jclass, jint, jfloat, jfloat, jfloat, jfloat)
+ {
+diff --git a/Source/Core/Common/AndroidInputDiagnostics.cpp b/Source/Core/Common/AndroidInputDiagnostics.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..2f6f6fc45f1d7a8d57ffe247d37edb433a2ec626
+--- /dev/null
++++ b/Source/Core/Common/AndroidInputDiagnostics.cpp
+@@ -0,0 +1,123 @@
++// Copyright 2026 Dolphin Emulator Project
++// Licensed under GPLv2+
++// Refer to the license.txt file included.
++
++#include "Common/AndroidInputDiagnostics.h"
++
++#include <array>
++#include <atomic>
++#include <cstdarg>
++#include <cstdio>
++#include <mutex>
++#include <sstream>
++#include <string>
++
++#ifdef ANDROID
++#include <android/log.h>
++#include <sys/system_properties.h>
++#endif
++
++namespace Common::AndroidInputDiagnostics
++{
++namespace
++{
++constexpr size_t RING_SIZE = 512;
++constexpr size_t MAX_LINE_BYTES = 1024;
++
++std::mutex s_mutex;
++std::array<std::string, RING_SIZE> s_lines;
++size_t s_next_line = 0;
++size_t s_line_count = 0;
++std::atomic<bool> s_enabled{false};
++std::atomic<bool> s_logcat_enabled{false};
++
++#ifdef ANDROID
++bool AndroidPropertyEnabled(const char* name)
++{
++  char value[PROP_VALUE_MAX] = {};
++  if (__system_property_get(name, value) <= 0)
++    return false;
++  return value[0] == '1' || value[0] == 'y' || value[0] == 'Y' ||
++         value[0] == 't' || value[0] == 'T';
++}
++#endif
++
++void PushLine(const char* tag, const char* message)
++{
++  if (!message || message[0] == '\0')
++    return;
++
++#ifdef ANDROID
++  if (s_logcat_enabled.load(std::memory_order_relaxed) ||
++      AndroidPropertyEnabled("debug.slippi.input_diag_logcat"))
++  {
++    __android_log_print(ANDROID_LOG_INFO, tag && tag[0] ? tag : "SlippiInputDiag", "%s", message);
++  }
++#endif
++
++  std::lock_guard<std::mutex> lock(s_mutex);
++  s_lines[s_next_line] = std::string(tag && tag[0] ? tag : "SlippiInputDiag") + ": " + message;
++  s_next_line = (s_next_line + 1) % RING_SIZE;
++  if (s_line_count < RING_SIZE)
++    ++s_line_count;
++}
++}  // namespace
++
++void SetEnabled(bool enabled)
++{
++  s_enabled.store(enabled, std::memory_order_relaxed);
++}
++
++bool IsEnabled()
++{
++  return s_enabled.load(std::memory_order_relaxed);
++}
++
++void SetLogcatEnabled(bool enabled)
++{
++  s_logcat_enabled.store(enabled, std::memory_order_relaxed);
++}
++
++void Record(const char* tag, const char* format, ...)
++{
++  if (!IsEnabled())
++    return;
++
++  if (!format)
++    return;
++
++  char line[MAX_LINE_BYTES];
++  va_list args;
++  va_start(args, format);
++  vsnprintf(line, sizeof(line), format, args);
++  va_end(args);
++  line[sizeof(line) - 1] = '\0';
++
++  PushLine(tag, line);
++}
++
++std::string Dump()
++{
++  std::lock_guard<std::mutex> lock(s_mutex);
++  if (s_line_count == 0)
++    return {};
++
++  std::ostringstream out;
++  const size_t first = s_line_count == RING_SIZE ? s_next_line : 0;
++  for (size_t i = 0; i < s_line_count; ++i)
++  {
++    const size_t idx = (first + i) % RING_SIZE;
++    out << s_lines[idx] << '\n';
++  }
++  return out.str();
++}
++
++void Clear()
++{
++  std::lock_guard<std::mutex> lock(s_mutex);
++  for (std::string& line : s_lines)
++    line.clear();
++  s_next_line = 0;
++  s_line_count = 0;
++}
++}  // namespace Common::AndroidInputDiagnostics
+diff --git a/Source/Core/Common/AndroidInputDiagnostics.h b/Source/Core/Common/AndroidInputDiagnostics.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..4350cbcb291016141b48e2f5dd2879be4e615637
+--- /dev/null
++++ b/Source/Core/Common/AndroidInputDiagnostics.h
+@@ -0,0 +1,17 @@
++// Copyright 2026 Dolphin Emulator Project
++// Licensed under GPLv2+
++// Refer to the license.txt file included.
++
++#pragma once
++
++#include <string>
++
++namespace Common::AndroidInputDiagnostics
++{
++void SetEnabled(bool enabled);
++bool IsEnabled();
++void SetLogcatEnabled(bool enabled);
++void Record(const char* tag, const char* format, ...);
++std::string Dump();
++void Clear();
++}  // namespace Common::AndroidInputDiagnostics
+diff --git a/Source/Core/Common/CMakeLists.txt b/Source/Core/Common/CMakeLists.txt
+index 2b638f5984eb17e6607793ac22efbe48fac14984..26eec6b0c6f7a193b2480bf4f5ef786c9d33d89e 100644
+--- a/Source/Core/Common/CMakeLists.txt
++++ b/Source/Core/Common/CMakeLists.txt
+@@ -225,6 +225,8 @@ if(ANDROID)
+   target_sources(common PRIVATE
+     AndroidAnalytics.cpp
+     AndroidAnalytics.h
++    AndroidInputDiagnostics.cpp
++    AndroidInputDiagnostics.h
+     Logging/ConsoleListenerDroid.cpp
+     MemArenaAndroid.cpp
+   )
+diff --git a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
+index b9775900c8097fdc00fcd28618e102c950c51461..1a7d8bce2dce0318454511c6c64eeb0e6dbab2c9 100644
+--- a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
++++ b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
+@@ -9,6 +9,8 @@
+ 
+ #ifdef ANDROID
+ #include <android/log.h>
++#include <cstring>
++#include <mutex>
+ #endif
+ 
+ #include "Common/CommonPaths.h"
+@@ -45,6 +47,10 @@
+ #include "Core/System.h"
+ #include "VideoCommon/OnScreenDisplay.h"
+ 
++#ifdef ANDROID
++#include "Common/AndroidInputDiagnostics.h"
++#endif
++
+ // The Rust library that houses a "shadow" EXI Device that we can call into.
+ #include "SlippiRustExtensions.h"
+ 
+@@ -74,6 +80,46 @@ namespace ExpansionInterface
+ static std::unordered_map<u8, std::string> slippi_names;
+ static std::unordered_map<u8, std::string> slippi_connect_codes;
+ 
++#ifdef ANDROID
++namespace
++{
++void RecordSlippiPadBuffer(s32 frame, u8 delay, s32 checksum_frame, u32 checksum, const u8* inputs)
++{
++  if (!Common::AndroidInputDiagnostics::IsEnabled())
++    return;
++
++  if (!inputs)
++    return;
++
++  static std::mutex s_diag_mutex;
++  static u8 s_last[8] = {};
++  static bool s_have_last = false;
++  static int s_count = 0;
++
++  bool changed = false;
++  {
++    std::lock_guard<std::mutex> lock(s_diag_mutex);
++    ++s_count;
++    changed = !s_have_last || std::memcmp(s_last, inputs, 8) != 0;
++    if (changed)
++    {
++      std::memcpy(s_last, inputs, 8);
++      s_have_last = true;
++    }
++    if (!changed && s_count != 1 && (s_count % 60) != 0)
++      return;
++  }
++
++  Common::AndroidInputDiagnostics::Record(
++      "SlippiPadBuffer",
++      "handle_send_inputs frame=%d target_frame=%d delay=%u checksum_frame=%d checksum=0x%08x "
++      "pad=%02x%02x%02x%02x%02x%02x%02x%02x changed=%d",
++      frame, frame + delay, static_cast<unsigned>(delay), checksum_frame, checksum, inputs[0],
++      inputs[1], inputs[2], inputs[3], inputs[4], inputs[5], inputs[6], inputs[7], changed ? 1 : 0);
++}
++}  // namespace
++#endif
++
+ template <typename T>
+ bool isFutureReady(std::future<T>& t)
+ {
+@@ -1506,6 +1549,10 @@ bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
+ 
+ void CEXISlippi::handleSendInputs(s32 frame, u8 delay, s32 checksum_frame, u32 checksum, u8* inputs)
+ {
++#ifdef ANDROID
++  RecordSlippiPadBuffer(frame, delay, checksum_frame, checksum, inputs);
++#endif
++
+   // On the first frame sent, we need to queue up empty dummy pads for as many
+   // frames as we have delay
+   if (frame == 1)
+diff --git a/Source/Core/Core/NetPlayClient.cpp b/Source/Core/Core/NetPlayClient.cpp
+index af5f545ab095121878469ae55b807118b3ee1e9f..3845e3e1215d6485bed3e9abbcd951839a0725f0 100644
+--- a/Source/Core/Core/NetPlayClient.cpp
++++ b/Source/Core/Core/NetPlayClient.cpp
+@@ -21,6 +21,9 @@
+ #include <fmt/ranges.h>
+ 
+ #include "Common/Assert.h"
++#ifdef ANDROID
++#include "Common/AndroidInputDiagnostics.h"
++#endif
+ #include "Common/CommonPaths.h"
+ #include "Common/CommonTypes.h"
+ #include "Common/Crypto/SHA1.h"
+@@ -87,6 +90,64 @@ static std::mutex crit_netplay_client;
+ static NetPlayClient* netplay_client = nullptr;
+ static bool s_si_poll_batching = false;
+ 
++#ifdef ANDROID
++static bool AndroidPadStatusEquals(const GCPadStatus& a, const GCPadStatus& b)
++{
++  return a.button == b.button && a.stickX == b.stickX && a.stickY == b.stickY &&
++         a.substickX == b.substickX && a.substickY == b.substickY &&
++         a.triggerLeft == b.triggerLeft && a.triggerRight == b.triggerRight &&
++         a.analogA == b.analogA && a.analogB == b.analogB && a.isConnected == b.isConnected;
++}
++
++static void RecordAndroidNetplayPadPoll(int local_pad, int ingame_pad,
++                                        SerialInterface::SIDevices si_device,
++                                        const GCPadStatus& pad_status, size_t buffer_size,
++                                        unsigned int target_buffer_size)
++{
++  if (!Common::AndroidInputDiagnostics::IsEnabled())
++    return;
++
++  if (local_pad < 0 || local_pad >= static_cast<int>(SerialInterface::MAX_SI_CHANNELS))
++    return;
++
++  static std::mutex s_diag_mutex;
++  static std::array<GCPadStatus, SerialInterface::MAX_SI_CHANNELS> s_last_status{};
++  static std::array<bool, SerialInterface::MAX_SI_CHANNELS> s_have_status{};
++  static std::array<u64, SerialInterface::MAX_SI_CHANNELS> s_poll_counts{};
++
++  bool should_log = false;
++  bool changed = false;
++  u64 poll_count = 0;
++  {
++    std::lock_guard<std::mutex> lock(s_diag_mutex);
++    poll_count = ++s_poll_counts[local_pad];
++    changed =
++        !s_have_status[local_pad] || !AndroidPadStatusEquals(s_last_status[local_pad], pad_status);
++    should_log = changed || (poll_count % 120) == 0;
++    if (changed)
++    {
++      s_last_status[local_pad] = pad_status;
++      s_have_status[local_pad] = true;
++    }
++  }
++
++  if (!should_log)
++    return;
++
++  Common::AndroidInputDiagnostics::Record(
++      "SlippiNetplay",
++      "poll_local_pad count=%llu changed=%d local=%d ingame=%d si=%d buffer=%zu target=%u "
++      "btn=0x%04x stick=(%u,%u) c=(%u,%u) trig=(%u,%u)",
++      static_cast<unsigned long long>(poll_count), changed ? 1 : 0, local_pad, ingame_pad,
++      static_cast<int>(si_device), buffer_size, target_buffer_size,
++      static_cast<unsigned int>(pad_status.button), static_cast<unsigned int>(pad_status.stickX),
++      static_cast<unsigned int>(pad_status.stickY), static_cast<unsigned int>(pad_status.substickX),
++      static_cast<unsigned int>(pad_status.substickY),
++      static_cast<unsigned int>(pad_status.triggerLeft),
++      static_cast<unsigned int>(pad_status.triggerRight));
++}
++#endif
++
+ // called from ---GUI--- thread
+ NetPlayClient::~NetPlayClient()
+ {
+@@ -2183,6 +2241,7 @@ bool NetPlayClient::WiimoteUpdate(const std::span<WiimoteDataBatchEntry>& entrie
+ bool NetPlayClient::PollLocalPad(const int local_pad, sf::Packet& packet)
+ {
+   const int ingame_pad = LocalPadToInGamePad(local_pad);
++  const auto si_device = Config::Get(Config::GetInfoForSIDevice(local_pad));
+   bool data_added = false;
+   GCPadStatus pad_status;
+ 
+@@ -2190,8 +2249,7 @@ bool NetPlayClient::PollLocalPad(const int local_pad, sf::Packet& packet)
+   {
+     pad_status = Pad::GetGBAStatus(local_pad);
+   }
+-  else if (Config::Get(Config::GetInfoForSIDevice(local_pad)) ==
+-           SerialInterface::SIDEVICE_WIIU_ADAPTER)
++  else if (si_device == SerialInterface::SIDEVICE_WIIU_ADAPTER)
+   {
+     pad_status = GCAdapter::Input(local_pad);
+   }
+@@ -2201,6 +2259,11 @@ bool NetPlayClient::PollLocalPad(const int local_pad, sf::Packet& packet)
+       pad_status = Pad::GetStatus(local_pad);
+   }
+ 
++#ifdef ANDROID
++  RecordAndroidNetplayPadPoll(local_pad, ingame_pad, si_device, pad_status,
++                              m_pad_buffer[ingame_pad].Size(), m_target_buffer_size);
++#endif
++
+   if (m_host_input_authority)
+   {
+     if (m_local_player->pid != m_current_golfer)
+diff --git a/Source/Core/InputCommon/GCAdapter.cpp b/Source/Core/InputCommon/GCAdapter.cpp
+index 029ac1ce4352e0df72cfe8fea152136bce7e144c..19b81389c49c819d8b97249cbf83b09014d02f4e 100644
+--- a/Source/Core/InputCommon/GCAdapter.cpp
++++ b/Source/Core/InputCommon/GCAdapter.cpp
+@@ -13,8 +13,10 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <atomic>
+ #include <cerrno>
+ #include <chrono>
++#include <cstring>
+ #include <mutex>
+ #include <optional>
+ 
+@@ -44,6 +46,7 @@
+ #include "Common/ScopeGuard.h"
+ #include "Core/LibusbUtils.h"
+ #elif GCADAPTER_USE_ANDROID_IMPLEMENTATION
++#include "Common/AndroidInputDiagnostics.h"
+ #include "jni/AndroidCommon/IDCache.h"
+ #endif
+ 
+@@ -189,6 +192,9 @@ static double s_read_rate = 0.0;
+ // slippi change: for poll rate display
+ 
+ #if GCADAPTER_USE_ANDROID_IMPLEMENTATION
++static std::atomic<u64> s_android_payload_sequence{0};
++static std::atomic<u64> s_android_last_payload_us{0};
++
+ static u64 NowUs()
+ {
+   return static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
+@@ -204,6 +210,61 @@ static void BoostAndroidAdapterThread(const char* thread_name)
+   }
+ }
+ 
++static bool PadStatusEquals(const GCPadStatus& a, const GCPadStatus& b)
++{
++  return a.button == b.button && a.stickX == b.stickX && a.stickY == b.stickY &&
++         a.substickX == b.substickX && a.substickY == b.substickY &&
++         a.triggerLeft == b.triggerLeft && a.triggerRight == b.triggerRight &&
++         a.analogA == b.analogA && a.analogB == b.analogB && a.isConnected == b.isConnected;
++}
++
++static void RecordAndroidInputSample(int chan, const GCPadStatus& pad, u64 now_us)
++{
++  if (!Common::AndroidInputDiagnostics::IsEnabled())
++    return;
++
++  if (chan < 0 || chan >= static_cast<int>(SerialInterface::MAX_SI_CHANNELS))
++    return;
++
++  static std::mutex s_diag_mutex;
++  static std::array<GCPadStatus, SerialInterface::MAX_SI_CHANNELS> s_last_status{};
++  static std::array<bool, SerialInterface::MAX_SI_CHANNELS> s_have_status{};
++  static std::array<u64, SerialInterface::MAX_SI_CHANNELS> s_poll_counts{};
++
++  const u64 payload_us = s_android_last_payload_us.load(std::memory_order_relaxed);
++  const u64 payload_sequence = s_android_payload_sequence.load(std::memory_order_relaxed);
++  const u64 age_us = payload_us > 0 && now_us > payload_us ? now_us - payload_us : 0;
++
++  bool should_log = false;
++  bool changed = false;
++  u64 poll_count = 0;
++  {
++    std::lock_guard<std::mutex> lock(s_diag_mutex);
++    poll_count = ++s_poll_counts[chan];
++    changed = !s_have_status[chan] || !PadStatusEquals(s_last_status[chan], pad);
++    should_log = changed || (poll_count % 120) == 0;
++    if (changed)
++    {
++      s_last_status[chan] = pad;
++      s_have_status[chan] = true;
++    }
++  }
++
++  if (!should_log)
++    return;
++
++  Common::AndroidInputDiagnostics::Record(
++      "SlippiGCAdapter",
++      "input_sample count=%llu changed=%d chan=%d payload_seq=%llu age_us=%llu btn=0x%04x "
++      "stick=(%u,%u) c=(%u,%u) trig=(%u,%u)",
++      static_cast<unsigned long long>(poll_count), changed ? 1 : 0, chan,
++      static_cast<unsigned long long>(payload_sequence), static_cast<unsigned long long>(age_us),
++      static_cast<unsigned int>(pad.button), static_cast<unsigned int>(pad.stickX),
++      static_cast<unsigned int>(pad.stickY), static_cast<unsigned int>(pad.substickX),
++      static_cast<unsigned int>(pad.substickY), static_cast<unsigned int>(pad.triggerLeft),
++      static_cast<unsigned int>(pad.triggerRight));
++}
++
+ static GCPadStatus NeutralPadForStalePayload(int chan, PortState& pad_state, u64 now_us)
+ {
+   GCPadStatus pad = {};
+@@ -229,6 +287,12 @@ static GCPadStatus NeutralPadForStalePayload(int chan, PortState& pad_state, u64
+                  "Android WUP stale report neutralized port={} age_us={} threshold_us={} "
+                  "type_byte={:02x}",
+                  chan, age_us, STALE_PAYLOAD_NEUTRAL_US, pad_state.type_byte);
++    Common::AndroidInputDiagnostics::Record(
++        "SlippiGCAdapter",
++        "wup_stale_neutralized chan=%d age_us=%llu threshold_us=%llu type_byte=0x%02x", chan,
++        static_cast<unsigned long long>(age_us),
++        static_cast<unsigned long long>(STALE_PAYLOAD_NEUTRAL_US),
++        static_cast<unsigned int>(pad_state.type_byte));
+   }
+   return pad;
+ }
+@@ -877,27 +941,43 @@ GCPadStatus Input(int chan)
+     return {};
+ #endif
+ 
+-  std::lock_guard lk(s_read_mutex);
+-
+-  auto& pad_state = s_port_states[chan];
+-
+ #if GCADAPTER_USE_ANDROID_IMPLEMENTATION
+   const u64 now_us = NowUs();
+-  if (pad_state.last_payload_time_us > 0 && now_us > pad_state.last_payload_time_us &&
+-      now_us - pad_state.last_payload_time_us > STALE_PAYLOAD_NEUTRAL_US)
+-  {
+-    return NeutralPadForStalePayload(chan, pad_state, now_us);
+-  }
+ #endif
+ 
+-  // Return the "origin" state for the first input on a new connection.
+-  if (pad_state.is_new_connection)
++  GCPadStatus result = {};
+   {
+-    pad_state.is_new_connection = false;
+-    return pad_state.origin;
++    std::lock_guard lk(s_read_mutex);
++
++    auto& pad_state = s_port_states[chan];
++
++#if GCADAPTER_USE_ANDROID_IMPLEMENTATION
++    const bool stale_payload = pad_state.last_payload_time_us > 0 &&
++                               now_us > pad_state.last_payload_time_us &&
++                               now_us - pad_state.last_payload_time_us > STALE_PAYLOAD_NEUTRAL_US;
++    if (stale_payload)
++    {
++      result = NeutralPadForStalePayload(chan, pad_state, now_us);
++    }
++    else
++#endif
++    if (pad_state.is_new_connection)
++    {
++      // Return the "origin" state for the first input on a new connection.
++      pad_state.is_new_connection = false;
++      result = pad_state.origin;
++    }
++    else
++    {
++      result = pad_state.status;
++    }
+   }
+ 
+-  return pad_state.status;
++#if GCADAPTER_USE_ANDROID_IMPLEMENTATION
++  RecordAndroidInputSample(chan, result, now_us);
++#endif
++
++  return result;
+ }
+ 
+ // Get ControllerType from first byte in input payload.
+@@ -921,9 +1001,13 @@ void ProcessInputPayload(const u8* data, std::size_t size)
+   )
+   {
+     // This can occur for a few frames on initialization.
++    const u8 type_byte = size > 0 ? data[0] : 0;
+     ERROR_LOG_FMT(CONTROLLERINTERFACE, "error reading payload (size: {}, type: {:02x})", size,
+-                  data[0]);
++                  type_byte);
+ #if GCADAPTER_USE_ANDROID_IMPLEMENTATION
++    Common::AndroidInputDiagnostics::Record("SlippiGCAdapter",
++                                            "payload_invalid size=%zu type_byte=0x%02x", size,
++                                            static_cast<unsigned int>(type_byte));
+     Reset(CalledFromReadThread::Yes);
+ #endif
+   }
+@@ -1009,6 +1093,11 @@ void ProcessInputPayload(const u8* data, std::size_t size)
+       pad_state.last_payload_time_us = payload_time_us;
+ #endif
+     }
++
++#if GCADAPTER_USE_ANDROID_IMPLEMENTATION
++    s_android_last_payload_us.store(payload_time_us, std::memory_order_relaxed);
++    s_android_payload_sequence.fetch_add(1, std::memory_order_relaxed);
++#endif
+   }
+ }
+ 

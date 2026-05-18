@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: laurenceputterman <mlputterman@gmail.com>
+Date: Sun, 17 May 2026 15:52:26 -0700
+Subject: [PATCH 6/7] android latency input display polish
+
+---
+ Source/Android/jni/MainAndroid.cpp    | 10 ++++++++--
+ Source/Core/Core/NetPlayClient.cpp    |  3 ++-
+ Source/Core/InputCommon/GCAdapter.cpp | 16 ++++++++++++++++
+ 3 files changed, 26 insertions(+), 3 deletions(-)
+
+diff --git a/Source/Android/jni/MainAndroid.cpp b/Source/Android/jni/MainAndroid.cpp
+index 005f1b50cd3fc53af8936d08fb14ddd9d5d0f3e9..688f11c8b14bab1809e0093b41fee791d65717db 100644
+--- a/Source/Android/jni/MainAndroid.cpp
++++ b/Source/Android/jni/MainAndroid.cpp
+@@ -826,13 +826,19 @@ JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SurfaceChang
+ {
+   std::lock_guard<std::mutex> guard(s_surface_lock);
+ 
+-  s_surf = ANativeWindow_fromSurface(env, surf);
+-  if (s_surf == nullptr)
++  ANativeWindow* next_surf = ANativeWindow_fromSurface(env, surf);
++  if (next_surf == nullptr)
+     __android_log_print(ANDROID_LOG_ERROR, DOLPHIN_TAG, "Error: Surface is null.");
+ 
++  ANativeWindow* previous_surf = s_surf;
++  s_surf = next_surf;
++
+   if (g_presenter)
+     g_presenter->ChangeSurface(s_surf);
+ 
++  if (previous_surf)
++    ANativeWindow_release(previous_surf);
++
+   s_surface_cv.notify_all();
+ }
+ 
+diff --git a/Source/Core/Core/NetPlayClient.cpp b/Source/Core/Core/NetPlayClient.cpp
+index a851e86dd85b923e7b2de890bc0e98149268b879..af5f545ab095121878469ae55b807118b3ee1e9f 100644
+--- a/Source/Core/Core/NetPlayClient.cpp
++++ b/Source/Core/Core/NetPlayClient.cpp
+@@ -2197,7 +2197,8 @@ bool NetPlayClient::PollLocalPad(const int local_pad, sf::Packet& packet)
+   }
+   else
+   {
+-    pad_status = Pad::GetStatus(local_pad);
++    if (!SerialInterface::SI_PadOverride::Get(local_pad, &pad_status))
++      pad_status = Pad::GetStatus(local_pad);
+   }
+ 
+   if (m_host_input_authority)
+diff --git a/Source/Core/InputCommon/GCAdapter.cpp b/Source/Core/InputCommon/GCAdapter.cpp
+index e48f3a78144ffc41d948054188a5dc50af856ff8..029ac1ce4352e0df72cfe8fea152136bce7e144c 100644
+--- a/Source/Core/InputCommon/GCAdapter.cpp
++++ b/Source/Core/InputCommon/GCAdapter.cpp
+@@ -13,6 +13,7 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <cerrno>
+ #include <chrono>
+ #include <mutex>
+ #include <optional>
+@@ -21,6 +22,7 @@
+ #include <libusb.h>
+ #elif GCADAPTER_USE_ANDROID_IMPLEMENTATION
+ #include <jni.h>
++#include <sys/resource.h>
+ #endif
+ 
+ #include "Common/BitUtils.h"
+@@ -194,6 +196,14 @@ static u64 NowUs()
+                               .count());
+ }
+ 
++static void BoostAndroidAdapterThread(const char* thread_name)
++{
++  if (setpriority(PRIO_PROCESS, 0, -8) != 0)
++  {
++    WARN_LOG_FMT(CONTROLLERINTERFACE, "{} setpriority(-8) failed errno={}", thread_name, errno);
++  }
++}
++
+ static GCPadStatus NeutralPadForStalePayload(int chan, PortState& pad_state, u64 now_us)
+ {
+   GCPadStatus pad = {};
+@@ -227,6 +237,9 @@ static GCPadStatus NeutralPadForStalePayload(int chan, PortState& pad_state, u64
+ static void ReadThreadFunc()
+ {
+   Common::SetCurrentThreadName("GCAdapter Read Thread");
++#if GCADAPTER_USE_ANDROID_IMPLEMENTATION
++  BoostAndroidAdapterThread("GCAdapter Read Thread");
++#endif
+   NOTICE_LOG_FMT(CONTROLLERINTERFACE, "GCAdapter read thread started");
+ 
+ #if GCADAPTER_USE_ANDROID_IMPLEMENTATION
+@@ -352,6 +365,9 @@ static void ReadThreadFunc()
+ static void WriteThreadFunc()
+ {
+   Common::SetCurrentThreadName("GCAdapter Write Thread");
++#if GCADAPTER_USE_ANDROID_IMPLEMENTATION
++  BoostAndroidAdapterThread("GCAdapter Write Thread");
++#endif
+   NOTICE_LOG_FMT(CONTROLLERINTERFACE, "GCAdapter write thread started");
+ 
+ #if GCADAPTER_USE_LIBUSB_IMPLEMENTATION
