@@ -91,12 +91,16 @@ public final class ReplayConfig {
     }
 
     public static void ensureReplayDirectory(Context ctx) {
-        ensureDir(defaultReplaysDir(ctx));
-        ensureDir(nativeReplayWriteDir(ctx));
+        ensureReplayDirectories(ctx);
         if (hasCustomReplayFolder(ctx)) {
             exportLocalReplaysToCustomFolder(ctx);
             drainNativeReplayStaging(ctx);
         }
+    }
+
+    public static void ensureReplayDirectories(Context ctx) {
+        ensureDir(defaultReplaysDir(ctx));
+        ensureDir(nativeReplayWriteDir(ctx));
     }
 
     public static boolean hasCustomReplayFolder(Context ctx) {

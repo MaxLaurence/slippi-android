@@ -2,6 +2,7 @@
 // Licensed under GPLv2+
 package org.dolphinemu.dolphinemu.activities;
 
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
@@ -37,7 +38,6 @@ import org.dolphinemu.dolphinemu.EmulatorCore;
 import org.dolphinemu.dolphinemu.MainlineCore;
 import org.dolphinemu.dolphinemu.NativeLibrary;
 import org.dolphinemu.dolphinemu.R;
-import org.dolphinemu.dolphinemu.UserDirectoryBootstrap;
 import org.dolphinemu.dolphinemu.gpu.GpuDriverManager;
 import org.dolphinemu.dolphinemu.replay.ReplayConfig;
 import org.dolphinemu.dolphinemu.replay.ReplayItem;
@@ -46,11 +46,15 @@ import org.dolphinemu.dolphinemu.replay.ReplayStore;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /**
  * Lists every .slp under the managed Replays directory. Tap to play,
@@ -68,6 +72,11 @@ public class ReplayListActivity extends AppCompatActivity {
     private MaterialToolbar toolbar;
     private TextView emptyView;
     private TextView folderStatus;
+    private long currentTotalBytes;
+    private int refreshGeneration;
+    private Future<?> scanFuture;
+    private Future<?> metadataFuture;
+    private final ExecutorService scanExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService metaExecutor = Executors.newSingleThreadExecutor();
     private final Handler ui = new Handler(Looper.getMainLooper());
 
@@ -78,12 +87,22 @@ public class ReplayListActivity extends AppCompatActivity {
                     toast(getString(R.string.replay_folder_select_failed));
                     return;
                 }
-                ReplayConfig.MoveResult moved = ReplayConfig.exportLocalReplaysToCustomFolder(this);
-                ReplayConfig.MoveResult staged = ReplayConfig.drainNativeReplayStaging(this);
                 applyReplayNativeConfig();
-                toast(getString(R.string.replay_folder_selected_toast,
-                        moved.moved + staged.moved));
-                refresh();
+                emptyView.setVisibility(View.VISIBLE);
+                emptyView.setText(R.string.replay_hud_loading);
+                Context appContext = getApplicationContext();
+                scanExecutor.execute(() -> {
+                    ReplayConfig.MoveResult moved =
+                            ReplayConfig.exportLocalReplaysToCustomFolder(appContext);
+                    ReplayConfig.MoveResult staged =
+                            ReplayConfig.drainNativeReplayStaging(appContext);
+                    ui.post(() -> {
+                        if (isFinishing()) return;
+                        toast(getString(R.string.replay_folder_selected_toast,
+                                moved.moved + staged.moved));
+                        refresh();
+                    });
+                });
             });
 
     @Override
@@ -114,8 +133,6 @@ public class ReplayListActivity extends AppCompatActivity {
         saveSwitch.setOnCheckedChangeListener((b, isChecked) ->
                 NativeLibrary.SetConfig("Dolphin.ini", "Core", "SlippiSaveReplays",
                         isChecked ? "True" : "False"));
-
-        refresh();
     }
 
     @Override
@@ -127,27 +144,81 @@ public class ReplayListActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (scanFuture != null) scanFuture.cancel(true);
+        if (metadataFuture != null) metadataFuture.cancel(true);
+        ui.removeCallbacksAndMessages(null);
+        scanExecutor.shutdownNow();
         metaExecutor.shutdownNow();
     }
 
     private void refresh() {
-        List<ReplayItem> files = store.list();
-        adapter.setItems(files);
-        toolbar.setTitle(getString(R.string.replay_list_header,
-                files.size(), ReplayStore.humanSize(store.totalSize())));
-        if (folderStatus != null) {
-            folderStatus.setText(getString(R.string.replay_folder_status,
-                    ReplayConfig.replayFolderLabel(this)));
-        }
-        boolean noIso = !hasIso();
-        if (files.isEmpty()) {
+        final int generation = ++refreshGeneration;
+        if (scanFuture != null) scanFuture.cancel(true);
+        if (metadataFuture != null) metadataFuture.cancel(true);
+        if (adapter.getItemCount() == 0) {
+            toolbar.setTitle(R.string.replay_list_title);
             emptyView.setVisibility(View.VISIBLE);
-            emptyView.setText(noIso
-                    ? R.string.replay_list_empty_no_iso
-                    : R.string.replay_list_empty);
-        } else {
-            emptyView.setVisibility(View.GONE);
+            emptyView.setText(R.string.replay_hud_loading);
         }
+        Context appContext = getApplicationContext();
+        scanFuture = scanExecutor.submit(() -> {
+            ReplayStore.ScanResult result = store.scan();
+            String folderLabel = ReplayConfig.replayFolderLabel(appContext);
+            ui.post(() -> {
+                if (generation != refreshGeneration || isFinishing()) return;
+                currentTotalBytes = result.totalBytes;
+                adapter.setItems(result.items);
+                updateToolbarTitle();
+                if (folderStatus != null) {
+                    folderStatus.setText(getString(R.string.replay_folder_status, folderLabel));
+                }
+                updateEmptyState(result.items);
+                enrichMetadata(generation, result.items);
+            });
+        });
+    }
+
+    private void enrichMetadata(int generation, List<ReplayItem> scanItems) {
+        Context appContext = getApplicationContext();
+        List<ReplayItem> ordered = new ArrayList<>(scanItems);
+        metadataFuture = metaExecutor.submit(() -> {
+            Map<ReplayItem, ReplayMetadata> parsed = new HashMap<>();
+            for (ReplayItem item : ordered) {
+                if (Thread.currentThread().isInterrupted()) return;
+                parsed.put(item, ReplayMetadata.parse(appContext, item));
+            }
+            Collections.sort(ordered, (a, b) -> {
+                ReplayMetadata am = parsed.get(a);
+                ReplayMetadata bm = parsed.get(b);
+                boolean ap = am != null && am.isPlayable();
+                boolean bp = bm != null && bm.isPlayable();
+                if (ap != bp) return ap ? -1 : 1;
+                return Long.compare(b.lastModified(), a.lastModified());
+            });
+            ui.post(() -> {
+                if (generation != refreshGeneration || isFinishing()) return;
+                adapter.applyMetadata(ordered, parsed);
+                updateToolbarTitle();
+                updateEmptyState(ordered);
+            });
+        });
+    }
+
+    private void updateToolbarTitle() {
+        if (adapter != null && adapter.hasSelection()) return;
+        toolbar.setTitle(getString(R.string.replay_list_header,
+                adapter.getItemCount(), ReplayStore.humanSize(currentTotalBytes)));
+    }
+
+    private void updateEmptyState(List<ReplayItem> files) {
+        if (!files.isEmpty()) {
+            emptyView.setVisibility(View.GONE);
+            return;
+        }
+        emptyView.setVisibility(View.VISIBLE);
+        emptyView.setText(hasIso()
+                ? R.string.replay_list_empty
+                : R.string.replay_list_empty_no_iso);
     }
 
     /** Reset the toolbar to the static "Replays · N · size" + top-bar menu. */
@@ -190,7 +261,7 @@ public class ReplayListActivity extends AppCompatActivity {
     }
 
     private void applyReplayNativeConfig() {
-        ReplayConfig.ensureReplayDirectory(this);
+        ReplayConfig.ensureReplayDirectories(this);
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "SlippiReplayDir",
                 ReplayConfig.nativeReplayWriteDir(this).getAbsolutePath());
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "SlippiReplayMonthFolders", "False");
@@ -199,37 +270,34 @@ public class ReplayListActivity extends AppCompatActivity {
     private void confirmDeleteOlder(int days) {
         long ageMs = (long) days * 24L * 60L * 60L * 1000L;
         long cutoff = System.currentTimeMillis() - ageMs;
-        int matched = 0;
-        for (ReplayItem f : store.list()) if (f.lastModified() < cutoff) matched++;
-        if (matched == 0) {
+        List<ReplayItem> matched = new ArrayList<>();
+        for (ReplayItem f : adapter.itemsSnapshot()) {
+            if (f.lastModified() < cutoff) matched.add(f);
+        }
+        if (matched.isEmpty()) {
             toast("Nothing older than " + days + " days");
             return;
         }
-        final int n = matched;
+        final int n = matched.size();
         new AlertDialog.Builder(this)
                 .setTitle(R.string.replay_delete_confirm_title)
                 .setMessage(getString(R.string.replay_delete_confirm_body, n))
                 .setNegativeButton(R.string.replay_cancel, null)
-                .setPositiveButton(R.string.replay_delete_confirm_cta, (d, w) -> {
-                    int deleted = store.deleteOlderThan(ageMs);
-                    toast("Deleted " + deleted);
-                    refresh();
-                })
+                .setPositiveButton(R.string.replay_delete_confirm_cta, (d, w) ->
+                        deleteReplays(matched, false))
                 .show();
     }
 
     private void confirmDeleteAll() {
-        int n = store.count();
+        List<ReplayItem> all = adapter.itemsSnapshot();
+        int n = all.size();
         if (n == 0) return;
         new AlertDialog.Builder(this)
                 .setTitle(R.string.replay_delete_confirm_title)
                 .setMessage(getString(R.string.replay_delete_confirm_body, n))
                 .setNegativeButton(R.string.replay_cancel, null)
-                .setPositiveButton(R.string.replay_delete_confirm_cta, (d, w) -> {
-                    int deleted = store.deleteAll();
-                    toast("Deleted " + deleted);
-                    refresh();
-                })
+                .setPositiveButton(R.string.replay_delete_confirm_cta, (d, w) ->
+                        deleteReplays(all, false))
                 .show();
     }
 
@@ -240,12 +308,22 @@ public class ReplayListActivity extends AppCompatActivity {
                 .setTitle(R.string.replay_delete_confirm_title)
                 .setMessage(getString(R.string.replay_delete_confirm_body, n))
                 .setNegativeButton(R.string.replay_cancel, null)
-                .setPositiveButton(R.string.replay_delete_confirm_cta, (d, w) -> {
-                    store.deleteMany(selected);
-                    adapter.clearSelection();
-                    refresh();
-                })
+                .setPositiveButton(R.string.replay_delete_confirm_cta, (d, w) ->
+                        deleteReplays(selected, true))
                 .show();
+    }
+
+    private void deleteReplays(List<ReplayItem> selected, boolean clearSelection) {
+        List<ReplayItem> files = new ArrayList<>(selected);
+        scanExecutor.execute(() -> {
+            int deleted = store.deleteMany(files);
+            ui.post(() -> {
+                if (isFinishing()) return;
+                if (clearSelection) adapter.clearSelection();
+                toast("Deleted " + deleted);
+                refresh();
+            });
+        });
     }
 
     private boolean hasIso() {
@@ -329,17 +407,36 @@ public class ReplayListActivity extends AppCompatActivity {
     private class ReplayAdapter extends RecyclerView.Adapter<ReplayRow> {
         private final List<ReplayItem> items = new ArrayList<>();
         private final Set<ReplayItem> selected = new HashSet<>();
+        private final Map<ReplayItem, ReplayMetadata> metadata = new HashMap<>();
 
         void setItems(List<ReplayItem> next) {
             items.clear();
             items.addAll(next);
             selected.retainAll(items);
+            metadata.keySet().retainAll(items);
+            notifyDataSetChanged();
+        }
+
+        void applyMetadata(List<ReplayItem> ordered, Map<ReplayItem, ReplayMetadata> parsed) {
+            items.clear();
+            items.addAll(ordered);
+            selected.retainAll(items);
+            metadata.clear();
+            metadata.putAll(parsed);
             notifyDataSetChanged();
         }
 
         void clearSelection() {
             selected.clear();
             notifyDataSetChanged();
+        }
+
+        List<ReplayItem> itemsSnapshot() {
+            return new ArrayList<>(items);
+        }
+
+        boolean hasSelection() {
+            return !selected.isEmpty();
         }
 
         @NonNull
@@ -380,8 +477,7 @@ public class ReplayListActivity extends AppCompatActivity {
         private void updateActionMode() {
             if (selected.isEmpty()) {
                 resetToolbar();
-                toolbar.setTitle(getString(R.string.replay_list_header,
-                        items.size(), ReplayStore.humanSize(store.totalSize())));
+                updateToolbarTitle();
                 return;
             }
             toolbar.getMenu().clear();
@@ -416,10 +512,9 @@ public class ReplayListActivity extends AppCompatActivity {
                             .setTitle(R.string.replay_delete_confirm_title)
                             .setMessage(getString(R.string.replay_delete_confirm_body, 1))
                             .setNegativeButton(R.string.replay_cancel, null)
-                            .setPositiveButton(R.string.replay_delete_confirm_cta, (d, w) -> {
-                                store.delete(f);
-                                refresh();
-                            }).show();
+                            .setPositiveButton(R.string.replay_delete_confirm_cta, (d, w) ->
+                                    deleteReplays(Collections.singletonList(f), false))
+                            .show();
                     return true;
                 }
                 if (id == R.id.menu_row_share) {
@@ -437,7 +532,6 @@ public class ReplayListActivity extends AppCompatActivity {
         final TextView subtitle;
         final TextView duration;
         final ImageButton overflow;
-        ReplayItem current;
 
         ReplayRow(@NonNull View itemView) {
             super(itemView);
@@ -448,7 +542,6 @@ public class ReplayListActivity extends AppCompatActivity {
         }
 
         void bind(ReplayItem f, boolean isSelected) {
-            current = f;
             title.setText(f.name());
             subtitle.setText(DateUtils.formatDateTime(itemView.getContext(),
                     f.lastModified(),
@@ -456,19 +549,15 @@ public class ReplayListActivity extends AppCompatActivity {
                             | DateUtils.FORMAT_ABBREV_MONTH));
             duration.setText("");
             itemView.setActivated(isSelected);
-            metaExecutor.execute(() -> {
-                ReplayMetadata m = ReplayMetadata.parse(ReplayListActivity.this, f);
-                ui.post(() -> {
-                    if (current != f) return;  // row was recycled
-                    if (m.isPlayable()) {
-                        title.setText(m.shortTitle());
-                        duration.setText(m.durationLabel());
-                    } else {
-                        title.setText(getString(R.string.replay_row_unparseable)
-                                + " · " + f.name());
-                    }
-                });
-            });
+            ReplayMetadata m = adapter.metadata.get(f);
+            if (m == null) return;
+            if (m.isPlayable()) {
+                title.setText(m.shortTitle());
+                duration.setText(m.durationLabel());
+            } else {
+                title.setText(getString(R.string.replay_row_unparseable)
+                        + " · " + f.name());
+            }
         }
     }
 }

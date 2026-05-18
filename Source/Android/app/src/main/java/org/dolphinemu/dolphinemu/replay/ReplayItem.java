@@ -13,19 +13,28 @@ public final class ReplayItem {
     private final File file;
     private final DocumentFile document;
     private final String stableKey;
+    private final String name;
+    private final long length;
+    private final long lastModified;
 
-    private ReplayItem(File file, DocumentFile document, String stableKey) {
+    private ReplayItem(File file, DocumentFile document, String stableKey,
+            String name, long length, long lastModified) {
         this.file = file;
         this.document = document;
         this.stableKey = stableKey;
+        this.name = name == null || name.isEmpty() ? "replay.slp" : name;
+        this.length = Math.max(0L, length);
+        this.lastModified = Math.max(0L, lastModified);
     }
 
     public static ReplayItem fromFile(File file) {
-        return new ReplayItem(file, null, file.getAbsolutePath());
+        return new ReplayItem(file, null, file.getAbsolutePath(),
+                file.getName(), file.length(), file.lastModified());
     }
 
     public static ReplayItem fromDocument(DocumentFile document) {
-        return new ReplayItem(null, document, document.getUri().toString());
+        return new ReplayItem(null, document, document.getUri().toString(),
+                document.getName(), document.length(), document.lastModified());
     }
 
     public boolean isLocalFile() {
@@ -45,17 +54,15 @@ public final class ReplayItem {
     }
 
     public String name() {
-        if (file != null) return file.getName();
-        String name = document.getName();
-        return name == null ? "replay.slp" : name;
+        return name;
     }
 
     public long length() {
-        return file != null ? file.length() : Math.max(0L, document.length());
+        return length;
     }
 
     public long lastModified() {
-        return file != null ? file.lastModified() : Math.max(0L, document.lastModified());
+        return lastModified;
     }
 
     public String stableKey() {

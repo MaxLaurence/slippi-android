@@ -31,31 +31,36 @@ public final class ReplayStore {
 
     public File localRoot() { return localRoot; }
 
-    /** Recursive walk; tolerates the month-folder layout if a user enables it later. */
-    public List<ReplayItem> list() {
+    /**
+     * Recursive walk; tolerates the month-folder layout if a user enables it later.
+     * This intentionally avoids parsing replay metadata so callers can run it on a
+     * background thread without turning a simple directory scan into per-file I/O.
+     */
+    public ScanResult scan() {
         if (ReplayConfig.hasCustomReplayFolder(context)) {
             ReplayConfig.drainNativeReplayStaging(context);
         }
         List<ReplayItem> out = new ArrayList<>();
+        long[] totalBytes = new long[1];
         DocumentFile custom = ReplayConfig.customReplayFolder(context);
         if (custom != null && custom.canRead()) {
-            walk(custom, out);
+            walk(custom, out, totalBytes);
         } else {
-            walk(localRoot, out);
+            walk(localRoot, out, totalBytes);
             if (ReplayConfig.hasCustomReplayFolder(context)) {
-                walk(ReplayConfig.stagingReplaysDir(context), out);
+                walk(ReplayConfig.stagingReplaysDir(context), out, totalBytes);
             }
         }
-        Collections.sort(out, this::comparePlayableThenMtimeDesc);
-        return out;
+        Collections.sort(out, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+        return new ScanResult(out, totalBytes[0]);
     }
 
-    public int count() { return list().size(); }
+    public List<ReplayItem> list() { return scan().items; }
+
+    public int count() { return scan().items.size(); }
 
     public long totalSize() {
-        long n = 0;
-        for (ReplayItem item : list()) n += item.length();
-        return n;
+        return scan().totalBytes;
     }
 
     public boolean delete(ReplayItem item) {
@@ -80,7 +85,7 @@ public final class ReplayStore {
     public int deleteOlderThan(long ageMs) {
         long cutoff = System.currentTimeMillis() - ageMs;
         int n = 0;
-        for (ReplayItem item : list()) {
+        for (ReplayItem item : scan().items) {
             if (item.lastModified() < cutoff && delete(item)) n++;
         }
         return n;
@@ -88,24 +93,26 @@ public final class ReplayStore {
 
     public int deleteAll() {
         int n = 0;
-        for (ReplayItem item : list()) if (delete(item)) n++;
+        for (ReplayItem item : scan().items) if (delete(item)) n++;
         return n;
     }
 
-    private void walk(File dir, List<ReplayItem> out) {
+    private void walk(File dir, List<ReplayItem> out, long[] totalBytes) {
         if (dir == null || !dir.isDirectory()) return;
         File[] kids = dir.listFiles();
         if (kids == null) return;
         for (File k : kids) {
             if (k.isDirectory()) {
-                walk(k, out);
+                walk(k, out, totalBytes);
             } else if (isSlpName(k.getName())) {
-                out.add(ReplayItem.fromFile(k));
+                ReplayItem item = ReplayItem.fromFile(k);
+                out.add(item);
+                totalBytes[0] += item.length();
             }
         }
     }
 
-    private void walk(DocumentFile dir, List<ReplayItem> out) {
+    private void walk(DocumentFile dir, List<ReplayItem> out, long[] totalBytes) {
         DocumentFile[] kids;
         try {
             kids = dir.listFiles();
@@ -116,9 +123,11 @@ public final class ReplayStore {
         for (DocumentFile kid : kids) {
             if (kid == null) continue;
             if (kid.isDirectory()) {
-                walk(kid, out);
+                walk(kid, out, totalBytes);
             } else if (isSlpName(kid.getName())) {
-                out.add(ReplayItem.fromDocument(kid));
+                ReplayItem item = ReplayItem.fromDocument(kid);
+                out.add(item);
+                totalBytes[0] += item.length();
             }
         }
     }
@@ -146,10 +155,13 @@ public final class ReplayStore {
                 && name.toLowerCase(java.util.Locale.US).endsWith(".slp");
     }
 
-    private int comparePlayableThenMtimeDesc(ReplayItem a, ReplayItem b) {
-        boolean ap = ReplayMetadata.parse(context, a).isPlayable();
-        boolean bp = ReplayMetadata.parse(context, b).isPlayable();
-        if (ap != bp) return ap ? -1 : 1;
-        return Long.compare(b.lastModified(), a.lastModified());
+    public static final class ScanResult {
+        public final List<ReplayItem> items;
+        public final long totalBytes;
+
+        private ScanResult(List<ReplayItem> items, long totalBytes) {
+            this.items = items;
+            this.totalBytes = totalBytes;
+        }
     }
 }
