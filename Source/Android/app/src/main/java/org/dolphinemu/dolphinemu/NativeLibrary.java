@@ -158,6 +158,7 @@ public final class NativeLibrary {
 
     /** Bounded native controller/input trace included in support diagnostics. */
     public static native String GetInputDiagnosticsLog();
+    public static native void SetInputDiagnosticsEnabled(boolean enabled, boolean logcatEnabled);
 
     public static native String GetConfig(String configFile, String section, String key, String defaultValue);
     public static native void SetConfig(String configFile, String section, String key, String value);

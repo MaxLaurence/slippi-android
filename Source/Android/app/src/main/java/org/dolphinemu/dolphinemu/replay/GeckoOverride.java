@@ -43,12 +43,16 @@ public final class GeckoOverride {
     private static final String[] INI_NAMES = {"GALE01r2.ini", "GALJ01r2.ini"};
     private static final String PLAYBACK_GENERAL_CODES = "$Required: Slippi Playback General Codes";
     private static final String NETPLAY_GENERAL_CODES = "$Required: General Codes";
+    private static final String SLIPPI_RECORDING_CODE = "$Required: Slippi Recording";
+    private static final String SLIPPI_ONLINE_CODE = "$Required: Slippi Online";
+    private static final String APPLY_DELAY_CODE =
+            "$Recommended: Apply Delay to all In-Game Scenes";
     private static final String[] NETPLAY_DEFAULT_ENABLED = {
             NETPLAY_GENERAL_CODES,
-            "$Required: Slippi Recording",
-            "$Required: Slippi Online",
+            SLIPPI_RECORDING_CODE,
+            SLIPPI_ONLINE_CODE,
             "$Recommended: Normal Lag Reduction",
-            "$Recommended: Apply Delay to all In-Game Scenes",
+            APPLY_DELAY_CODE,
             "$Recommended: Lagless FoD"
     };
 
@@ -101,6 +105,8 @@ public final class GeckoOverride {
             }
         }
         GameSettingsOverride.applyUserChoices(ctx, userDir, GameSettingsOverride.MELEE_INI_NAMES);
+        GameSettingsOverride.forceCodeState(userDir, GameSettingsOverride.MELEE_INI_NAMES,
+                APPLY_DELAY_CODE, false);
     }
 
     /** Remove the override so live launches use the bundled netplay ini. */
@@ -122,6 +128,27 @@ public final class GeckoOverride {
         }
     }
 
+    public static void applyLocalPlayMode(Context ctx) {
+        applyLocalPlayMode(ctx, UserDirectoryBootstrap.userDir(ctx));
+    }
+
+    public static void applyLocalPlayMode(Context ctx, File userDir) {
+        File dir = overrideDir(userDir);
+        if (!dir.exists() && !dir.mkdirs()) {
+            Log.w(TAG, "could not create " + dir);
+            return;
+        }
+        for (String name : GameSettingsOverride.MELEE_INI_NAMES) {
+            File dst = new File(dir, name);
+            try (FileWriter w = new FileWriter(dst)) {
+                writeLocalPlayIni(w);
+            } catch (IOException e) {
+                Log.w(TAG, "apply local play override " + dst + ": " + e);
+            }
+        }
+        GameSettingsOverride.applyUserChoices(ctx, userDir, GameSettingsOverride.MELEE_INI_NAMES);
+    }
+
     /**
      * Training Mode Community Edition is already a patched ISO, so the
      * Slippi Online and recording gecko defaults should not be injected
@@ -133,11 +160,21 @@ public final class GeckoOverride {
     }
 
     public static void applyTrainingMode(Context ctx, File userDir) {
-        applyTrainingMode(userDir);
+        applyTrainingMode(ctx, userDir, false);
+    }
+
+    public static void applyTrainingMode(Context ctx, File userDir, boolean slippiParityDelay) {
+        applyTrainingMode(userDir, slippiParityDelay);
         GameSettingsOverride.applyUserChoices(ctx, userDir, GameSettingsOverride.MELEE_INI_NAMES);
+        GameSettingsOverride.forceCodeState(userDir, GameSettingsOverride.MELEE_INI_NAMES,
+                APPLY_DELAY_CODE, slippiParityDelay);
     }
 
     public static void applyTrainingMode(File userDir) {
+        applyTrainingMode(userDir, false);
+    }
+
+    public static void applyTrainingMode(File userDir, boolean slippiParityDelay) {
         File dir = overrideDir(userDir);
         if (!dir.exists() && !dir.mkdirs()) {
             Log.w(TAG, "could not create " + dir);
@@ -146,7 +183,7 @@ public final class GeckoOverride {
         for (String name : INI_NAMES) {
             File dst = new File(dir, name);
             try (FileWriter w = new FileWriter(dst)) {
-                writeTrainingIni(w);
+                writeTrainingIni(w, slippiParityDelay);
             } catch (IOException e) {
                 Log.w(TAG, "apply training override " + dst + ": " + e);
             }
@@ -192,16 +229,32 @@ public final class GeckoOverride {
     }
 
     private static void writeDisabledNetplayDefaults(FileWriter w) throws IOException {
+        writeDisabledNetplayDefaults(w, false);
+    }
+
+    private static void writeDisabledNetplayDefaults(FileWriter w, boolean slippiParityDelay)
+            throws IOException {
         w.write("[Gecko_Disabled]\n");
         for (String name : NETPLAY_DEFAULT_ENABLED) {
+            if (slippiParityDelay && APPLY_DELAY_CODE.equals(name)) {
+                continue;
+            }
             w.write(name);
             w.write('\n');
         }
         w.write('\n');
     }
 
-    private static void writeTrainingIni(FileWriter w) throws IOException {
+    private static void writeTrainingIni(FileWriter w, boolean slippiParityDelay) throws IOException {
         w.write("# Android Training Mode launch override\n");
+        if (slippiParityDelay) {
+            w.write("# Slippi parity delay diagnostic: keep the all-scenes delay enabled\n");
+        }
+        writeDisabledNetplayDefaults(w, slippiParityDelay);
+    }
+
+    private static void writeLocalPlayIni(FileWriter w) throws IOException {
+        w.write("# Android local Play diagnostic override\n");
         writeDisabledNetplayDefaults(w);
     }
 }

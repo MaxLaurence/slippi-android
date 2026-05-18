@@ -32,6 +32,8 @@ import org.dolphinemu.dolphinemu.settings.DolphinSettings;
 import org.dolphinemu.dolphinemu.training.TrainingModeManager;
 import org.dolphinemu.dolphinemu.utils.ContentCopyTask;
 
+import com.google.android.material.materialswitch.MaterialSwitch;
+
 import java.io.File;
 import java.io.IOException;
 import java.util.concurrent.ExecutorService;
@@ -44,10 +46,10 @@ public class TrainingModeActivity extends AppCompatActivity {
     private static final String PREF_KEY_BACKEND = "backend";
     private static final String PREF_KEY_AUDIO_BACKEND = "audio_backend";
     private static final String PREF_KEY_AUDIO_BUFFER_BURSTS = "audio_buffer_bursts";
-    private static final String PREF_KEY_DISPLAY_LATENCY_MODE = "display_latency_mode";
     private static final String PREF_KEY_TRAINING_LAST_CHECK_MS = "training_latest_checked_ms";
+    private static final String PREF_KEY_TRAINING_SLIPPI_PARITY_DELAY =
+            "training_slippi_parity_delay";
     private static final String BACKEND_VULKAN = "Vulkan";
-    private static final String DISPLAY_LATENCY_SMOOTH = "smooth";
     private static final String AUDIO_BACKEND_OBOE = "Oboe";
     private static final int AUDIO_BURSTS_BALANCED = 4;
     private static final long TRAINING_UPDATE_INTERVAL_MS = TimeUnit.HOURS.toMillis(6);
@@ -61,6 +63,7 @@ public class TrainingModeActivity extends AppCompatActivity {
     private Button trainingPlay;
     private Button trainingCheckUpdates;
     private Button trainingRemove;
+    private MaterialSwitch trainingSlippiParityDelay;
 
     private final ExecutorService trainingExecutor = Executors.newSingleThreadExecutor();
     private TrainingModeManager.ReleaseInfo latestTrainingRelease;
@@ -90,6 +93,7 @@ public class TrainingModeActivity extends AppCompatActivity {
         trainingPlay = findViewById(R.id.training_play);
         trainingCheckUpdates = findViewById(R.id.training_check_updates);
         trainingRemove = findViewById(R.id.training_remove);
+        trainingSlippiParityDelay = findViewById(R.id.training_slippi_parity_delay);
 
         UserDirectoryBootstrap.ensureLayout(this);
         NativeLibrary.SetUserDirectory(UserDirectoryBootstrap.userDir(this).getAbsolutePath());
@@ -101,6 +105,9 @@ public class TrainingModeActivity extends AppCompatActivity {
         trainingPlay.setOnClickListener(v -> launchTrainingMode());
         trainingCheckUpdates.setOnClickListener(v -> checkTrainingUpdates(true));
         trainingRemove.setOnClickListener(v -> confirmRemoveTrainingMode());
+        trainingSlippiParityDelay.setChecked(isTrainingSlippiParityDelayEnabled());
+        trainingSlippiParityDelay.setOnCheckedChangeListener((button, checked) ->
+                prefs().edit().putBoolean(PREF_KEY_TRAINING_SLIPPI_PARITY_DELAY, checked).apply());
 
         latestTrainingRelease = TrainingModeManager.loadCachedRelease(this);
         refreshTrainingStatus();
@@ -409,11 +416,13 @@ public class TrainingModeActivity extends AppCompatActivity {
         }
 
         boolean useGcAdapter = applyTrainingRuntimeConfig();
+        boolean slippiParityDelay = isTrainingSlippiParityDelayEnabled();
         pushAdapterButtonMapsToNative();
         Intent it = new Intent(this, EmulationActivity.class);
         it.putExtra(EmulationActivity.EXTRA_ISO_PATH, installedTraining.isoPath);
         it.putExtra(EmulationActivity.EXTRA_USE_GC_ADAPTER, useGcAdapter);
         it.putExtra(EmulationActivity.EXTRA_LAUNCH_MODE, EmulationActivity.LAUNCH_MODE_TRAINING);
+        it.putExtra(EmulationActivity.EXTRA_TRAINING_SLIPPI_PARITY_DELAY, slippiParityDelay);
         startActivity(it);
     }
 
@@ -428,6 +437,8 @@ public class TrainingModeActivity extends AppCompatActivity {
         it.putExtra(MainlineEmulationActivity.EXTRA_USE_GC_ADAPTER, hasWiiUAdapter());
         it.putExtra(MainlineEmulationActivity.EXTRA_LAUNCH_MODE,
                 MainlineEmulationActivity.LAUNCH_MODE_TRAINING);
+        it.putExtra(MainlineEmulationActivity.EXTRA_TRAINING_SLIPPI_PARITY_DELAY,
+                isTrainingSlippiParityDelayEnabled());
         try {
             startActivity(it);
         } catch (RuntimeException ex) {
@@ -450,6 +461,10 @@ public class TrainingModeActivity extends AppCompatActivity {
         return hasAdapter;
     }
 
+    private boolean isTrainingSlippiParityDelayEnabled() {
+        return prefs().getBoolean(PREF_KEY_TRAINING_SLIPPI_PARITY_DELAY, false);
+    }
+
     private boolean applyControllerAndAvRuntimeConfig() {
         String backend = prefs().getString(PREF_KEY_BACKEND, BACKEND_VULKAN);
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "GFXBackend", backend);
@@ -457,7 +472,7 @@ public class TrainingModeActivity extends AppCompatActivity {
         NativeLibrary.SetConfig("GFX.ini", "Settings", "DriverLibName",
                 GpuDriverManager.selectedLibraryNameForBackend(this, backend));
         NativeLibrary.SetConfig("GFX.ini", "Settings", "AndroidPresentMode",
-                prefs().getString(PREF_KEY_DISPLAY_LATENCY_MODE, DISPLAY_LATENCY_SMOOTH));
+                DolphinSettings.getDisplayLatencyMode(this).configValue);
         DolphinSettings.applyIshiirukaGraphicsConfig(this);
 
         String audioBackend = prefs().getString(PREF_KEY_AUDIO_BACKEND, AUDIO_BACKEND_OBOE);

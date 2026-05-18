@@ -234,6 +234,24 @@
                     android:textStyle="bold"
                     app:backgroundTint="@color/slippi_green"/>
 
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/training_slippi_parity_delay"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:paddingVertical="4dp"
+                    android:text="@string/training_slippi_parity_delay"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"/>
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="@string/training_slippi_parity_delay_summary"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp"/>
+
                 <Button
                     android:id="@+id/training_build"
                     style="@style/Widget.Material3.Button.TonalButton"

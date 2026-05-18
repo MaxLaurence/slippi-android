@@ -75,6 +75,9 @@ namespace
 {
 void RecordSlippiPadBuffer(s32 frame, u8 delay, s32 checksumFrame, u32 checksum, const u8* inputs)
 {
+	if (!Common::AndroidInputDiagnostics::IsEnabled())
+		return;
+
 	if (!inputs)
 		return;
 

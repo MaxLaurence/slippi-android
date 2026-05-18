@@ -19,6 +19,7 @@ import android.util.Log;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.ArrayDeque;
+import java.util.concurrent.TimeoutException;
 
 import org.dolphinemu.dolphinemu.DolphinApplication;
 
@@ -69,6 +70,8 @@ public final class Java_GCAdapter {
     private static long sNullReadCount;
     private static long sShortReadCount;
     private static long sQueueFailureCount;
+    private static long sDrainedCompletionCount;
+    private static int sMaxDrainBurst;
     private static boolean sReceiverRegistered;
 
     // Async receive pipeline: keep a small number of UsbRequests queued on
@@ -245,10 +248,11 @@ public final class Java_GCAdapter {
             conn = sConnection;
             if (conn == null || sIn == null || sInFlight.isEmpty()) return 0;
         }
-        // Blocks until any of the queued IN requests completes — that's
-        // exactly one USB poll cycle (matches the endpoint's bInterval).
-        // requestWait() is called outside the class lock so concurrent
-        // Output() / QueryAdapter() calls don't pile up behind it.
+        // Blocks until any queued IN request completes, then drains any
+        // additional already-completed requests without waiting. If the native
+        // read thread was briefly preempted, this keeps the payload handed to
+        // C++ at the newest USB report instead of the oldest completion still
+        // sitting in the two-request pipeline.
         UsbRequest done = conn.requestWait();
         if (done == null) {
             synchronized (Java_GCAdapter.class) {
@@ -259,35 +263,69 @@ public final class Java_GCAdapter {
             }
             return 0;
         }
+        int len = 0;
+        int drainedThisCall = 0;
         synchronized (Java_GCAdapter.class) {
-            sInputCount++;
-            Object clientData = done.getClientData();
-            if (!(clientData instanceof Integer) || sBuffers == null) return 0;
-            int slot = (Integer) clientData;
-            if (slot < 0 || slot >= sBuffers.length) return 0;
-            ByteBuffer buf = sBuffers[slot];
-            int len = Math.min(buf.position(), controller_payload.length);
-            buf.rewind();
-            buf.get(controller_payload, 0, len);
-            sLastInputSize = len;
-            sLastInputElapsedMs = SystemClock.elapsedRealtime();
-            if (len != controller_payload.length) {
-                sShortReadCount++;
-                if (sShortReadCount <= 3 || (sShortReadCount % 60) == 0) {
-                    Log.w(TAG, "Input short read len=" + len
-                            + " expected=" + controller_payload.length
-                            + " count=" + sShortReadCount);
+            len = copyCompletedRequestLocked(done);
+            drainedThisCall++;
+        }
+        while (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            UsbRequest extra;
+            try {
+                extra = conn.requestWait(0);
+            } catch (TimeoutException e) {
+                break;
+            }
+            if (extra == null) {
+                break;
+            }
+            synchronized (Java_GCAdapter.class) {
+                int extraLen = copyCompletedRequestLocked(extra);
+                if (extraLen > 0) {
+                    len = extraLen;
+                }
+                drainedThisCall++;
+            }
+        }
+        synchronized (Java_GCAdapter.class) {
+            if (drainedThisCall > 1) {
+                sDrainedCompletionCount += drainedThisCall - 1L;
+                sMaxDrainBurst = Math.max(sMaxDrainBurst, drainedThisCall);
+                if (sDrainedCompletionCount <= 8 || (sDrainedCompletionCount % 120) == 0) {
+                    Log.i(TAG, "Input drained stale USB completions burst=" + drainedThisCall
+                            + " total_extra=" + sDrainedCompletionCount);
                 }
             }
-            // Re-queue immediately so the kernel always has IN_FLIGHT
-            // outstanding URBs.
-            buf.clear();
-            if (!done.queue(buf, controller_payload.length)) {
-                sQueueFailureCount++;
-                Log.w(TAG, "Input UsbRequest.queue failed count=" + sQueueFailureCount);
-            }
-            return len;
         }
+        return len;
+    }
+
+    private static int copyCompletedRequestLocked(UsbRequest done) {
+        sInputCount++;
+        Object clientData = done.getClientData();
+        if (!(clientData instanceof Integer) || sBuffers == null) return 0;
+        int slot = (Integer) clientData;
+        if (slot < 0 || slot >= sBuffers.length) return 0;
+        ByteBuffer buf = sBuffers[slot];
+        int len = Math.min(buf.position(), controller_payload.length);
+        buf.rewind();
+        buf.get(controller_payload, 0, len);
+        sLastInputSize = len;
+        sLastInputElapsedMs = SystemClock.elapsedRealtime();
+        if (len != controller_payload.length) {
+            sShortReadCount++;
+            if (sShortReadCount <= 3 || (sShortReadCount % 60) == 0) {
+                Log.w(TAG, "Input short read len=" + len
+                        + " expected=" + controller_payload.length
+                        + " count=" + sShortReadCount);
+            }
+        }
+        buf.clear();
+        if (!done.queue(buf, controller_payload.length)) {
+            sQueueFailureCount++;
+            Log.w(TAG, "Input UsbRequest.queue failed count=" + sQueueFailureCount);
+        }
+        return len;
     }
 
     public static synchronized int Output(byte[] rumble) {
@@ -310,6 +348,8 @@ public final class Java_GCAdapter {
                 sNullReadCount,
                 sShortReadCount,
                 sQueueFailureCount,
+                sDrainedCompletionCount,
+                sMaxDrainBurst,
                 Arrays.copyOf(controller_payload, controller_payload.length));
     }
 
@@ -344,11 +384,14 @@ public final class Java_GCAdapter {
         public final long nullReads;
         public final long shortReads;
         public final long queueFailures;
+        public final long drainedCompletions;
+        public final int maxDrainBurst;
         public final byte[] payload;
 
         private DiagnosticsSnapshot(boolean adapterOpen, int inputSize, long ageMs,
                                     long inputCount, long nullReads, long shortReads,
-                                    long queueFailures, byte[] payload) {
+                                    long queueFailures, long drainedCompletions,
+                                    int maxDrainBurst, byte[] payload) {
             this.adapterOpen = adapterOpen;
             this.inputSize = inputSize;
             this.ageMs = ageMs;
@@ -356,6 +399,8 @@ public final class Java_GCAdapter {
             this.nullReads = nullReads;
             this.shortReads = shortReads;
             this.queueFailures = queueFailures;
+            this.drainedCompletions = drainedCompletions;
+            this.maxDrainBurst = maxDrainBurst;
             this.payload = payload;
         }
     }

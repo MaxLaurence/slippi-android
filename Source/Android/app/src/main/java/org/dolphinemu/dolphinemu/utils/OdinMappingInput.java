@@ -38,7 +38,8 @@ public final class OdinMappingInput implements RawStickInputProvider {
     private static final int TRANSACTION_CURRENT_RAW_EVENT = 24;
     private static final float AXIS_MAX = 32767.0f;
     private static final float CURRENT_RAW_AXIS_MAX = 4096.0f;
-    private static final int CURRENT_RAW_FAILURE_LIMIT = 120;
+    private static final int CURRENT_RAW_STARTUP_FAILURE_LIMIT = 120;
+    private static final int CURRENT_RAW_LIVE_FAILURE_LIMIT = 120;
     private static final boolean RAW_DIAGNOSTICS = false;
 
     private static OdinMappingInput instance;
@@ -323,13 +324,17 @@ public final class OdinMappingInput implements RawStickInputProvider {
 
     private void markCurrentRawEventFailure(String reason) {
         synchronized (lock) {
-            if (service == null || currentRawEventAvailable || currentRawEventUnavailable) {
+            if (service == null || currentRawEventUnavailable) {
                 return;
             }
 
             currentRawEventFailures++;
-            if (currentRawEventFailures >= CURRENT_RAW_FAILURE_LIMIT) {
+            int failureLimit = currentRawEventAvailable
+                    ? CURRENT_RAW_LIVE_FAILURE_LIMIT
+                    : CURRENT_RAW_STARTUP_FAILURE_LIMIT;
+            if (currentRawEventFailures >= failureLimit) {
                 currentRawEventUnavailable = true;
+                currentRawEventAvailable = false;
                 state.clear();
                 android.util.Log.w(TAG, "Odin currentRawEvent unavailable after "
                         + currentRawEventFailures + " attempts (" + reason

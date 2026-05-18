@@ -75,16 +75,17 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     public static final String EXTRA_REPLAY_PATH = "replay_path";
     public static final String EXTRA_USE_GC_ADAPTER = "use_gc_adapter";
     public static final String EXTRA_LAUNCH_MODE = "launch_mode";
+    public static final String EXTRA_TRAINING_SLIPPI_PARITY_DELAY =
+            "training_slippi_parity_delay";
     public static final String LAUNCH_MODE_LIVE = "live";
+    public static final String LAUNCH_MODE_LOCAL_PLAY = "local_play";
     public static final String LAUNCH_MODE_REPLAY = "replay";
     public static final String LAUNCH_MODE_TRAINING = "training";
     private static final String TAG = "MainlineEmu";
     private static final String PREF_KEY_BACKEND = "backend";
     private static final String PREF_KEY_AUDIO_BACKEND = "audio_backend";
     private static final String PREF_KEY_AUDIO_BUFFER_BURSTS = "audio_buffer_bursts";
-    private static final String PREF_KEY_DISPLAY_LATENCY_MODE = "display_latency_mode";
     private static final String BACKEND_VULKAN = "Vulkan";
-    private static final String DISPLAY_LATENCY_SMOOTH = "smooth";
     private static final String AUDIO_BACKEND_OBOE = "Oboe";
     private static final String AUDIO_BACKEND_AAUDIO = "AAudio";
     private static final String AUDIO_BACKEND_OPENSLES = "OpenSLES";
@@ -97,6 +98,11 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             "Video thread",
             "AudioTrack",
             "NetPlay Client",
+            "GC Adapter Read Thread",
+            "GC Adapter Write Thread",
+            "GC Adapter Read",
+            "GC Adapter Writ",
+            "SlippiRawInput",
     };
     private static final int EXI_DEVICE_MEMORYCARD = 1;
     private static final int EXI_DEVICE_SLIPPI = 13;
@@ -105,6 +111,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     private static final int SI_GC_CONTROLLER = 6;
     private static final int SI_WIIU_ADAPTER = 12;
     private static final long RAW_INPUT_FALLBACK_POLL_MS = 4L;
+    private static final long RAW_INPUT_LIVE_FALLBACK_POLL_MS = 2L;
     private static final int RAW_INPUT_WAIT_MS = 16;
     private static final boolean LATENCY_TRACE = BuildConfig.DEBUG;
     private static final long INPUT_LATENCY_LOG_INTERVAL_MS = 1000L;
@@ -136,6 +143,8 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     private boolean useGcAdapter;
     private boolean isTrainingMode;
     private boolean isReplayMode;
+    private boolean isLocalPlayMode;
+    private boolean trainingSlippiParityDelay;
     private String launchMode = LAUNCH_MODE_LIVE;
     private boolean refreshRateSettingsSaved;
     private boolean refreshRateSettingsOverridden;
@@ -148,7 +157,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     private final Choreographer.FrameCallback frameLatencyCallback = new Choreographer.FrameCallback() {
         @Override
         public void doFrame(long frameTimeNanos) {
-            if (!LATENCY_TRACE || !emuStarted) {
+            if (!emuStarted) {
                 previousFrameTimeNs = 0L;
                 return;
             }
@@ -287,12 +296,17 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         launchMode = getIntent().getStringExtra(EXTRA_LAUNCH_MODE);
         if (launchMode == null) launchMode = LAUNCH_MODE_LIVE;
         isTrainingMode = LAUNCH_MODE_TRAINING.equals(launchMode);
-        isReplayMode = !isTrainingMode && replayPath != null && new File(replayPath).exists();
+        isLocalPlayMode = LAUNCH_MODE_LOCAL_PLAY.equals(launchMode);
+        trainingSlippiParityDelay = isTrainingMode
+                && getIntent().getBooleanExtra(EXTRA_TRAINING_SLIPPI_PARITY_DELAY, false);
+        isReplayMode = !isTrainingMode && !isLocalPlayMode
+                && replayPath != null && new File(replayPath).exists();
         if (isReplayMode) {
             useGcAdapter = false;
         }
-        ControllerDiagnosticsCapture.recordLaunch(this, "mainline", launchMode, useGcAdapter);
-        if (!isReplayMode && !isTrainingMode) {
+        ControllerDiagnosticsCapture.recordLaunch(this, "mainline", launchMode, useGcAdapter,
+                "training_slippi_parity_delay=" + trainingSlippiParityDelay);
+        if (!isReplayMode && !isTrainingMode && !isLocalPlayMode) {
             replayStagingObserver = ReplayConfig.createStagingDrainObserver(this, ui);
             if (replayStagingObserver != null) replayStagingObserver.startWatching();
         }
@@ -341,6 +355,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             } catch (Throwable ignored) {
             }
         }
+        startFrameLatencyTrace();
         updateTouchOverlayVisibility();
         ui.post(controllerDetectorPoll);
         if (shouldPollRawStickSource()) startRawInputPolling();
@@ -353,6 +368,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     @Override
     protected void onPause() {
         stopRawInputPolling();
+        stopFrameLatencyTrace();
         ui.removeCallbacks(controllerDetectorPoll);
         if (replayHud != null) replayHud.stopPolling();
         super.onPause();
@@ -526,8 +542,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         String audioBackend = sanitizeAudioBackend(prefs.getString(PREF_KEY_AUDIO_BACKEND,
                 AUDIO_BACKEND_OBOE));
         int audioBursts = prefs.getInt(PREF_KEY_AUDIO_BUFFER_BURSTS, AUDIO_BURSTS_BALANCED);
-        String displayLatencyMode =
-                prefs.getString(PREF_KEY_DISPLAY_LATENCY_MODE, DISPLAY_LATENCY_SMOOTH);
+        String displayLatencyMode = DolphinSettings.getDisplayLatencyMode(this).configValue;
         String replayDir = ReplayConfig.nativeReplayWriteDir(this).getAbsolutePath();
         int port0 = useGcAdapter ? SI_WIIU_ADAPTER : SI_GC_CONTROLLER;
         int portN = useGcAdapter ? SI_WIIU_ADAPTER : SI_NONE;
@@ -576,8 +591,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         String audioBackend = sanitizeAudioBackend(prefs.getString(PREF_KEY_AUDIO_BACKEND,
                 AUDIO_BACKEND_OBOE));
         int audioBursts = prefs.getInt(PREF_KEY_AUDIO_BUFFER_BURSTS, AUDIO_BURSTS_BALANCED);
-        String displayLatencyMode =
-                prefs.getString(PREF_KEY_DISPLAY_LATENCY_MODE, DISPLAY_LATENCY_SMOOTH);
+        String displayLatencyMode = DolphinSettings.getDisplayLatencyMode(this).configValue;
         String replayDir = ReplayConfig.nativeReplayWriteDir(this).getAbsolutePath();
         int port0 = useGcAdapter ? SI_WIIU_ADAPTER : SI_GC_CONTROLLER;
         int portN = useGcAdapter ? SI_WIIU_ADAPTER : SI_NONE;
@@ -740,16 +754,33 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             if (!gcDir.exists()) gcDir.mkdirs();
             File trainingCard = new File(gcDir, "TrainingMode.USA.raw");
             ReplayConfig.writeEmpty(playbackConfig);
-            NativeLibrary.SetSlippiInputPath("");
+            NativeLibrary.SetSlippiInputPath(trainingSlippiParityDelay
+                    ? playbackConfig.getAbsolutePath()
+                    : "");
             NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core",
                     "SlotA", EXI_DEVICE_MEMORYCARD);
             NativeConfig.setString(NativeConfig.LAYER_BASE, "Dolphin", "Core",
                     "MemcardAPath", trainingCard.getAbsolutePath());
             NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                    "SlotB", trainingSlippiParityDelay ? EXI_DEVICE_SLIPPI : EXI_DEVICE_NONE);
+            NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                    "SerialPort1", EXI_DEVICE_NONE);
+            GeckoOverride.applyTrainingMode(this, userDir, trainingSlippiParityDelay);
+            return;
+        }
+
+        if (isLocalPlayMode) {
+            NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                    "SlotA", EXI_DEVICE_NONE);
+            NativeConfig.setString(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                    "MemcardAPath", "");
+            NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core",
                     "SlotB", EXI_DEVICE_NONE);
             NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core",
                     "SerialPort1", EXI_DEVICE_NONE);
-            GeckoOverride.applyTrainingMode(this, userDir);
+            ReplayConfig.writeEmpty(playbackConfig);
+            GeckoOverride.applyLocalPlayMode(this, userDir);
+            NativeLibrary.SetSlippiInputPath("");
             return;
         }
 
@@ -964,9 +995,16 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             Log.i(TAG, "mainline raw input thread tid=" + rawInputThreadTid
                     + " blocking=" + (rawStickInput != null && rawStickInput.supportsBlockingWait())
                     + " waitMs=" + RAW_INPUT_WAIT_MS
-                    + " fallbackPollMs=" + RAW_INPUT_FALLBACK_POLL_MS);
+                    + " fallbackPollMs=" + getRawInputFallbackPollMs());
             updatePerfHintThreads();
         });
+    }
+
+    private long getRawInputFallbackPollMs() {
+        return LAUNCH_MODE_LIVE.equals(launchMode)
+                || LAUNCH_MODE_LOCAL_PLAY.equals(launchMode)
+                ? RAW_INPUT_LIVE_FALLBACK_POLL_MS
+                : RAW_INPUT_FALLBACK_POLL_MS;
     }
 
     private void postRawInputPoll() {
@@ -975,7 +1013,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             if (rawStickInput != null && rawStickInput.supportsBlockingWait()) {
                 handler.post(rawInputPoll);
             } else {
-                handler.postDelayed(rawInputPoll, RAW_INPUT_FALLBACK_POLL_MS);
+                handler.postDelayed(rawInputPoll, getRawInputFallbackPollMs());
             }
         }
     }
@@ -1074,7 +1112,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     }
 
     private void startFrameLatencyTrace() {
-        if (!LATENCY_TRACE) {
+        if (!LATENCY_TRACE && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
             return;
         }
         Choreographer.getInstance().removeFrameCallback(frameLatencyCallback);
@@ -1088,6 +1126,10 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     }
 
     private void recordFrameDelta(long deltaUs) {
+        reportPerfHintFrameDuration(deltaUs);
+        if (!LATENCY_TRACE) {
+            return;
+        }
         frameDeltasUs.add(deltaUs);
         if (frameDeltasUs.size() > 360) {
             frameDeltasUs.remove(0);
@@ -1115,6 +1157,17 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
                 + " p99Us=" + p99
                 + " jankPct=" + String.format(Locale.US, "%.1f",
                 frameDeltasUs.isEmpty() ? 0f : (jank * 100f / frameDeltasUs.size())));
+    }
+
+    private void reportPerfHintFrameDuration(long deltaUs) {
+        if (hintSession == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            return;
+        }
+        try {
+            hintSession.reportActualWorkDuration(Math.max(1L, deltaUs * 1000L));
+        } catch (Throwable t) {
+            Log.w(TAG, "mainline PerformanceHintSession reportActualWorkDuration failed: " + t);
+        }
     }
 
     private long percentile(ArrayList<Long> sorted, float p) {
@@ -1249,30 +1302,32 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     }
 
     private void applyLowLatencySurfaceConfig(SurfaceHolder holder) {
+        Display.Mode bestMode = findLowLatencyDisplayMode();
+        float targetRefreshRate = bestMode != null ? bestMode.getRefreshRate() : 60f;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    holder.getSurface().setFrameRate(60f,
+                    holder.getSurface().setFrameRate(targetRefreshRate,
                             Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
                             Surface.CHANGE_FRAME_RATE_ALWAYS);
                 } else {
-                    holder.getSurface().setFrameRate(60f,
+                    holder.getSurface().setFrameRate(targetRefreshRate,
                             Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
                 }
             } catch (IllegalStateException ignored) {
             }
         }
-        preferLowLatencyDisplayMode();
+        preferLowLatencyDisplayMode(bestMode);
     }
 
-    private void preferLowLatencyDisplayMode() {
+    private Display.Mode findLowLatencyDisplayMode() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-            return;
+            return null;
         }
 
         Display display = getWindowManager().getDefaultDisplay();
         if (display == null) {
-            return;
+            return null;
         }
 
         Display.Mode best = null;
@@ -1291,6 +1346,10 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
                 best = mode;
             }
         }
+        return best;
+    }
+
+    private void preferLowLatencyDisplayMode(Display.Mode best) {
         if (best == null) {
             return;
         }

@@ -79,6 +79,11 @@ public final class ControllerDiagnosticsCapture {
 
     public static void recordLaunch(Context context, String core, String launchMode,
                                     boolean useGcAdapter) {
+        recordLaunch(context, core, launchMode, useGcAdapter, null);
+    }
+
+    public static void recordLaunch(Context context, String core, String launchMode,
+                                    boolean useGcAdapter, String extraLine) {
         try {
             File dir = diagnosticsDir(context);
             if (!dir.exists() && !dir.mkdirs()) return;
@@ -93,6 +98,10 @@ public final class ControllerDiagnosticsCapture {
                 writer.newLine();
                 writer.write("use_gc_adapter=" + useGcAdapter);
                 writer.newLine();
+                if (extraLine != null && !extraLine.isEmpty()) {
+                    writer.write(extraLine);
+                    writer.newLine();
+                }
                 writer.write("capture_armed=" + isArmed(context));
                 writer.newLine();
             }
@@ -184,6 +193,14 @@ public final class ControllerDiagnosticsCapture {
         return value == null ? "" : value;
     }
 
+    private static void setNativeInputDiagnosticsEnabled(boolean enabled) {
+        try {
+            NativeLibrary.SetInputDiagnosticsEnabled(enabled, false);
+        } catch (Throwable t) {
+            Log.w(TAG, "native input diagnostics toggle failed", t);
+        }
+    }
+
     private static final class ActiveCapture implements Runnable {
         final Context context;
         final String core;
@@ -212,6 +229,7 @@ public final class ControllerDiagnosticsCapture {
             startElapsed = SystemClock.elapsedRealtime();
             long deadline = startElapsed + CAPTURE_DURATION_MS;
             File out = latestCaptureFile(context);
+            setNativeInputDiagnosticsEnabled(true);
             try {
                 File dir = diagnosticsDir(context);
                 if (!dir.exists() && !dir.mkdirs()) return;
@@ -274,6 +292,7 @@ public final class ControllerDiagnosticsCapture {
             } catch (IOException e) {
                 Log.w(TAG, "capture failed", e);
             } finally {
+                setNativeInputDiagnosticsEnabled(false);
                 running.set(false);
                 synchronized (this) {
                     captureWriter = null;
@@ -363,6 +382,8 @@ public final class ControllerDiagnosticsCapture {
                 .append(" null_reads=").append(snapshot.nullReads)
                 .append(" short_reads=").append(snapshot.shortReads)
                 .append(" queue_failures=").append(snapshot.queueFailures)
+                .append(" drained_completions=").append(snapshot.drainedCompletions)
+                .append(" max_drain_burst=").append(snapshot.maxDrainBurst)
                 .append(" payload=").append(hex(snapshot.payload));
         for (int port = 0; port < 4; port++) {
             appendPort(sb, snapshot.payload, port);

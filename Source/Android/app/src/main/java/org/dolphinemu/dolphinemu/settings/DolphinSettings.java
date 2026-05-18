@@ -127,6 +127,9 @@ public final class DolphinSettings {
         for (DisplayLatencyMode mode : DISPLAY_LATENCY_MODES) {
             if (mode.configValue.equals(value)) return mode;
         }
+        prefs(context).edit()
+                .putString(PREF_KEY_DISPLAY_LATENCY_MODE, DISPLAY_LATENCY_SMOOTH)
+                .apply();
         return DISPLAY_LATENCY_MODES[0];
     }
 

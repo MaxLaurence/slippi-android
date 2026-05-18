@@ -55,6 +55,9 @@ constexpr const char* LATENCY_TAG = "SlippiLatency";
 
 void RecordLocalPadQueueDiagnostic(const char* stage, const SlippiPad* pad, size_t queue_size)
 {
+	if (!Common::AndroidInputDiagnostics::IsEnabled())
+		return;
+
 	if (!pad)
 		return;
 

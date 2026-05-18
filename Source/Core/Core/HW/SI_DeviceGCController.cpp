@@ -82,6 +82,9 @@ bool SamePadDiagnosticSignature(const PadDiagnosticSignature& a, const PadDiagno
 void RecordPadStatusDiagnostic(int stage_idx, const char* stage, int port,
                                const GCPadStatus& status, bool active, uint64_t age_us)
 {
+	if (!Common::AndroidInputDiagnostics::IsEnabled())
+		return;
+
 	if (stage_idx < 0 || stage_idx >= 3 || port < 0 || port >= 4)
 		return;
 

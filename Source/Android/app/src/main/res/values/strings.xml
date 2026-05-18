@@ -85,6 +85,10 @@
     <string name="display_status_format">Display %1$s</string>
     <string name="refresh_caps_available">Refresh caps granted</string>
     <string name="refresh_caps_permission_missing">Refresh caps need permission</string>
+    <string name="refresh_caps_already_granted">Refresh cap permission is already granted</string>
+    <string name="refresh_caps_permission_title">Allow refresh-rate control?</string>
+    <string name="refresh_caps_permission_body">For the lowest-latency display modes, Slippi Dolphin can temporarily lift Android\'s peak and minimum refresh-rate caps while emulation is running, then restore them when you exit. Android requires you to allow Modify system settings manually.</string>
+    <string name="refresh_caps_permission_open">Open permission settings</string>
     <string name="audio_pick_preset">Audio preset</string>
     <string name="audio_preset_oboe_ultra_low">Oboe - Ultra low latency (1 burst)</string>
     <string name="audio_preset_oboe_low">Oboe - Low latency (2 bursts)</string>
@@ -133,6 +137,8 @@
     <string name="training_rebuild">Rebuild</string>
     <string name="training_update">Update</string>
     <string name="training_play">Play</string>
+    <string name="training_slippi_parity_delay">Slippi parity delay</string>
+    <string name="training_slippi_parity_delay_summary">A/B test: keep Slippi\'s all-scenes delay active in Training Mode.</string>
     <string name="training_check_updates">Check updates</string>
     <string name="training_remove">Remove Training Mode</string>
     <string name="training_installed_path_label">Installed ISO</string>

@@ -61,6 +61,8 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREF_KEY_EMULATOR_CORE = EmulatorCore.PREF_KEY;
     private static final String PREF_KEY_LAUNCH_DISCLAIMER_SEEN =
             "launch_disclaimer_seen_v1";
+    private static final String PREF_KEY_REFRESH_CAPS_PROMPT_SEEN =
+            "refresh_caps_prompt_seen_v1";
 
     private TextView isoStatus;
     private TextView adapterStatus;
@@ -168,6 +170,7 @@ public class MainActivity extends AppCompatActivity {
                 pickUserJson.launch(new String[]{"application/json", "*/*"}));
         findViewById(R.id.launcher_settings).setOnClickListener(v ->
                 startActivity(new Intent(this, SettingsActivity.class)));
+        refreshRateStatus.setOnClickListener(v -> showRefreshCapsPermissionDialog(false));
         findViewById(R.id.play).setOnClickListener(v -> launchEmulation(null));
         findViewById(R.id.training_mode_button).setOnClickListener(v ->
                 startActivity(new Intent(this, TrainingModeActivity.class)));
@@ -209,7 +212,9 @@ public class MainActivity extends AppCompatActivity {
         } else {
             renderAuthLoggedOut(null);
         }
-        showLaunchDisclaimerIfNeeded();
+        if (!showLaunchDisclaimerIfNeeded()) {
+            maybeShowRefreshCapsPermissionPrompt();
+        }
     }
 
     @Override
@@ -283,17 +288,22 @@ public class MainActivity extends AppCompatActivity {
         authSignedIn.setVisibility(View.VISIBLE);
     }
 
-    private void showLaunchDisclaimerIfNeeded() {
+    private boolean showLaunchDisclaimerIfNeeded() {
         SharedPreferences p = prefs();
-        if (p.getBoolean(PREF_KEY_LAUNCH_DISCLAIMER_SEEN, false)) return;
+        if (p.getBoolean(PREF_KEY_LAUNCH_DISCLAIMER_SEEN, false)) return false;
         new AlertDialog.Builder(this)
                 .setTitle(R.string.launch_disclaimer_title)
                 .setMessage(R.string.launch_disclaimer_body)
-                .setPositiveButton(R.string.launch_disclaimer_confirm, (dialog, which) ->
-                        p.edit().putBoolean(PREF_KEY_LAUNCH_DISCLAIMER_SEEN, true).apply())
-                .setOnCancelListener(dialog ->
-                        p.edit().putBoolean(PREF_KEY_LAUNCH_DISCLAIMER_SEEN, true).apply())
+                .setPositiveButton(R.string.launch_disclaimer_confirm, (dialog, which) -> {
+                    p.edit().putBoolean(PREF_KEY_LAUNCH_DISCLAIMER_SEEN, true).apply();
+                    maybeShowRefreshCapsPermissionPrompt();
+                })
+                .setOnCancelListener(dialog -> {
+                    p.edit().putBoolean(PREF_KEY_LAUNCH_DISCLAIMER_SEEN, true).apply();
+                    maybeShowRefreshCapsPermissionPrompt();
+                })
                 .show();
+        return true;
     }
 
     private void refresh() {
@@ -313,10 +323,49 @@ public class MainActivity extends AppCompatActivity {
                 DolphinSettings.getDisplayLatencyMode(this);
         displayStatus.setText(getString(R.string.display_status_format,
                 getString(displayLatencyMode.labelResId)));
-        refreshRateStatus.setText(Settings.System.canWrite(this)
+        boolean canWriteSettings = Settings.System.canWrite(this);
+        refreshRateStatus.setText(canWriteSettings
                 ? R.string.refresh_caps_available
                 : R.string.refresh_caps_permission_missing);
+        refreshRateStatus.setTextColor(getColor(canWriteSettings
+                ? R.color.text_secondary : R.color.slippi_green));
         refreshCoreStatus();
+    }
+
+    private void maybeShowRefreshCapsPermissionPrompt() {
+        if (Settings.System.canWrite(this)
+                || prefs().getBoolean(PREF_KEY_REFRESH_CAPS_PROMPT_SEEN, false)) {
+            return;
+        }
+        showRefreshCapsPermissionDialog(true);
+    }
+
+    private void showRefreshCapsPermissionDialog(boolean markPromptSeen) {
+        if (Settings.System.canWrite(this)) {
+            toast(getString(R.string.refresh_caps_already_granted));
+            return;
+        }
+        if (markPromptSeen) {
+            prefs().edit().putBoolean(PREF_KEY_REFRESH_CAPS_PROMPT_SEEN, true).apply();
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.refresh_caps_permission_title)
+                .setMessage(R.string.refresh_caps_permission_body)
+                .setPositiveButton(R.string.refresh_caps_permission_open, (dialog, which) ->
+                        openWriteSettingsPermission())
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    private void openWriteSettingsPermission() {
+        Intent intent = new Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS,
+                Uri.parse("package:" + getPackageName()));
+        try {
+            startActivity(intent);
+        } catch (Exception ex) {
+            Log.w(TAG, "WRITE_SETTINGS permission screen unavailable", ex);
+            startActivity(new Intent(Settings.ACTION_SETTINGS));
+        }
     }
 
     private void launchEmulation(File replayOrNull) {

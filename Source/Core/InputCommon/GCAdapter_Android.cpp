@@ -115,6 +115,9 @@ static bool SameSignature(const PadSignature& a, const PadSignature& b)
 static void RecordDecodedPad(int chan, u8 type_byte, u8 b1, u8 b2, const GCPadStatus& pad,
                              bool get_origin, u64 sequence, u64 age_us)
 {
+  if (!Common::AndroidInputDiagnostics::IsEnabled())
+    return;
+
   static std::mutex s_diag_mutex;
   static PadSignature s_last[4];
   static bool s_have_last[4] = {};

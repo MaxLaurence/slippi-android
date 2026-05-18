@@ -189,8 +189,38 @@ public final class GameSettingsOverride {
         }
     }
 
+    public static void forceCodeState(File userDir, String[] iniNames, String codeTitle,
+                                      boolean enabled) {
+        File dir = overrideDir(userDir);
+        if (!dir.exists() && !dir.mkdirs()) {
+            Log.w(TAG, "could not create " + dir);
+            return;
+        }
+        String line = codeTitle.startsWith("$") ? codeTitle : "$" + codeTitle;
+        for (String name : iniNames) {
+            File file = new File(dir, name);
+            IniDocument doc = IniDocument.read(file);
+            forceCodeState(doc, line, enabled);
+            writeDocument(file, doc);
+        }
+    }
+
     public static File overrideDir(File userDir) {
         return new File(userDir, "GameSettings");
+    }
+
+    private static void forceCodeState(IniDocument doc, String line, boolean enabled) {
+        LinkedHashSet<String> enabledLines = lineSet(doc.section("Gecko_Enabled"));
+        LinkedHashSet<String> disabledLines = lineSet(doc.section("Gecko_Disabled"));
+        if (enabled) {
+            disabledLines.remove(line);
+            enabledLines.add(line);
+        } else {
+            enabledLines.remove(line);
+            disabledLines.add(line);
+        }
+        doc.setSection("Gecko_Enabled", new ArrayList<>(enabledLines));
+        doc.setSection("Gecko_Disabled", new ArrayList<>(disabledLines));
     }
 
     private static void applyUserChoicesToDocument(Context context, IniDocument doc, String iniName) {

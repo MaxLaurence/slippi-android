@@ -34,6 +34,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import org.dolphinemu.dolphinemu.BuildConfig;
 import org.dolphinemu.dolphinemu.NativeLibrary;
 import org.dolphinemu.dolphinemu.R;
+import org.dolphinemu.dolphinemu.UserDirectoryBootstrap;
 import org.dolphinemu.dolphinemu.controller.ButtonMap;
 import org.dolphinemu.dolphinemu.controller.ControllerProfile;
 import org.dolphinemu.dolphinemu.controller.GameCubePadState;
@@ -42,6 +43,7 @@ import org.dolphinemu.dolphinemu.controller.TouchOverlayLayoutStore;
 import org.dolphinemu.dolphinemu.gpu.GpuDriverManager;
 import org.dolphinemu.dolphinemu.replay.GeckoOverride;
 import org.dolphinemu.dolphinemu.replay.ReplayConfig;
+import org.dolphinemu.dolphinemu.settings.DolphinSettings;
 import org.dolphinemu.dolphinemu.utils.ControllerDiagnosticsCapture;
 import org.dolphinemu.dolphinemu.utils.PhysicalControllerDetector;
 import org.dolphinemu.dolphinemu.utils.RawStickInputProvider;
@@ -69,13 +71,17 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     /** Absolute path to a .slp file. Triggers replay playback mode when present. */
     public static final String EXTRA_REPLAY_PATH = "replay_path";
     public static final String EXTRA_LAUNCH_MODE = "launch_mode";
+    public static final String EXTRA_TRAINING_SLIPPI_PARITY_DELAY =
+            "training_slippi_parity_delay";
     public static final String LAUNCH_MODE_LIVE = "live";
+    public static final String LAUNCH_MODE_LOCAL_PLAY = "local_play";
     public static final String LAUNCH_MODE_REPLAY = "replay";
     public static final String LAUNCH_MODE_TRAINING = "training";
     private static final String TAG = "SlippiEmu";
     private static final boolean INPUT_DIAGNOSTICS = false;
     private static final boolean LATENCY_TRACE = BuildConfig.DEBUG;
     private static final long RAW_INPUT_FALLBACK_POLL_MS = 4L;
+    private static final long RAW_INPUT_LIVE_FALLBACK_POLL_MS = 2L;
     private static final int RAW_INPUT_WAIT_MS = 16;
     private static final long INPUT_LATENCY_LOG_INTERVAL_MS = 2000L;
     private static final long FRAME_LATENCY_LOG_INTERVAL_MS = 5000L;
@@ -89,6 +95,8 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
             "NetPlay Client",
             "GC Adapter Read Thread",
             "GC Adapter Write Thread",
+            "GC Adapter Read",
+            "GC Adapter Writ",
             "SlippiRawInput"
     };
 
@@ -140,6 +148,8 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     private boolean useGcAdapter;
     private boolean isReplayMode;
     private boolean isTrainingMode;
+    private boolean isLocalPlayMode;
+    private boolean trainingSlippiParityDelay;
     private String launchMode = LAUNCH_MODE_LIVE;
     private String previousPeakRefreshRate;
     private String previousMinRefreshRate;
@@ -327,24 +337,41 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         launchMode = getIntent().getStringExtra(EXTRA_LAUNCH_MODE);
         if (launchMode == null) launchMode = LAUNCH_MODE_LIVE;
         isTrainingMode = LAUNCH_MODE_TRAINING.equals(launchMode);
-        isReplayMode = !isTrainingMode && replayPath != null && new File(replayPath).exists();
-        ControllerDiagnosticsCapture.recordLaunch(this, "ishiiruka", launchMode, useGcAdapter);
+        isLocalPlayMode = LAUNCH_MODE_LOCAL_PLAY.equals(launchMode);
+        trainingSlippiParityDelay = isTrainingMode
+                && getIntent().getBooleanExtra(EXTRA_TRAINING_SLIPPI_PARITY_DELAY, false);
+        isReplayMode = !isTrainingMode && !isLocalPlayMode
+                && replayPath != null && new File(replayPath).exists();
+        ControllerDiagnosticsCapture.recordLaunch(this, "ishiiruka", launchMode, useGcAdapter,
+                "training_slippi_parity_delay=" + trainingSlippiParityDelay);
         ReplayConfig.ensureReplayDirectory(this);
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "SlippiReplayDir",
                 ReplayConfig.nativeReplayWriteDir(this).getAbsolutePath());
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "SlippiReplayMonthFolders", "False");
-        if (!isReplayMode && !isTrainingMode) {
+        if (!isReplayMode && !isTrainingMode && !isLocalPlayMode) {
             replayStagingObserver = ReplayConfig.createStagingDrainObserver(this, ui);
             if (replayStagingObserver != null) replayStagingObserver.startWatching();
         }
 
         if (isTrainingMode) {
             ReplayConfig.writeEmpty(this);
-            GeckoOverride.applyTrainingMode(this);
-            NativeLibrary.SetSlippiInputPath("");
+            GeckoOverride.applyTrainingMode(this, UserDirectoryBootstrap.userDir(this),
+                    trainingSlippiParityDelay);
+            NativeLibrary.SetSlippiInputPath(trainingSlippiParityDelay
+                    ? ReplayConfig.commFile(this).getAbsolutePath()
+                    : "");
             NativeLibrary.SetEXIDeviceOverride(0, NativeLibrary.EXI_DEVICE_MEMORYCARD);
+            NativeLibrary.SetEXIDeviceOverride(1, trainingSlippiParityDelay
+                    ? NativeLibrary.EXI_DEVICE_SLIPPI
+                    : NativeLibrary.EXI_DEVICE_NONE);
+            NativeLibrary.SetEXIDeviceOverride(2, NativeLibrary.EXI_DEVICE_NONE);
+        } else if (isLocalPlayMode) {
+            NativeLibrary.SetEXIDeviceOverride(0, NativeLibrary.EXI_DEVICE_NONE);
             NativeLibrary.SetEXIDeviceOverride(1, NativeLibrary.EXI_DEVICE_NONE);
             NativeLibrary.SetEXIDeviceOverride(2, NativeLibrary.EXI_DEVICE_NONE);
+            ReplayConfig.writeEmpty(this);
+            GeckoOverride.applyLocalPlayMode(this);
+            NativeLibrary.SetSlippiInputPath("");
         } else if (isReplayMode) {
             NativeLibrary.SetEXIDeviceOverride(0, NativeLibrary.EXI_DEVICE_NONE);
             NativeLibrary.SetEXIDeviceOverride(1, NativeLibrary.EXI_DEVICE_SLIPPI);
@@ -559,33 +586,36 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
 
     private void applyLowLatencySurfaceConfig(SurfaceHolder holder) {
         Trace.beginSection("SlippiSurfaceLowLatency");
-        // Melee is a fixed 60Hz workload. Ask SurfaceFlinger to move the
-        // display immediately instead of waiting for a seamless transition.
+        Display.Mode bestMode = findLowLatencyDisplayMode();
+        float targetRefreshRate = bestMode != null ? bestMode.getRefreshRate() : 60f;
+        // Melee is a fixed 60Hz workload, but high-refresh panels reduce
+        // scanout wait. Keep the surface vote aligned with the display mode
+        // request instead of letting a 60Hz layer vote pull the panel down.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    holder.getSurface().setFrameRate(60f,
+                    holder.getSurface().setFrameRate(targetRefreshRate,
                             Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
                             Surface.CHANGE_FRAME_RATE_ALWAYS);
                 } else {
-                    holder.getSurface().setFrameRate(60f,
+                    holder.getSurface().setFrameRate(targetRefreshRate,
                             Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
                 }
             } catch (IllegalStateException ignored) {
             }
         }
-        preferLowLatencyDisplayMode();
+        preferLowLatencyDisplayMode(bestMode);
         Trace.endSection();
     }
 
-    private void preferLowLatencyDisplayMode() {
+    private Display.Mode findLowLatencyDisplayMode() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-            return;
+            return null;
         }
 
         Display display = getWindowManager().getDefaultDisplay();
         if (display == null) {
-            return;
+            return null;
         }
 
         Display.Mode best = null;
@@ -604,6 +634,10 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
                 best = mode;
             }
         }
+        return best;
+    }
+
+    private void preferLowLatencyDisplayMode(Display.Mode best) {
         if (best == null) {
             return;
         }
@@ -986,9 +1020,16 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
             Log.i(TAG, "raw input thread tid=" + rawInputThreadTid
                     + " blocking=" + (rawStickInput != null && rawStickInput.supportsBlockingWait())
                     + " waitMs=" + RAW_INPUT_WAIT_MS
-                    + " fallbackPollMs=" + RAW_INPUT_FALLBACK_POLL_MS);
+                    + " fallbackPollMs=" + getRawInputFallbackPollMs());
             updatePerfHintThreads();
         });
+    }
+
+    private long getRawInputFallbackPollMs() {
+        return LAUNCH_MODE_LIVE.equals(launchMode)
+                || LAUNCH_MODE_LOCAL_PLAY.equals(launchMode)
+                ? RAW_INPUT_LIVE_FALLBACK_POLL_MS
+                : RAW_INPUT_FALLBACK_POLL_MS;
     }
 
     private void postRawInputPoll() {
@@ -997,7 +1038,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
             if (rawStickInput != null && rawStickInput.supportsBlockingWait()) {
                 handler.post(rawInputPoll);
             } else {
-                handler.postDelayed(rawInputPoll, RAW_INPUT_FALLBACK_POLL_MS);
+                handler.postDelayed(rawInputPoll, getRawInputFallbackPollMs());
             }
         }
     }
@@ -1098,7 +1139,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     }
 
     private void startFrameLatencyTrace() {
-        if (!LATENCY_TRACE) {
+        if (!LATENCY_TRACE && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
             return;
         }
         Choreographer.getInstance().removeFrameCallback(frameLatencyCallback);
@@ -1112,6 +1153,10 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     }
 
     private void recordFrameDelta(long deltaUs) {
+        reportPerfHintFrameDuration(deltaUs);
+        if (!LATENCY_TRACE) {
+            return;
+        }
         frameDeltasUs.add(deltaUs);
         if (frameDeltasUs.size() > 360) {
             frameDeltasUs.remove(0);
@@ -1139,6 +1184,17 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
                 + " p99Us=" + p99
                 + " jankPct=" + String.format(Locale.US, "%.1f",
                 frameDeltasUs.isEmpty() ? 0f : (jank * 100f / frameDeltasUs.size())));
+    }
+
+    private void reportPerfHintFrameDuration(long deltaUs) {
+        if (hintSession == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            return;
+        }
+        try {
+            hintSession.reportActualWorkDuration(Math.max(1L, deltaUs * 1000L));
+        } catch (Throwable t) {
+            Log.w(TAG, "PerformanceHintSession reportActualWorkDuration failed: " + t);
+        }
     }
 
     private long percentile(ArrayList<Long> sorted, float p) {

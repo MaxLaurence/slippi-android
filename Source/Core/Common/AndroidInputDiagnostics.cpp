@@ -5,6 +5,7 @@
 #include "Common/AndroidInputDiagnostics.h"
 
 #include <array>
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <mutex>
@@ -13,6 +14,7 @@
 
 #ifdef ANDROID
 #include <android/log.h>
+#include <sys/system_properties.h>
 #endif
 
 namespace Common
@@ -28,6 +30,19 @@ std::mutex s_mutex;
 std::array<std::string, RING_SIZE> s_lines;
 size_t s_next_line = 0;
 size_t s_line_count = 0;
+std::atomic<bool> s_enabled{false};
+std::atomic<bool> s_logcat_enabled{false};
+
+#ifdef ANDROID
+bool AndroidPropertyEnabled(const char* name)
+{
+  char value[PROP_VALUE_MAX] = {};
+  if (__system_property_get(name, value) <= 0)
+    return false;
+  return value[0] == '1' || value[0] == 'y' || value[0] == 'Y' ||
+         value[0] == 't' || value[0] == 'T';
+}
+#endif
 
 void PushLine(const char* tag, const char* message)
 {
@@ -35,7 +50,11 @@ void PushLine(const char* tag, const char* message)
     return;
 
 #ifdef ANDROID
-  __android_log_print(ANDROID_LOG_INFO, tag && tag[0] ? tag : "SlippiInputDiag", "%s", message);
+  if (s_logcat_enabled.load(std::memory_order_relaxed) ||
+      AndroidPropertyEnabled("debug.slippi.input_diag_logcat"))
+  {
+    __android_log_print(ANDROID_LOG_INFO, tag && tag[0] ? tag : "SlippiInputDiag", "%s", message);
+  }
 #endif
 
   std::lock_guard<std::mutex> lock(s_mutex);
@@ -46,8 +65,26 @@ void PushLine(const char* tag, const char* message)
 }
 }  // namespace
 
+void SetEnabled(bool enabled)
+{
+  s_enabled.store(enabled, std::memory_order_relaxed);
+}
+
+bool IsEnabled()
+{
+  return s_enabled.load(std::memory_order_relaxed);
+}
+
+void SetLogcatEnabled(bool enabled)
+{
+  s_logcat_enabled.store(enabled, std::memory_order_relaxed);
+}
+
 void Record(const char* tag, const char* format, ...)
 {
+  if (!IsEnabled())
+    return;
+
   if (!format)
     return;
 

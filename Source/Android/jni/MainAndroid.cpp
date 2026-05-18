@@ -834,6 +834,8 @@ JNIEXPORT jlong JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetPadOverr
     JNIEnv* env, jobject obj, jint port);
 JNIEXPORT jstring JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetInputDiagnosticsLog(
     JNIEnv* env, jobject obj);
+JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetInputDiagnosticsEnabled(
+    JNIEnv* env, jobject obj, jboolean enabled, jboolean logcat_enabled);
 JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_ClearSlippiInputPath(
     JNIEnv* env, jobject obj);
 JNIEXPORT jint JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetReplayLatestFrame(
@@ -1005,6 +1007,18 @@ JNIEXPORT jstring JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_GetInputD
     JNIEnv* env, jobject)
 {
   return env->NewStringUTF(Common::AndroidInputDiagnostics::Dump().c_str());
+}
+
+JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SetInputDiagnosticsEnabled(
+    JNIEnv*, jobject, jboolean enabled, jboolean logcat_enabled)
+{
+  const bool should_enable = enabled == JNI_TRUE;
+  if (should_enable)
+    Common::AndroidInputDiagnostics::Clear();
+  Common::AndroidInputDiagnostics::SetLogcatEnabled(logcat_enabled == JNI_TRUE);
+  Common::AndroidInputDiagnostics::SetEnabled(should_enable);
+  if (!should_enable)
+    Common::AndroidInputDiagnostics::SetLogcatEnabled(false);
 }
 
 // ─── Gecko-style direct write into Melee's HSDPad array ───
@@ -1426,12 +1440,18 @@ JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SurfaceChang
                                                                                    jobject obj,
                                                                                    jobject _surf)
 {
-  surf = ANativeWindow_fromSurface(env, _surf);
-  if (surf == nullptr)
+  ANativeWindow* next_surf = ANativeWindow_fromSurface(env, _surf);
+  if (next_surf == nullptr)
     __android_log_print(ANDROID_LOG_ERROR, DOLPHIN_TAG, "Error: Surface is null.");
+
+  ANativeWindow* previous_surf = surf;
+  surf = next_surf;
 
   if (g_renderer)
     g_renderer->ChangeSurface(surf);
+
+  if (previous_surf)
+    ANativeWindow_release(previous_surf);
 }
 
 JNIEXPORT void JNICALL Java_org_dolphinemu_dolphinemu_NativeLibrary_SurfaceDestroyed(JNIEnv* env,

@@ -10,6 +10,9 @@ namespace Common
 {
 namespace AndroidInputDiagnostics
 {
+void SetEnabled(bool enabled);
+bool IsEnabled();
+void SetLogcatEnabled(bool enabled);
 void Record(const char* tag, const char* format, ...);
 std::string Dump();
 void Clear();
