@@ -761,8 +761,10 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             boolean enableGpuTextureDecoding) {
         writeIniValue(gfxIni, "Hardware", "VSync", "False");
         writeIniValue(gfxIni, "Settings", "SafeTextureCacheColorSamples", "128");
-        writeIniValue(gfxIni, "Settings", "ShowFPS", "False");
-        writeIniValue(gfxIni, "Settings", "ShowNetPlayPing", "False");
+        writeIniValue(gfxIni, "Settings", "ShowFPS",
+                DolphinSettings.booleanIniValue(DolphinSettings.isShowFpsEnabled(this)));
+        writeIniValue(gfxIni, "Settings", "ShowNetPlayPing",
+                DolphinSettings.booleanIniValue(DolphinSettings.isShowNetplayPingEnabled(this)));
         writeIniValue(gfxIni, "Settings", "LogRenderTimeToFile", "False");
         writeIniValue(gfxIni, "Settings", "OverlayStats", "False");
         writeIniValue(gfxIni, "Settings", "OverlayProjStats", "False");
@@ -877,9 +879,9 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "GFX", "Settings",
                 "SafeTextureCacheColorSamples", 128);
         NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
-                "ShowFPS", false);
+                "ShowFPS", DolphinSettings.isShowFpsEnabled(this));
         NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
-                "ShowNetPlayPing", false);
+                "ShowNetPlayPing", DolphinSettings.isShowNetplayPingEnabled(this));
         NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",
                 "LogRenderTimeToFile", false);
         NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "GFX", "Settings",

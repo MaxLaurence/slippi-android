@@ -249,6 +249,22 @@ public class SettingsActivity extends AppCompatActivity {
                     DolphinSettings.applyIshiirukaGraphicsConfig(this, false);
                     refreshCurrentPane();
                 });
+        addSwitchRow(body, "Show FPS",
+                "Display the emulator frame-rate overlay during play",
+                DolphinSettings.isShowFpsEnabled(this), true,
+                enabled -> {
+                    DolphinSettings.setShowFpsEnabled(this, enabled);
+                    DolphinSettings.applyIshiirukaGraphicsConfig(this, false);
+                    refreshCurrentPane();
+                });
+        addSwitchRow(body, "Show ping",
+                "Display Slippi netplay ping during online matches",
+                DolphinSettings.isShowNetplayPingEnabled(this), true,
+                enabled -> {
+                    DolphinSettings.setShowNetplayPingEnabled(this, enabled);
+                    DolphinSettings.applyIshiirukaGraphicsConfig(this, false);
+                    refreshCurrentPane();
+                });
     }
 
     private void populateAudioPane(LinearLayout body) {

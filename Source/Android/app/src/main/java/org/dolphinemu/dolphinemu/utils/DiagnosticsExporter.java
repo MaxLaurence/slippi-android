@@ -153,6 +153,8 @@ public final class DiagnosticsExporter {
                 GameSettingsOverride.isMeleeWidescreenEnabled(context));
         appendKV(sb, "Dolphin widescreen hack",
                 DolphinSettings.isWidescreenHackEnabled(context));
+        appendKV(sb, "Show FPS overlay", DolphinSettings.isShowFpsEnabled(context));
+        appendKV(sb, "Show netplay ping", DolphinSettings.isShowNetplayPingEnabled(context));
     }
 
     private static void appendFiles(StringBuilder sb, Context context) {

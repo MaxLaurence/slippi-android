@@ -247,8 +247,8 @@ currently `8`) writes opinionated `Dolphin.ini` / `GFX.ini` /
   `InternalResolution=1` — keeps EFB and main resolution at native
   on high-density Android displays. Auto-integral was silently
   raising GPU cost on the Thor.
-- `ShowFPS=False`, `ShowNetPlayPing=False` — cleaner display by
-  default.
+- `ShowFPS=True`, `ShowNetPlayPing=True` — FPS and online ping are
+  visible by default and can be disabled from **Settings → Graphics**.
 - `SlippiSaveReplays=True` + `SlippiReplayDir=<external-files>/Slippi/Replays`
   + `SlippiReplayMonthFolders=False` — auto-save netplay `.slp` files
   into a native-writable real path. Mainline launch also writes the

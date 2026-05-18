@@ -19,6 +19,8 @@ public final class DolphinSettings {
     public static final String PREF_KEY_GFX_ASPECT_RATIO = "gfx_aspect_ratio";
     public static final String PREF_KEY_EFB_SCALE = "gfx_efb_scale";
     public static final String PREF_KEY_WIDESCREEN_HACK = "gfx_widescreen_hack";
+    public static final String PREF_KEY_SHOW_FPS = "gfx_show_fps";
+    public static final String PREF_KEY_SHOW_NETPLAY_PING = "gfx_show_netplay_ping";
 
     public static final String BACKEND_VULKAN = "Vulkan";
     public static final String BACKEND_OGL = "OGL";
@@ -206,6 +208,26 @@ public final class DolphinSettings {
         prefs(context).edit().putBoolean(PREF_KEY_WIDESCREEN_HACK, enabled).apply();
     }
 
+    public static boolean isShowFpsEnabled(Context context) {
+        return prefs(context).getBoolean(PREF_KEY_SHOW_FPS, true);
+    }
+
+    public static void setShowFpsEnabled(Context context, boolean enabled) {
+        prefs(context).edit().putBoolean(PREF_KEY_SHOW_FPS, enabled).apply();
+    }
+
+    public static boolean isShowNetplayPingEnabled(Context context) {
+        return prefs(context).getBoolean(PREF_KEY_SHOW_NETPLAY_PING, true);
+    }
+
+    public static void setShowNetplayPingEnabled(Context context, boolean enabled) {
+        prefs(context).edit().putBoolean(PREF_KEY_SHOW_NETPLAY_PING, enabled).apply();
+    }
+
+    public static String booleanIniValue(boolean enabled) {
+        return enabled ? "True" : "False";
+    }
+
     public static void setMeleeWidescreenEnabled(Context context, boolean enabled) {
         GameSettingsOverride.setMeleeWidescreenEnabled(context, enabled);
         setAspectRatio(context, enabled ? ASPECT_16_9 : ASPECT_MELEE);
@@ -230,9 +252,13 @@ public final class DolphinSettings {
         NativeLibrary.SetConfig("GFX.ini", "Settings", "InternalResolution",
                 Integer.toString(legacyInternalResolutionForEfbScale(efbScale)));
         NativeLibrary.SetConfig("GFX.ini", "Settings", "wideScreenHack",
-                isWidescreenHackEnabled(context) ? "True" : "False");
+                booleanIniValue(isWidescreenHackEnabled(context)));
+        NativeLibrary.SetConfig("GFX.ini", "Settings", "ShowFPS",
+                booleanIniValue(isShowFpsEnabled(context)));
+        NativeLibrary.SetConfig("GFX.ini", "Settings", "ShowNetPlayPing",
+                booleanIniValue(isShowNetplayPingEnabled(context)));
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "MeleeForceWidescreen",
-                meleeForceWidescreen ? "True" : "False");
+                booleanIniValue(meleeForceWidescreen));
         if (updateNativeRuntimeState) {
             try {
                 NativeLibrary.SetMeleeForceWidescreen(meleeForceWidescreen);
