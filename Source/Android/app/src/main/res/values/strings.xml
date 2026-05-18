@@ -138,7 +138,7 @@
     <string name="training_update">Update</string>
     <string name="training_play">Play</string>
     <string name="training_slippi_parity_delay">Slippi parity delay</string>
-    <string name="training_slippi_parity_delay_summary">A/B test: keep Slippi\'s all-scenes delay active in Training Mode.</string>
+    <string name="training_slippi_parity_delay_summary">Add 2f of input delay for Slippi parity.</string>
     <string name="training_check_updates">Check updates</string>
     <string name="training_remove">Remove Training Mode</string>
     <string name="training_installed_path_label">Installed ISO</string>
