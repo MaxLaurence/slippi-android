@@ -258,6 +258,13 @@ public class SettingsActivity extends AppCompatActivity {
         DolphinSettings.DisplayLatencyMode latency = DolphinSettings.getDisplayLatencyMode(this);
         addActionRow(body, "Display latency", getString(latency.labelResId),
                 v -> showDisplayLatencyChooser());
+        addSwitchRow(body, "Smooth netplay",
+                "Experimental. Applies on the next PLAY launch.",
+                DolphinSettings.isSmoothNetplayEnabled(this), true,
+                enabled -> {
+                    DolphinSettings.setSmoothNetplayEnabled(this, enabled);
+                    refreshCurrentPane();
+                });
     }
 
     private void populateControlsPane(LinearLayout body) {

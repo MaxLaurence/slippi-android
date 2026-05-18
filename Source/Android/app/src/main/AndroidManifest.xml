@@ -28,6 +28,7 @@
         android:allowBackup="false"
         android:supportsRtl="true"
         android:isGame="true"
+        android:appCategory="game"
         android:hardwareAccelerated="true"
         android:theme="@style/Theme.SlippiDolphin">
 

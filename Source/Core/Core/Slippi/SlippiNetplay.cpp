@@ -43,7 +43,6 @@
 //#include <mbedtls/md5.h>
 //#include <SlippiGame.h>
 
-static std::mutex pad_mutex;
 static std::mutex ack_mutex;
 
 SlippiNetplayClient *SLIPPI_NETPLAY = nullptr;
@@ -129,6 +128,159 @@ void ConfigureAndroidLowLatencySocket(ENetHost* host)
 #endif
 }  // namespace
 
+void SlippiNetplayClient::PadRing::Clear()
+{
+	const u32 generation = m_generation.fetch_add(1, std::memory_order_acq_rel) + 1;
+	m_latestFrame.store(INT_MIN, std::memory_order_release);
+	m_readFloor.store(INT_MIN, std::memory_order_release);
+	for (auto &slot : m_slots)
+	{
+		slot.sequence.store(1, std::memory_order_release);
+		slot.pad = SlippiPad();
+		slot.generation.store(generation, std::memory_order_release);
+		slot.sequence.store(2, std::memory_order_release);
+	}
+}
+
+void SlippiNetplayClient::PadRing::Push(const SlippiPad &pad)
+{
+	auto &slot = m_slots[static_cast<size_t>(pad.frame) % m_slots.size()];
+	const u32 generation = m_generation.load(std::memory_order_acquire);
+	u32 sequence = slot.sequence.load(std::memory_order_relaxed);
+	if ((sequence % 2) == 0)
+		sequence++;
+	slot.sequence.store(sequence, std::memory_order_release);
+	slot.pad = pad;
+	slot.generation.store(generation, std::memory_order_release);
+	slot.sequence.store(sequence + 1, std::memory_order_release);
+
+	s32 latest = m_latestFrame.load(std::memory_order_acquire);
+	while (pad.frame > latest &&
+	       !m_latestFrame.compare_exchange_weak(latest, pad.frame, std::memory_order_release,
+	                                            std::memory_order_acquire))
+	{
+	}
+}
+
+void SlippiNetplayClient::PadRing::DropBefore(s32 frame)
+{
+	s32 floor = m_readFloor.load(std::memory_order_acquire);
+	while (frame > floor &&
+	       !m_readFloor.compare_exchange_weak(floor, frame, std::memory_order_release,
+	                                          std::memory_order_acquire))
+	{
+	}
+}
+
+bool SlippiNetplayClient::PadRing::TryGetFrame(s32 frame, SlippiPad *out) const
+{
+	if (frame < m_readFloor.load(std::memory_order_acquire))
+		return false;
+
+	auto latest = m_latestFrame.load(std::memory_order_acquire);
+	if (latest == INT_MIN || frame > latest ||
+	    latest - frame >= static_cast<s32>(SLIPPI_PAD_RING_CAPACITY))
+	{
+		return false;
+	}
+
+	const auto &slot = m_slots[static_cast<size_t>(frame) % m_slots.size()];
+	for (int attempts = 0; attempts < 3; attempts++)
+	{
+		u32 generation = m_generation.load(std::memory_order_acquire);
+		u32 before = slot.sequence.load(std::memory_order_acquire);
+		if ((before % 2) != 0)
+			continue;
+		SlippiPad copied = slot.pad;
+		u32 slotGeneration = slot.generation.load(std::memory_order_acquire);
+		u32 after = slot.sequence.load(std::memory_order_acquire);
+		if (before == after && (after % 2) == 0 && copied.frame == frame &&
+		    slotGeneration == generation &&
+		    generation == m_generation.load(std::memory_order_acquire))
+		{
+			if (out)
+				*out = copied;
+			return true;
+		}
+	}
+	return false;
+}
+
+s32 SlippiNetplayClient::PadRing::LatestFrame() const
+{
+	return m_latestFrame.load(std::memory_order_acquire);
+}
+
+size_t SlippiNetplayClient::PadRing::CopyNewestFirst(
+    s32 minFrameInclusive, size_t maxCount, std::array<SlippiPad, SLIPPI_PAD_RING_CAPACITY> *out) const
+{
+	if (!out)
+		return 0;
+
+	size_t count = 0;
+	auto latest = LatestFrame();
+	if (latest == INT_MIN)
+		return 0;
+
+	s32 floor = std::max(minFrameInclusive, m_readFloor.load(std::memory_order_acquire));
+	floor = std::max(floor, latest - static_cast<s32>(SLIPPI_PAD_RING_CAPACITY) + 1);
+	for (s32 frame = latest; frame >= floor && count < maxCount; frame--)
+	{
+		SlippiPad pad;
+		if (TryGetFrame(frame, &pad))
+			(*out)[count++] = pad;
+		if (frame == INT_MIN)
+			break;
+	}
+	return count;
+}
+
+size_t SlippiNetplayClient::PadRing::CopyNewestFirst(size_t maxCount, u8 *out, size_t outCapacity,
+                                                     s32 *latestFrame) const
+{
+	if (!out || outCapacity == 0 || maxCount == 0)
+		return 0;
+
+	auto latest = LatestFrame();
+	if (latestFrame)
+		*latestFrame = latest == INT_MIN ? 0 : latest;
+	if (latest == INT_MIN)
+		return 0;
+
+	// Remote input reads expect the oldest still-needed window, not the newest
+	// window. The EXI side computes an offset from latestFrame back to the
+	// requested frame; returning a too-new window can make valid early frames
+	// look absent during match startup and trigger a stall/disconnect.
+	s32 floor = std::max<s32>(1, m_readFloor.load(std::memory_order_acquire));
+	floor = std::max(floor, latest - static_cast<s32>(SLIPPI_PAD_RING_CAPACITY) + 1);
+	if (floor > latest)
+	{
+		if (latestFrame)
+			*latestFrame = latest;
+		return 0;
+	}
+
+	s32 windowLatest = std::min(latest, floor + static_cast<s32>(maxCount) - 1);
+	if (latestFrame)
+		*latestFrame = windowLatest;
+
+	size_t count = 0;
+	size_t bytes = 0;
+	SlippiPad emptyPad;
+	for (s32 frame = windowLatest;
+	     frame >= floor && count < maxCount && bytes + SLIPPI_PAD_FULL_SIZE <= outCapacity; frame--)
+	{
+		SlippiPad pad;
+		const SlippiPad &source = TryGetFrame(frame, &pad) ? pad : emptyPad;
+		std::memcpy(out + bytes, source.padBuf, SLIPPI_PAD_FULL_SIZE);
+		bytes += SLIPPI_PAD_FULL_SIZE;
+		count++;
+		if (frame == INT_MIN)
+			break;
+	}
+	return bytes;
+}
+
 // called from ---GUI--- thread
 SlippiNetplayClient::~SlippiNetplayClient()
 {
@@ -179,12 +331,15 @@ SlippiNetplayClient::SlippiNetplayClient(std::vector<std::string> addrs, std::ve
 		this->matchInfo.remotePlayerSelections[i] = SlippiPlayerSelections();
 		this->matchInfo.remotePlayerSelections[i].playerIdx = j;
 
-		this->remotePadQueue[i] = std::deque<std::unique_ptr<SlippiPad>>();
+		this->remotePadRings[i].Clear();
 		this->frameOffsetData[i] = FrameOffsetData();
 		this->lastFrameTiming[i] = FrameTiming();
 		this->pingUs[i] = 0;
 		this->lastFrameAcked[i] = 0; // First frame should be 1 in this context so 0 is the correct reset (I think)
+		this->remoteChecksumFrame[i].store(0, std::memory_order_release);
+		this->remoteChecksumValue[i].store(0, std::memory_order_release);
 	}
+	localPadRing.Clear();
 
 	SLIPPI_NETPLAY = std::move(this);
 
@@ -392,55 +547,38 @@ unsigned int SlippiNetplayClient::OnData(sf::Packet &packet, ENetPeer *peer)
 
 		frameOffsetData[pIdx].idx = (frameOffsetData[pIdx].idx + 1) % SLIPPI_ONLINE_LOCKSTEP_INTERVAL;
 
-		s64 inputsToCopy;
+		auto packetData = (u8 *)packet.getData();
+		s64 frame64 = static_cast<s64>(frame);
+		s32 headFrame = remotePadRings[pIdx].LatestFrame();
+		if (headFrame == INT_MIN)
+			headFrame = 0;
+		s64 inputsToCopy = frame64 - static_cast<s64>(headFrame);
+
+		// Check that the packet actually contains the data it claims to.
+		if ((padDataOffset + inputsToCopy * SLIPPI_PAD_DATA_SIZE) > static_cast<s64>(packet.getDataSize()))
 		{
-			std::lock_guard<std::mutex> lk(pad_mutex); // TODO: Is this the correct lock?
-
-			auto packetData = (u8 *)packet.getData();
-
-			// INFO_LOG(SLIPPI_ONLINE, "Receiving a packet of inputs from player %d(%d) [%d]...", packetPlayerPort,
-			// pIdx,
-			//         frame);
-
-			s64 frame64 = static_cast<s64>(frame);
-			s32 headFrame = remotePadQueue[pIdx].empty() ? 0 : remotePadQueue[pIdx].front()->frame;
-			// Expand int size up to 64 bits to avoid overflowing
-			inputsToCopy = frame64 - static_cast<s64>(headFrame);
-
-			// Check that the packet actually contains the data it claims to
-			if ((padDataOffset + inputsToCopy * SLIPPI_PAD_DATA_SIZE) > static_cast<s64>(packet.getDataSize()))
-			{
-				ERROR_LOG(SLIPPI_ONLINE,
-				          "Netplay packet too small to read pad buffer. Size: %d, Inputs: %d, MinSize: %d",
-				          (int)packet.getDataSize(), inputsToCopy, padDataOffset + inputsToCopy * SLIPPI_PAD_DATA_SIZE);
-				break;
-			}
-
-			// Not sure what the max is here. If we never ack frames it could get big...
-			if (inputsToCopy > 128) {
-				ERROR_LOG(SLIPPI_ONLINE,
-				          "Netplay packet contained too many frames: %d",
-				          inputsToCopy);
-				break;
-			}
-
-			for (s64 i = inputsToCopy - 1; i >= 0; i--)
-			{
-				auto pad = std::make_unique<SlippiPad>(static_cast<s32>(frame64 - i),
-				                                       &packetData[padDataOffset + i * SLIPPI_PAD_DATA_SIZE]);
-				// INFO_LOG(SLIPPI_ONLINE, "Rcv [%d] -> %02X %02X %02X %02X %02X %02X %02X %02X", pad->frame,
-				//         pad->padBuf[0], pad->padBuf[1], pad->padBuf[2], pad->padBuf[3], pad->padBuf[4],
-				//         pad->padBuf[5], pad->padBuf[6], pad->padBuf[7]);
-
-				remotePadQueue[pIdx].push_front(std::move(pad));
-			}
-
-			// Write checksum pad to keep track of latest remote checksum
-			ChecksumEntry e;
-			e.frame = checksumFrame;
-			e.value = checksum;
-			remote_checksums[pIdx] = e;
+			ERROR_LOG(SLIPPI_ONLINE,
+			          "Netplay packet too small to read pad buffer. Size: %d, Inputs: %d, MinSize: %d",
+			          (int)packet.getDataSize(), inputsToCopy,
+			          padDataOffset + inputsToCopy * SLIPPI_PAD_DATA_SIZE);
+			break;
 		}
+
+		if (inputsToCopy > 128)
+		{
+			ERROR_LOG(SLIPPI_ONLINE, "Netplay packet contained too many frames: %d", inputsToCopy);
+			break;
+		}
+
+		for (s64 i = inputsToCopy - 1; i >= 0; i--)
+		{
+			SlippiPad pad(static_cast<s32>(frame64 - i),
+			              &packetData[padDataOffset + i * SLIPPI_PAD_DATA_SIZE]);
+			remotePadRings[pIdx].Push(pad);
+		}
+
+		remoteChecksumFrame[pIdx].store(checksumFrame, std::memory_order_release);
+		remoteChecksumValue[pIdx].store(checksum, std::memory_order_release);
 
 		// Only ack if inputsToCopy is greater than 0. Otherwise we are receiving an old input and
 		// we should have already acked something in the future. This can also happen in the case
@@ -557,8 +695,10 @@ unsigned int SlippiNetplayClient::OnData(sf::Packet &packet, ENetPeer *peer)
 			// so this should ensure that everything is initialized before the game starts
 			hasGameStarted = false;
 
-			// Reset remote pad queue such that next inputs that we get are not compared to inputs from last game
-			remotePadQueue[idx].clear();
+			// Reset remote pad ring such that next inputs are not compared to inputs from last game.
+			remotePadRings[idx].Clear();
+			remoteChecksumFrame[idx].store(0, std::memory_order_release);
+			remoteChecksumValue[idx].store(0, std::memory_order_release);
 		}
 	}
 	break;
@@ -794,6 +934,99 @@ void SlippiNetplayClient::Send(sf::Packet &packet)
 		ENetPacket *epac = enet_packet_create(packet.getData(), packet.getDataSize(), flags);
 		int sendResult = enet_peer_send(m_server[i], channelId, epac);
 	}
+}
+
+void SlippiNetplayClient::SendSlippiPadBatchAsync(
+    const std::array<SlippiPad, SLIPPI_PAD_RING_CAPACITY> &pads, size_t padCount)
+{
+	if (padCount == 0)
+		return;
+
+	if (slippiConnectStatus.load(std::memory_order_acquire) ==
+	    SlippiConnectStatus::NET_CONNECT_STATUS_DISCONNECTED)
+	{
+		return;
+	}
+
+	size_t head = m_pad_packet_head.load(std::memory_order_acquire);
+	size_t tail = m_pad_packet_tail.load(std::memory_order_acquire);
+	size_t waitCount = 0;
+	while (head - tail >= SLIPPI_PAD_PACKET_QUEUE_CAPACITY)
+	{
+		auto status = slippiConnectStatus.load(std::memory_order_acquire);
+		if (status == SlippiConnectStatus::NET_CONNECT_STATUS_FAILED ||
+		    status == SlippiConnectStatus::NET_CONNECT_STATUS_DISCONNECTED)
+		{
+			return;
+		}
+
+		if (waitCount == 0 || waitCount % 60 == 0)
+		{
+			WARN_LOG(SLIPPI_ONLINE,
+			         "Waiting for Slippi pad packet ring to drain; outbound queue is full");
+		}
+		if (waitCount >= 120)
+		{
+			ERROR_LOG(SLIPPI_ONLINE,
+			          "Disconnecting after Slippi pad packet ring stayed full for %zu ms",
+			          waitCount);
+			slippiConnectStatus.store(SlippiConnectStatus::NET_CONNECT_STATUS_DISCONNECTED,
+			                          std::memory_order_release);
+			if (m_client)
+				ENetUtil::WakeupThread(m_client);
+			return;
+		}
+		waitCount++;
+		Common::SleepCurrentThread(1);
+		head = m_pad_packet_head.load(std::memory_order_acquire);
+		tail = m_pad_packet_tail.load(std::memory_order_acquire);
+	}
+
+	QueuedPadPacket &queued = m_pad_packet_queue[head % SLIPPI_PAD_PACKET_QUEUE_CAPACITY];
+	queued.frame = pads[0].frame;
+	queued.playerIdx = playerIdx;
+	queued.checksumFrame = pads[0].checksumFrame;
+	queued.checksum = pads[0].checksum;
+	queued.padCount = std::min(padCount, static_cast<size_t>(SLIPPI_PAD_RING_CAPACITY));
+	for (size_t i = 0; i < queued.padCount; i++)
+	{
+		std::memcpy(&queued.padBytes[i * SLIPPI_PAD_DATA_SIZE], pads[i].padBuf,
+		            SLIPPI_PAD_DATA_SIZE);
+	}
+
+	m_pad_packet_head.store(head + 1, std::memory_order_release);
+	m_async_queue_depth.fetch_add(1, std::memory_order_relaxed);
+	if (m_client)
+		ENetUtil::WakeupThread(m_client);
+}
+
+void SlippiNetplayClient::DrainQueuedPadPackets()
+{
+	size_t tail = m_pad_packet_tail.load(std::memory_order_acquire);
+	size_t head = m_pad_packet_head.load(std::memory_order_acquire);
+	while (tail < head)
+	{
+		SendQueuedPadPacket(m_pad_packet_queue[tail % SLIPPI_PAD_PACKET_QUEUE_CAPACITY]);
+		m_pad_packet_tail.store(tail + 1, std::memory_order_release);
+		m_async_queue_depth.fetch_sub(1, std::memory_order_relaxed);
+		tail = m_pad_packet_tail.load(std::memory_order_acquire);
+		head = m_pad_packet_head.load(std::memory_order_acquire);
+	}
+}
+
+void SlippiNetplayClient::SendQueuedPadPacket(const QueuedPadPacket &queued)
+{
+	sf::Packet packet;
+	packet << static_cast<MessageId>(NP_MSG_SLIPPI_PAD);
+	packet << queued.frame;
+	packet << queued.playerIdx;
+	packet << queued.checksumFrame;
+	packet << queued.checksum;
+	for (size_t i = 0; i < queued.padCount; i++)
+	{
+		packet.append(&queued.padBytes[i * SLIPPI_PAD_DATA_SIZE], SLIPPI_PAD_DATA_SIZE);
+	}
+	Send(packet);
 }
 
 void SlippiNetplayClient::Disconnect()
@@ -1133,6 +1366,7 @@ void SlippiNetplayClient::ThreadFunc()
 		ENetEvent netEvent;
 		int net;
 		net = enet_host_service(m_client, &netEvent, 4);
+		DrainQueuedPadPackets();
 		while (!m_async_queue.Empty())
 		{
 			m_async_queue_depth.fetch_sub(1, std::memory_order_relaxed);
@@ -1279,7 +1513,7 @@ void SlippiNetplayClient::StartSlippiGame()
 	// Reset variables to start a new game
 	hasGameStarted = false;
 
-	localPadQueue.clear();
+	localPadRing.Clear();
 
 	for (int i = 0; i < m_remotePlayerCount; i++)
 	{
@@ -1311,7 +1545,7 @@ void SlippiNetplayClient::SendConnectionSelected()
 	SendAsync(std::move(spac));
 }
 
-void SlippiNetplayClient::SendSlippiPad(std::unique_ptr<SlippiPad> pad)
+void SlippiNetplayClient::SendSlippiPad(const SlippiPad *pad)
 {
 	auto status = slippiConnectStatus.load(std::memory_order_acquire);
 	bool connectionFailed = status == SlippiNetplayClient::SlippiConnectStatus::NET_CONNECT_STATUS_FAILED;
@@ -1338,10 +1572,9 @@ void SlippiNetplayClient::SendSlippiPad(std::unique_ptr<SlippiPad> pad)
 				m_max_pad_override_age_us = age_us;
 		}
 #endif
-		auto* pad_for_diag = pad.get();
-		localPadQueue.push_front(std::move(pad));
+		localPadRing.Push(*pad);
 #ifdef __ANDROID__
-		RecordLocalPadQueueDiagnostic("local_queue_push", pad_for_diag, localPadQueue.size());
+		RecordLocalPadQueueDiagnostic("local_queue_push", pad, 0);
 #endif
 	}
 
@@ -1360,52 +1593,32 @@ void SlippiNetplayClient::SendSlippiPad(std::unique_ptr<SlippiPad> pad)
 	// Cap how far behind minAckFrame is allowed to fall. This protects against a peer
 	// that stops acking. The value used should be sensibly large enough to prevent
 	// any issues
-	if (!localPadQueue.empty())
+	auto currentFrame = localPadRing.LatestFrame();
+	if (currentFrame != INT_MIN)
 	{
-		int currentFrame = localPadQueue.front()->frame;
 		int minimumAllowed = currentFrame - (ROLLBACK_MAX_FRAMES * 2 + 2);
 		minAckFrame = std::max(minAckFrame, minimumAllowed);
 	}
+	localPadRing.DropBefore(minAckFrame);
 
-	// INFO_LOG(SLIPPI_ONLINE, "Checking to drop local inputs, oldest frame: %d | minAckFrame: %d | %d, %d, %d",
-	//         localPadQueue.back()->frame, minAckFrame, lastFrameAcked[0], lastFrameAcked[1], lastFrameAcked[2]);
-	while (!localPadQueue.empty() && localPadQueue.back()->frame < minAckFrame)
-	{
-		// INFO_LOG(SLIPPI_ONLINE, "Dropping local input for frame %d from queue", localPadQueue.back()->frame);
-		localPadQueue.pop_back();
-	}
-
-	if (localPadQueue.empty())
+	if (currentFrame == INT_MIN)
 	{
 		// If pad queue is empty now, there's no reason to send anything
 		return;
 	}
 
+	std::array<SlippiPad, SLIPPI_PAD_RING_CAPACITY> padsToSend;
+	size_t padCount = localPadRing.CopyNewestFirst(minAckFrame, SLIPPI_PAD_RING_CAPACITY, &padsToSend);
+	if (padCount == 0)
+		return;
+
 #ifdef __ANDROID__
-	RecordLocalPadQueueDiagnostic("local_queue_send_front", localPadQueue.front().get(),
-	                              localPadQueue.size());
+	RecordLocalPadQueueDiagnostic("local_queue_send_front", &padsToSend[0], padCount);
 #endif
 
-	auto frame = localPadQueue.front()->frame;
+	auto frame = padsToSend[0].frame;
 
-	auto spac = std::make_unique<sf::Packet>();
-	*spac << static_cast<MessageId>(NP_MSG_SLIPPI_PAD);
-	*spac << frame;
-	*spac << this->playerIdx;
-	*spac << localPadQueue.front()->checksumFrame;
-	*spac << localPadQueue.front()->checksum;
-
-	// INFO_LOG(SLIPPI_ONLINE, "Sending a packet of inputs [%d]...", frame);
-	for (auto it = localPadQueue.begin(); it != localPadQueue.end(); ++it)
-	{
-		// INFO_LOG(SLIPPI_ONLINE, "Send [%d] -> %02X %02X %02X %02X %02X %02X %02X %02X", (*it)->frame,
-		// (*it)->padBuf[0],
-		//         (*it)->padBuf[1], (*it)->padBuf[2], (*it)->padBuf[3], (*it)->padBuf[4], (*it)->padBuf[5],
-		//         (*it)->padBuf[6], (*it)->padBuf[7]);
-		spac->append((*it)->padBuf, SLIPPI_PAD_DATA_SIZE); // only transfer 8 bytes per pad
-	}
-
-	SendAsync(std::move(spac));
+	SendSlippiPadBatchAsync(padsToSend, padCount);
 
 	u64 time = Common::Timer::GetTimeUs();
 #ifdef __ANDROID__
@@ -1421,7 +1634,7 @@ void SlippiNetplayClient::SendSlippiPad(std::unique_ptr<SlippiPad> pad)
 			__android_log_print(ANDROID_LOG_INFO, LATENCY_TAG,
 			                    "sendPad frame=%d queue=%zu asyncDepth=%d padAgeUs=%" PRIu64
 			                    " avgPadAgeUs=%" PRIu64 " maxPadAgeUs=%" PRIu64,
-			                    frame, localPadQueue.size(),
+			                    frame, padCount,
 			                    m_async_queue_depth.load(std::memory_order_relaxed), age_us,
 			                    m_total_pad_override_age_us / m_pad_send_count,
 			                    m_max_pad_override_age_us);
@@ -1558,105 +1771,67 @@ u8 SlippiNetplayClient::GetSlippiRemoteSentChatMessage(bool isChatEnabled)
 	return copiedMessageId;
 }
 
-std::unique_ptr<SlippiRemotePadOutput> SlippiNetplayClient::GetFakePadOutput(int frame) {
+SlippiRemotePadOutput SlippiNetplayClient::GetFakePadOutput(int frame) {
 	// Used for testing purposes, will ignore the opponent's actual inputs and provide fake
 	// ones to trigger rollback scenarios
-	std::unique_ptr<SlippiRemotePadOutput> padOutput = std::make_unique<SlippiRemotePadOutput>();
+	SlippiRemotePadOutput padOutput;
 
 	// Triggers rollback where the first few inputs were correctly predicted
 	if (frame % 60 < 5)
 	{
 		// Return old inputs for a bit
-		padOutput->latestFrame = frame - (frame % 60);
-		padOutput->data.insert(padOutput->data.begin(), SLIPPI_PAD_FULL_SIZE, 0);
+		padOutput.latestFrame = frame - (frame % 60);
+		padOutput.dataLen = SLIPPI_PAD_FULL_SIZE;
 	}
 	else if (frame % 60 == 5)
 	{
-		padOutput->latestFrame = frame;
-		// Add 5 frames of 0'd inputs
-		padOutput->data.insert(padOutput->data.begin(), 5*SLIPPI_PAD_FULL_SIZE, 0);
+		padOutput.latestFrame = frame;
+		padOutput.dataLen = 5 * SLIPPI_PAD_FULL_SIZE;
 
 		// Press A button for 2 inputs prior to this frame causing a rollback
-		padOutput->data[2*SLIPPI_PAD_FULL_SIZE] = 1;
+		padOutput.data[2 * SLIPPI_PAD_FULL_SIZE] = 1;
 	}
 	else
 	{
-		padOutput->latestFrame = frame;
-		padOutput->data.insert(padOutput->data.begin(), SLIPPI_PAD_FULL_SIZE, 0);
+		padOutput.latestFrame = frame;
+		padOutput.dataLen = SLIPPI_PAD_FULL_SIZE;
 	}
 
-	return std::move(padOutput);
+	return padOutput;
 }
 
-std::unique_ptr<SlippiRemotePadOutput> SlippiNetplayClient::GetSlippiRemotePad(int index, int maxFrameCount)
+SlippiRemotePadOutput SlippiNetplayClient::GetSlippiRemotePad(int index, int maxFrameCount)
 {
-	std::lock_guard<std::mutex> lk(pad_mutex); // TODO: Is this the correct lock?
+	SlippiRemotePadOutput padOutput;
 
-	std::unique_ptr<SlippiRemotePadOutput> padOutput = std::make_unique<SlippiRemotePadOutput>();
-
-	if (remotePadQueue[index].empty())
+	if (index < 0 || index >= SLIPPI_REMOTE_PLAYER_MAX)
 	{
-		auto emptyPad = std::make_unique<SlippiPad>(0);
-
-		padOutput->latestFrame = emptyPad->frame;
-
-		auto emptyIt = std::begin(emptyPad->padBuf);
-		padOutput->data.insert(padOutput->data.end(), emptyIt, emptyIt + SLIPPI_PAD_FULL_SIZE);
-
-		return std::move(padOutput);
+		return padOutput;
 	}
 
-	int inputCount = 0;
-
-	padOutput->latestFrame = 0;
-	padOutput->checksumFrame = remote_checksums[index].frame;
-	padOutput->checksum = remote_checksums[index].value;
-
-	padOutput->playerIdx = index >= playerIdx ? index + 1 : index;
-	padOutput->isDisconnected = !playerActive[padOutput->playerIdx].load(std::memory_order_acquire);
-
-	// Copy inputs from the remote pad queue to the output. We iterate backwards because
-	// we want to get the oldest frames possible (will have been cleared to contain the last
-	// finalized frame at the back). I think it's very unlikely but I think before we
-	// iterated from the front and it's possible the 7 frame limit left out an input the
-	// game actually needed.
-	for (auto it = remotePadQueue[index].rbegin(); it != remotePadQueue[index].rend(); ++it)
+	padOutput.latestFrame = 0;
+	padOutput.checksumFrame = remoteChecksumFrame[index].load(std::memory_order_acquire);
+	padOutput.checksum = remoteChecksumValue[index].load(std::memory_order_acquire);
+	padOutput.playerIdx = index >= playerIdx ? index + 1 : index;
+	padOutput.isDisconnected = !playerActive[padOutput.playerIdx].load(std::memory_order_acquire);
+	padOutput.dataLen = remotePadRings[index].CopyNewestFirst(
+	    static_cast<size_t>(maxFrameCount), padOutput.data.data(), padOutput.data.size(),
+	    &padOutput.latestFrame);
+	if (padOutput.dataLen == 0)
 	{
-		if ((*it)->frame > padOutput->latestFrame)
-			padOutput->latestFrame = (*it)->frame;
-
-		//NOTICE_LOG(SLIPPI_ONLINE, "[%d] (Remote) P%d %08X %08X %08X", (*it)->frame,
-		//						index >= playerIdx ? index + 1 : index, Common::swap32(&(*it)->padBuf[0]),
-		//						Common::swap32(&(*it)->padBuf[4]), Common::swap32(&(*it)->padBuf[8]));
-
-		auto padIt = std::begin((*it)->padBuf);
-		padOutput->data.insert(padOutput->data.begin(), padIt, padIt + SLIPPI_PAD_FULL_SIZE);
-
-		// Limit max amount of inputs to send
-		inputCount++;
-		if (inputCount >= maxFrameCount)
-			break;
+		SlippiPad emptyPad(padOutput.latestFrame);
+		std::memcpy(padOutput.data.data(), emptyPad.padBuf, SLIPPI_PAD_FULL_SIZE);
+		padOutput.dataLen = SLIPPI_PAD_FULL_SIZE;
 	}
 
-	return std::move(padOutput);
+	return padOutput;
 }
 
 void SlippiNetplayClient::DropOldRemoteInputs(int32_t finalizedFrame)
 {
-	std::lock_guard<std::mutex> lk(pad_mutex);
-
-	// INFO_LOG(SLIPPI_ONLINE, "Checking for remotePadQueue inputs to drop, lowest common: %d, [0]: %d, [1]: %d, [2]:
-	// %d",
-	//         lowestCommonFrame, playerFrame[0], playerFrame[1], playerFrame[2]);
 	for (int i = 0; i < m_remotePlayerCount; i++)
 	{
-		// INFO_LOG(SLIPPI_ONLINE, "remotePadQueue[%d] size: %d", i, remotePadQueue[i].size());
-		while (remotePadQueue[i].size() > 1 && remotePadQueue[i].back()->frame < finalizedFrame)
-		{
-			// INFO_LOG(SLIPPI_ONLINE, "Popping inputs for frame %d from back of player %d queue",
-			//         remotePadQueue[i].back()->frame, i);
-			remotePadQueue[i].pop_back();
-		}
+		remotePadRings[i].DropBefore(finalizedFrame);
 	}
 }
 
@@ -1757,7 +1932,7 @@ int32_t SlippiNetplayClient::GetSlippiLatestRemoteFrame(int maxFrameCount)
 		}
 
 		auto rp = GetSlippiRemotePad(i, maxFrameCount);
-		int f = rp->latestFrame;
+		int f = rp.latestFrame;
 		if (f < lowestFrame || !isFrameSet)
 		{
 			lowestFrame = f;

@@ -6,6 +6,11 @@
 
 #include <SlippiLib/SlippiGame.h>
 
+#include <array>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+
 #include "Common/CommonTypes.h"
 #include "Common/FileUtil.h"
 #include "Core/HW/EXI_Device.h"
@@ -196,10 +201,33 @@ class CEXISlippi : public IEXIDevice
 	    {CMD_GET_RANK_VISIBILITY, 0x0},
 	};
 
-	struct WriteMessage
+	enum class ReplayEventOperation : u8
 	{
-		std::vector<u8> data;
-		std::string operation;
+		Append,
+		Create,
+		Close,
+	};
+
+	static constexpr u32 REPLAY_EVENT_MAX_PAYLOAD = 0x10000;
+	static constexpr size_t REPLAY_EVENT_RING_CAPACITY = 256;
+	static constexpr size_t REPLAY_OPTIONAL_FANOUT_BACKLOG_LIMIT = REPLAY_EVENT_RING_CAPACITY / 2;
+
+	struct ReplayEvent
+	{
+		std::array<u8, REPLAY_EVENT_MAX_PAYLOAD> data = {};
+		u32 length = 0;
+		ReplayEventOperation operation = ReplayEventOperation::Append;
+		bool writeReplay = false;
+		bool writeSpectator = false;
+		bool writeReporter = false;
+		bool endSpectator = false;
+	};
+
+	struct RollbackSavestateSlot
+	{
+		s32 frame = 0;
+		bool valid = false;
+		std::unique_ptr<SlippiSavestate> state;
 	};
 
 	// A pointer to a "shadow" EXI Device that lives on the Rust side of things.
@@ -220,8 +248,11 @@ class CEXISlippi : public IEXIDevice
 
 	void updateMetadataFields(u8 *payload, u32 length);
 	void configureCommands(u8 *payload, u8 length);
-	void writeToFileAsync(u8 *payload, u32 length, std::string fileOption);
-	void writeToFile(std::unique_ptr<WriteMessage> msg);
+	bool shouldSaveReplayEvents() const;
+	void enqueueReplayEvent(u8 *payload, u32 length, ReplayEventOperation operation, bool writeReplay,
+	                        bool writeSpectator, bool writeReporter, bool endSpectator = false);
+	void processReplayEvent(const ReplayEvent &event);
+	void writeToFile(const ReplayEvent &event);
 	std::vector<u8> generateMetadata();
 	void createNewFile();
 	void closeFile();
@@ -289,9 +320,15 @@ class CEXISlippi : public IEXIDevice
 	std::vector<u8> loadPremadeText(u8 *payload);
 
 	void FileWriteThread(void);
+	void resetRollbackSavestates(bool singleSlotOnly = false);
+	RollbackSavestateSlot *findRollbackSavestate(s32 frame);
 
-	Common::FifoQueue<std::unique_ptr<WriteMessage>, false> fileWriteQueue;
-	bool writeThreadRunning = false;
+	std::array<ReplayEvent, REPLAY_EVENT_RING_CAPACITY> replayEventRing;
+	std::atomic<size_t> replayEventHead{0};
+	std::atomic<size_t> replayEventTail{0};
+	std::atomic<bool> writeThreadRunning{false};
+	std::mutex replayEventWaitMutex;
+	std::condition_variable replayEventCv;
 	std::thread m_fileWriteThread;
 
 	std::unordered_map<u8, std::string> getNetplayNames();
@@ -351,8 +388,7 @@ class CEXISlippi : public IEXIDevice
 	std::unique_ptr<SlippiDirectCodes> directCodes;
 	std::unique_ptr<SlippiDirectCodes> teamsCodes;
 
-	std::map<s32, std::unique_ptr<SlippiSavestate>> activeSavestates;
-	std::deque<std::unique_ptr<SlippiSavestate>> availableSavestates;
+	std::array<RollbackSavestateSlot, ROLLBACK_MAX_FRAMES> rollbackSavestates;
 
 	std::vector<u16> allowedStages;
 };

@@ -350,10 +350,12 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         isReplayMode = !isTrainingMode && !isLocalPlayMode
                 && replayPath != null && new File(replayPath).exists();
         ControllerDiagnosticsCapture.recordLaunch(this, "ishiiruka", launchMode, useGcAdapter,
-                "training_slippi_parity_delay=" + trainingSlippiParityDelay);
+                "training_slippi_parity_delay=" + trainingSlippiParityDelay
+                        + " smooth_netplay=" + DolphinSettings.isSmoothNetplayEnabled(this));
         ReplayConfig.ensureReplayDirectory(this);
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "SlippiReplayDir",
                 ReplayConfig.nativeReplayWriteDir(this).getAbsolutePath());
+        NativeLibrary.SetConfig("Dolphin.ini", "Core", "SlippiSaveReplays", "True");
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "SlippiReplayMonthFolders", "False");
         if (!isReplayMode && !isTrainingMode && !isLocalPlayMode) {
             replayStagingObserver = ReplayConfig.createStagingDrainObserver(this, ui);
@@ -393,6 +395,9 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
             NativeLibrary.SetEXIDeviceOverride(0, NativeLibrary.EXI_DEVICE_NONE);
             NativeLibrary.SetEXIDeviceOverride(1, NativeLibrary.EXI_DEVICE_SLIPPI);
             NativeLibrary.SetEXIDeviceOverride(2, NativeLibrary.EXI_DEVICE_NONE);
+            NativeLibrary.SetConfig("Dolphin.ini", "Core", "SlippiEnableSpectator", "False");
+            NativeLibrary.SetConfig("Dolphin.ini", "Core", "SlippiJukeboxEnabled", "False");
+            DolphinSettings.applyIshiirukaSmoothNetplayConfig(this);
             // Live mode: write a neutral file AND point at it — defense
             // in depth so a stale config from a prior replay launch can
             // never bleed into a netplay session.

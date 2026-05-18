@@ -33,9 +33,7 @@ public final class SlippiDefaults {
      * Bump this whenever any of the canned configs below changes. We rewrite
      * the file in place when {@code <user>/Config/defaults_version} is older
      * so tuning improvements actually reach users on app upgrade without
-     * requiring them to clear app data. Hand-edited overrides aren't a
-     * concern — there's no settings UI yet, so anyone touching the ini files
-     * directly is implicitly opting out of the version bump.
+     * requiring them to clear app data.
      */
     // v8 moves auto-saved replays to app-owned device storage so updates keep
     // the archive in a findable filesystem folder without duplicate copies.
@@ -239,6 +237,7 @@ public final class SlippiDefaults {
             // SlippiJukebox thread on launch. Disable for now — Melee plays
             // its own DSP-emulated music regardless.
             + "SlippiJukeboxEnabled = False\n"
+            + "SlippiEnableSpectator = False\n"
             // Replay browser sees this directory (Phase 3). Auto-saved
             // netplay replays land here; importer copies into here.
             // %REPLAY_DIR% is substituted at write time with the on-device

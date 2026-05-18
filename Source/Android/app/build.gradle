@@ -362,8 +362,20 @@ def applyPatchQueue = { File sourceDir, File patchDir, String label ->
                 return
             }
 
+            // The prepared source tree is initialized as a fresh temporary git repo,
+            // so format patches with full-index metadata can reference blob objects
+            // that are not present even when the patch applies cleanly. Fall back to
+            // a direct `git am` before reporting the patch as stale.
+            runPatchCommand(['git', 'am', '--abort'])
+            def amDirectResult = runPatchCommand(['git', 'am', '--keep-cr', patch.absolutePath])
+            if (amDirectResult.exitValue == 0) {
+                logger.lifecycle("Applied ${label} format patch ${patch.name}")
+                return
+            }
+
             def statusResult = runPatchCommand(['git', 'status', '--short'])
-            def diagnostics = ([amResult.stderr, amResult.stdout, statusResult.stdout, statusResult.stderr]
+            def diagnostics = ([amResult.stderr, amResult.stdout, amDirectResult.stderr,
+                                amDirectResult.stdout, statusResult.stdout, statusResult.stderr]
                     .findAll { it }
                     .join(System.lineSeparator()))
             throw new GradleException(

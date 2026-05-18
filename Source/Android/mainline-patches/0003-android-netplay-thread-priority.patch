@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: laurenceputterman <mlputterman@gmail.com>
 Date: Sun, 17 May 2026 11:33:10 -0700
-Subject: [PATCH 3/8] android netplay thread priority
+Subject: [PATCH 3/9] android netplay thread priority
 
 ---
  Source/Core/Core/Slippi/SlippiNetplay.cpp | 9 +++++++++

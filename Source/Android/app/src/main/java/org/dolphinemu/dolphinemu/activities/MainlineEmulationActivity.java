@@ -558,6 +558,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         boolean enableGpuTextureDecoding =
                 shouldEnableMainlineGpuTextureDecoding(backend, driverLibrary);
         String replayDir = ReplayConfig.nativeReplayWriteDir(this).getAbsolutePath();
+        boolean smoothNetplay = DolphinSettings.isSmoothNetplayEnabled(this);
         int port0 = useGcAdapter ? SI_WIIU_ADAPTER : SI_GC_CONTROLLER;
         int portN = useGcAdapter ? SI_WIIU_ADAPTER : SI_NONE;
 
@@ -571,13 +572,16 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         Log.i(TAG, "mainline runtime config gfx=" + backend
                 + " audio=" + audioBackend + "/" + audioBursts
                 + " displayLatency=" + displayLatencyMode
-                + " gpuTextureDecoding=" + enableGpuTextureDecoding);
+                + " gpuTextureDecoding=" + enableGpuTextureDecoding
+                + " smoothNetplay=" + smoothNetplay);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core", "SIDevice0", port0);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core", "SIDevice1", portN);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core", "SIDevice2", portN);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core", "SIDevice3", portN);
         NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Slippi",
                 "EnableJukebox", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Slippi",
+                "EnableSpectator", false);
         NativeConfig.setString(NativeConfig.LAYER_BASE, "Dolphin", "Slippi",
                 "ReplayDir", replayDir);
         NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Slippi",
@@ -590,6 +594,14 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
                 "SlippiSaveReplays", true);
         NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
                 "SlippiReplayMonthFolders", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "SlippiEnableSpectator", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "SlippiJukeboxEnabled", false);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                "SlippiSmoothNetplay", smoothNetplay);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Slippi",
+                "SmoothNetplay", smoothNetplay);
         applyMainlineExiRuntimeConfig();
         NativeConfig.save(NativeConfig.LAYER_BASE);
         if (useGcAdapter) {
@@ -613,6 +625,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         int portN = useGcAdapter ? SI_WIIU_ADAPTER : SI_NONE;
         int efbScale = DolphinSettings.getEfbScale(this);
         boolean meleeWidescreen = GameSettingsOverride.isMeleeWidescreenEnabled(this);
+        String smoothNetplay = DolphinSettings.smoothNetplayIniValue(this);
 
         File configDir = new File(MainlineCore.userDir(this), "Config");
         File dolphinIni = new File(configDir, "Dolphin.ini");
@@ -625,12 +638,17 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         writeIniValue(dolphinIni, "Core", "SIDevice2", Integer.toString(portN));
         writeIniValue(dolphinIni, "Core", "SIDevice3", Integer.toString(portN));
         writeIniValue(dolphinIni, "Slippi", "EnableJukebox", "False");
+        writeIniValue(dolphinIni, "Slippi", "EnableSpectator", "False");
         writeIniValue(dolphinIni, "Slippi", "ReplayDir", replayDir);
         writeIniValue(dolphinIni, "Slippi", "SaveReplays", "True");
         writeIniValue(dolphinIni, "Slippi", "ReplayMonthlyFolders", "False");
         writeIniValue(dolphinIni, "Core", "SlippiReplayDir", replayDir);
         writeIniValue(dolphinIni, "Core", "SlippiSaveReplays", "True");
         writeIniValue(dolphinIni, "Core", "SlippiReplayMonthFolders", "False");
+        writeIniValue(dolphinIni, "Core", "SlippiEnableSpectator", "False");
+        writeIniValue(dolphinIni, "Core", "SlippiJukeboxEnabled", "False");
+        writeIniValue(dolphinIni, "Core", "SlippiSmoothNetplay", smoothNetplay);
+        writeIniValue(dolphinIni, "Slippi", "SmoothNetplay", smoothNetplay);
 
         File gfxIni = new File(configDir, "GFX.ini");
         writeIniValue(gfxIni, "Settings", "DriverLibName", driverLibrary);
@@ -699,6 +717,8 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
                 "DSPThread", true);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Slippi",
                 "OnlineDelay", MAINLINE_SLIPPI_ONLINE_DELAY_FRAMES);
+        NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Slippi",
+                "SmoothNetplay", DolphinSettings.isSmoothNetplayEnabled(this));
     }
 
     private void writeMainlineLowLatencyCoreConfig(File dolphinIni, String audioBackend,
@@ -733,6 +753,8 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         writeIniValue(dolphinIni, "DSP", "DSPThread", "True");
         writeIniValue(dolphinIni, "Slippi", "OnlineDelay",
                 Integer.toString(MAINLINE_SLIPPI_ONLINE_DELAY_FRAMES));
+        writeIniValue(dolphinIni, "Slippi", "SmoothNetplay",
+                DolphinSettings.smoothNetplayIniValue(this));
     }
 
     private void writeMainlineLowLatencyGraphicsConfig(File gfxIni,

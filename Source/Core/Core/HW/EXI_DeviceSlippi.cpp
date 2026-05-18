@@ -10,9 +10,13 @@
 #include <SlippiLib/SlippiGame.h>
 
 #include <semver/include/semver200.h>
+#include <algorithm>
 #include <cstring>
 #include <mutex>
 #include <utility> // std::move
+#ifdef __ANDROID__
+#include <sys/resource.h>
+#endif
 
 #include "Common/CommonPaths.h"
 #include "Common/AndroidInputDiagnostics.h"
@@ -257,8 +261,9 @@ CEXISlippi::~CEXISlippi()
 	// Closes file gracefully to prevent file corruption when emulation
 	// suddenly stops. This would happen often on netplay when the opponent
 	// would close the emulation before the file successfully finished writing
-	writeToFileAsync(&empty[0], 0, "close");
-	writeThreadRunning = false;
+	enqueueReplayEvent(&empty[0], 0, ReplayEventOperation::Close, true, true, false, true);
+	writeThreadRunning.store(false, std::memory_order_release);
+	replayEventCv.notify_all();
 	if (m_fileWriteThread.joinable())
 	{
 		m_fileWriteThread.join();
@@ -439,7 +444,7 @@ std::vector<u8> CEXISlippi::generateMetadata()
 	return metadata;
 }
 
-void CEXISlippi::writeToFileAsync(u8 *payload, u32 length, std::string fileOption)
+bool CEXISlippi::shouldSaveReplayEvents() const
 {
 #ifndef IS_PLAYBACK
 	bool shouldSaveReplays = SConfig::GetInstance().m_slippiSaveReplays;
@@ -455,64 +460,130 @@ void CEXISlippi::writeToFileAsync(u8 *payload, u32 length, std::string fileOptio
 	bool shouldSaveReplays = SConfig::GetInstance().m_slippiRegenerateReplays;
 #endif
 
-	if (!shouldSaveReplays)
+	return shouldSaveReplays;
+}
+
+void CEXISlippi::enqueueReplayEvent(u8 *payload, u32 length, ReplayEventOperation operation,
+                                    bool writeReplay, bool writeSpectator, bool writeReporter,
+                                    bool endSpectator)
+{
+	writeReplay = writeReplay && shouldSaveReplayEvents();
+	writeSpectator = writeSpectator && SConfig::GetInstance().m_enableSpectator;
+	writeReporter = writeReporter && slprs_exi_device_ptr != 0;
+
+	if (!writeReplay && !writeSpectator && !writeReporter && !endSpectator)
+		return;
+
+	if (length > REPLAY_EVENT_MAX_PAYLOAD)
 	{
+		ERROR_LOG(SLIPPI, "Replay event payload too large for fixed ring: %u bytes", length);
 		return;
 	}
 
-	if (fileOption == "create" && !writeThreadRunning)
+	bool expected = false;
+	if (writeThreadRunning.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
 	{
-		WARN_LOG(SLIPPI, "Creating file write thread...");
-		writeThreadRunning = true;
+		WARN_LOG(SLIPPI, "Creating Slippi replay fanout thread...");
 		m_fileWriteThread = std::thread(&CEXISlippi::FileWriteThread, this);
 	}
 
-	if (!writeThreadRunning)
+	const bool mandatoryReplay = writeReplay;
+	size_t head = replayEventHead.load(std::memory_order_acquire);
+	while (head - replayEventTail.load(std::memory_order_acquire) >= REPLAY_EVENT_RING_CAPACITY)
 	{
-		return;
+		if (!mandatoryReplay)
+		{
+			WARN_LOG(SLIPPI, "Dropping nonessential Slippi replay fanout event; ring is full");
+			return;
+		}
+
+		std::unique_lock<std::mutex> lock(replayEventWaitMutex);
+		replayEventCv.wait_for(lock, std::chrono::milliseconds(2), [this, head] {
+			return head - replayEventTail.load(std::memory_order_acquire) < REPLAY_EVENT_RING_CAPACITY ||
+			       !writeThreadRunning.load(std::memory_order_acquire);
+		});
+		head = replayEventHead.load(std::memory_order_acquire);
 	}
 
-	std::vector<u8> payloadData;
-	payloadData.insert(payloadData.end(), payload, payload + length);
+	ReplayEvent &event = replayEventRing[head % REPLAY_EVENT_RING_CAPACITY];
+	if (length > 0)
+		std::memcpy(event.data.data(), payload, length);
+	event.length = length;
+	event.operation = operation;
+	event.writeReplay = writeReplay;
+	event.writeSpectator = writeSpectator || endSpectator;
+	event.writeReporter = writeReporter;
+	event.endSpectator = endSpectator;
 
-	auto writeMsg = std::make_unique<WriteMessage>();
-	writeMsg->data = payloadData;
-	writeMsg->operation = fileOption;
-
-	fileWriteQueue.Push(std::move(writeMsg));
+	replayEventHead.store(head + 1, std::memory_order_release);
+	replayEventCv.notify_all();
 }
 
 void CEXISlippi::FileWriteThread(void)
 {
-	while (writeThreadRunning || !fileWriteQueue.Empty())
-	{
-		// Process all messages
-		while (!fileWriteQueue.Empty())
-		{
-			writeToFile(std::move(fileWriteQueue.Front()));
-			fileWriteQueue.Pop();
+	Common::SetCurrentThreadName("Slippi Replay IO");
+#ifdef __ANDROID__
+	setpriority(PRIO_PROCESS, 0, 10);
+#endif
 
-			Common::SleepCurrentThread(0);
+	while (writeThreadRunning.load(std::memory_order_acquire) ||
+	       replayEventTail.load(std::memory_order_acquire) < replayEventHead.load(std::memory_order_acquire))
+	{
+		size_t tail = replayEventTail.load(std::memory_order_acquire);
+		size_t head = replayEventHead.load(std::memory_order_acquire);
+		if (tail >= head)
+		{
+			std::unique_lock<std::mutex> lock(replayEventWaitMutex);
+			replayEventCv.wait_for(lock, std::chrono::milliseconds(WRITE_FILE_SLEEP_TIME_MS));
+			continue;
 		}
 
-		Common::SleepCurrentThread(WRITE_FILE_SLEEP_TIME_MS);
+		processReplayEvent(replayEventRing[tail % REPLAY_EVENT_RING_CAPACITY]);
+		replayEventTail.store(tail + 1, std::memory_order_release);
+		replayEventCv.notify_all();
 	}
 }
 
-void CEXISlippi::writeToFile(std::unique_ptr<WriteMessage> msg)
+void CEXISlippi::processReplayEvent(const ReplayEvent &event)
 {
-	if (!msg)
+	const size_t backlog = replayEventHead.load(std::memory_order_acquire) -
+	                       replayEventTail.load(std::memory_order_acquire);
+	const bool processOptionalFanout = backlog <= REPLAY_OPTIONAL_FANOUT_BACKLOG_LIMIT;
+	if (!processOptionalFanout && (event.writeSpectator || event.writeReporter))
 	{
-		ERROR_LOG(SLIPPI, "Unexpected error: write message is falsy.");
-		return;
+		WARN_LOG(SLIPPI,
+		         "Dropping optional Slippi replay fanout; replay backlog is %zu events",
+		         backlog);
 	}
 
-	u8 *payload = msg->data.data();
-	u32 length = (u32)msg->data.size();
-	std::string fileOption = msg->operation;
+	if (processOptionalFanout && event.writeSpectator &&
+	    event.operation == ReplayEventOperation::Create)
+	{
+		m_slippiserver->startGame();
+	}
+
+	if (event.writeReplay)
+		writeToFile(event);
+
+	if (processOptionalFanout && event.writeSpectator && event.length > 0)
+		m_slippiserver->write(const_cast<u8 *>(event.data.data()), event.length);
+
+	if (event.writeSpectator && event.endSpectator)
+		m_slippiserver->endGame();
+
+	if (processOptionalFanout && event.writeReporter && event.length > 0)
+		slprs_exi_device_reporter_push_replay_data(slprs_exi_device_ptr,
+		                                            const_cast<u8 *>(event.data.data()),
+		                                            event.length);
+}
+
+void CEXISlippi::writeToFile(const ReplayEvent &event)
+{
+	u8 *payload = const_cast<u8 *>(event.data.data());
+	u32 length = event.length;
 
 	std::vector<u8> dataToWrite;
-	if (fileOption == "create")
+	if (event.operation == ReplayEventOperation::Create)
 	{
 		// If the game sends over option 1 that means a file should be created
 		createNewFile();
@@ -559,7 +630,7 @@ void CEXISlippi::writeToFile(std::unique_ptr<WriteMessage> msg)
 	writtenByteCount += length;
 
 	// If we are going to close the file, generate data to complete the UBJSON file
-	if (fileOption == "close")
+	if (event.operation == ReplayEventOperation::Close)
 	{
 		// This option indicates we are done sending over body
 		std::vector<u8> closingBytes = generateMetadata();
@@ -572,14 +643,17 @@ void CEXISlippi::writeToFile(std::unique_ptr<WriteMessage> msg)
 	}
 
 	// Write data to file
-	bool result = m_file.WriteBytes(&dataToWrite[0], dataToWrite.size());
-	if (!result)
+	if (!dataToWrite.empty())
 	{
-		ERROR_LOG(EXPANSIONINTERFACE, "Failed to write data to file.");
+		bool result = m_file.WriteBytes(&dataToWrite[0], dataToWrite.size());
+		if (!result)
+		{
+			ERROR_LOG(EXPANSIONINTERFACE, "Failed to write data to file.");
+		}
 	}
 
 	// If file should be closed, close it
-	if (fileOption == "close")
+	if (event.operation == ReplayEventOperation::Close)
 	{
 		// Write the number of bytes for the raw output
 		std::vector<u8> sizeBytes = uint32ToVector(writtenByteCount);
@@ -690,6 +764,34 @@ void CEXISlippi::closeFile()
 	// If this is the end of the game end payload, reset the file so that we create a new one
 	m_file.Close();
 	m_file = nullptr;
+}
+
+void CEXISlippi::resetRollbackSavestates(bool singleSlotOnly)
+{
+	const size_t slotCount = singleSlotOnly ? 1 : rollbackSavestates.size();
+	for (size_t i = 0; i < rollbackSavestates.size(); i++)
+	{
+		auto &slot = rollbackSavestates[i];
+		slot.valid = false;
+		slot.frame = 0;
+		if (i < slotCount)
+		{
+			if (!slot.state)
+				slot.state = std::make_unique<SlippiSavestate>();
+		}
+		else
+		{
+			slot.state.reset();
+		}
+	}
+}
+
+CEXISlippi::RollbackSavestateSlot *CEXISlippi::findRollbackSavestate(s32 frame)
+{
+	auto &slot = rollbackSavestates[static_cast<size_t>(frame) % rollbackSavestates.size()];
+	if (!slot.valid || slot.frame != frame || !slot.state)
+		return nullptr;
+	return &slot;
 }
 
 void CEXISlippi::prepareGameInfo(u8 *payload)
@@ -823,24 +925,11 @@ void CEXISlippi::prepareGameInfo(u8 *payload)
 
 	if (replayCommSettings.rollbackDisplayMethod != "off")
 	{
-		// Prepare savestates
-		availableSavestates.clear();
-		activeSavestates.clear();
-
-		// Prepare savestates for online play
-		for (int i = 0; i < ROLLBACK_MAX_FRAMES; i++)
-		{
-			availableSavestates.push_back(std::make_unique<SlippiSavestate>());
-		}
+		resetRollbackSavestates();
 	}
 	else
 	{
-		// Prepare savestates
-		availableSavestates.clear();
-		activeSavestates.clear();
-
-		// Add savestate for testing
-		availableSavestates.push_back(std::make_unique<SlippiSavestate>());
+		resetRollbackSavestates(true);
 	}
 
 	// Reset playback frame to begining
@@ -1302,14 +1391,7 @@ void CEXISlippi::handleOnlineInputs(u8 *payload)
 
 	if (frame == 1)
 	{
-		availableSavestates.clear();
-		activeSavestates.clear();
-
-		// Prepare savestates for online play
-		for (int i = 0; i < ROLLBACK_MAX_FRAMES; i++)
-		{
-			availableSavestates.push_back(std::make_unique<SlippiSavestate>());
-		}
+		resetRollbackSavestates();
 
 		// Reset per-player stall counters
 		for (int i = 0; i < SLIPPI_REMOTE_PLAYER_MAX; i++)
@@ -1380,13 +1462,13 @@ bool CEXISlippi::shouldSkipOnlineFrame(s32 frame, s32 finalizedFrame)
 	for (u8 i = 0; i < remotePlayerCount; i++)
 	{
 		auto pad = slippi_netplay->GetSlippiRemotePad(i, ROLLBACK_MAX_FRAMES);
-		if (pad->isDisconnected)
+		if (pad.isDisconnected)
 		{
 			stallFrameCounts[i] = 0;
 			continue;
 		}
 
-		s32 latestRemoteFrame = pad->latestFrame;
+		s32 latestRemoteFrame = pad.latestFrame;
 		bool hasEnoughNewInputs =
 		    latestRemoteFrame - finalizedFrame >= (frame - finalizedFrame - ROLLBACK_MAX_FRAMES);
 		if (hasEnoughNewInputs)
@@ -1401,15 +1483,15 @@ bool CEXISlippi::shouldSkipOnlineFrame(s32 frame, s32 finalizedFrame)
 		if (stallFrameCounts[i] > 60 * 7)
 		{
 			WARN_LOG(SLIPPI_ONLINE, "Force-disconnecting player %d after 7s stall (frame: %d | latest: %d)",
-			         pad->playerIdx, frame, latestRemoteFrame);
-			slippi_netplay->ForceDisconnectPlayer(pad->playerIdx);
+			         pad.playerIdx, frame, latestRemoteFrame);
+			slippi_netplay->ForceDisconnectPlayer(pad.playerIdx);
 			stallFrameCounts[i] = 0;
 			continue;
 		}
 
 		WARN_LOG(SLIPPI_ONLINE,
 		         "Halting for one frame due to rollback limit (frame: %d | latest: %d | finalized: %d | player: %d)...",
-		         frame, latestRemoteFrame, finalizedFrame, pad->playerIdx);
+		         frame, latestRemoteFrame, finalizedFrame, pad.playerIdx);
 	}
 
 	if (anyPlayerNeedsInputs)
@@ -1427,6 +1509,9 @@ bool CEXISlippi::shouldSkipOnlineFrame(s32 frame, s32 finalizedFrame)
 	// waiting for a frame. Also it's less jarring and it happens often enough that it will smoothly
 	// get to the right place
 	auto isTimeSyncFrame = frame % SLIPPI_ONLINE_LOCKSTEP_INTERVAL; // Only time sync every 30 frames
+	if (SConfig::GetInstance().m_slippiSmoothNetplay)
+		return false;
+
 	if (isTimeSyncFrame == 0 && !isCurrentlySkipping && frame <= 120)
 	{
 		auto offsetUs = slippi_netplay->CalcTimeOffsetUs();
@@ -1488,6 +1573,19 @@ bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
 	// to get a reliable average to act on. We will allow advancing up to 5 frames (spread out) over
 	// the 30 frame period. This makes the game feel relatively smooth still
 	auto isTimeSyncFrame = (frame % SLIPPI_ONLINE_LOCKSTEP_INTERVAL) == 0; // Only time sync every 30 frames
+	if (SConfig::GetInstance().m_slippiSmoothNetplay)
+	{
+		if (isTimeSyncFrame)
+		{
+			auto offsetUs = slippi_netplay->CalcTimeOffsetUs();
+			SConfig::GetInstance().m_EmulationSpeed = 1.0f;
+			framesToAdvance = 0;
+			isCurrentlyAdvancing = false;
+			INFO_LOG(SLIPPI_ONLINE, "[Frame %d] Smooth netplay offset: %d us", frame, offsetUs);
+		}
+		return false;
+	}
+
 	if (isTimeSyncFrame)
 	{
 		auto offsetUs = slippi_netplay->CalcTimeOffsetUs();
@@ -1588,14 +1686,13 @@ void CEXISlippi::handleSendInputs(s32 frame, u8 delay, s32 checksumFrame, u32 ch
 	{
 		for (int i = 1; i <= delay; i++)
 		{
-			auto empty = std::make_unique<SlippiPad>(i);
-			slippi_netplay->SendSlippiPad(std::move(empty));
+			SlippiPad empty(i);
+			slippi_netplay->SendSlippiPad(&empty);
 		}
 	}
 
-	auto pad = std::make_unique<SlippiPad>(frame + delay, checksumFrame, checksum, inputs);
-
-	slippi_netplay->SendSlippiPad(std::move(pad));
+	SlippiPad pad(frame + delay, checksumFrame, checksum, inputs);
+	slippi_netplay->SendSlippiPad(&pad);
 }
 
 bool CEXISlippi::opponentRunahead()
@@ -1644,7 +1741,7 @@ void CEXISlippi::prepareOpponentInputs(s32 frame, bool shouldSkip)
 	u8 remotePlayerCount = matchmaking->RemotePlayerCount();
 	m_read_queue.push_back(remotePlayerCount); // Indicate the number of remote players
 
-	std::unique_ptr<SlippiRemotePadOutput> results[SLIPPI_REMOTE_PLAYER_MAX];
+	std::array<SlippiRemotePadOutput, SLIPPI_REMOTE_PLAYER_MAX> results;
 
 	s32 latestFrameFromOpps = Slippi::GAME_FIRST_FRAME - 1;
 	u32 lastChecksumFrame = 0;
@@ -1652,17 +1749,17 @@ void CEXISlippi::prepareOpponentInputs(s32 frame, bool shouldSkip)
 	for (int i = 0; i < remotePlayerCount; i++)
 	{
 		results[i] = slippi_netplay->GetSlippiRemotePad(i, ROLLBACK_MAX_FRAMES);
-		if (results[i]->isDisconnected)
+		if (results[i].isDisconnected)
 		{
 			continue;
 		}
 		// results[i] = slippi_netplay->GetFakePadOutput(frame);
 
-		if (results[i]->latestFrame > latestFrameFromOpps)
+		if (results[i].latestFrame > latestFrameFromOpps)
 		{
-			lastChecksumFrame = static_cast<u32>(results[i]->checksumFrame);
-			lastChecksum = results[i]->checksum;
-			latestFrameFromOpps = results[i]->latestFrame;
+			lastChecksumFrame = static_cast<u32>(results[i].checksumFrame);
+			lastChecksum = results[i].checksum;
+			latestFrameFromOpps = results[i].latestFrame;
 		}
 	}
 
@@ -1677,10 +1774,10 @@ void CEXISlippi::prepareOpponentInputs(s32 frame, bool shouldSkip)
 	u8 shouldDespawn[SLIPPI_REMOTE_PLAYER_MAX] = {0, 0, 0};
 	for (int i = 0; i < remotePlayerCount; i++)
 	{
-		if (!results[i]->isDisconnected)
+		if (!results[i].isDisconnected)
 			continue;
 
-		s32 lastInputFrame = results[i]->latestFrame;
+		s32 lastInputFrame = results[i].latestFrame;
 		s32 thresholdFrame = lastInputFrame + 2 * ROLLBACK_MAX_FRAMES + 2;
 
 		// Round up to the next frame that is a multiple of the despawn interval
@@ -1693,19 +1790,19 @@ void CEXISlippi::prepareOpponentInputs(s32 frame, bool shouldSkip)
 
 	for (int i = 0; i < remotePlayerCount; i++)
 	{
-		if (!results[i]->isDisconnected)
+		if (!results[i].isDisconnected)
 		{
 			// INFO_LOG(SLIPPI_ONLINE, "Sending checksum values: [%d] %08x", results[i]->checksumFrame,
 			// results[i]->checksum);
-			appendWordToBuffer(&m_read_queue, static_cast<u32>(results[i]->checksumFrame));
-			appendWordToBuffer(&m_read_queue, results[i]->checksum);
+			appendWordToBuffer(&m_read_queue, static_cast<u32>(results[i].checksumFrame));
+			appendWordToBuffer(&m_read_queue, results[i].checksum);
 			continue;
 		}
 
 		// This is sorta jank but we loop again to overwrite values on any disconnected pads to prevent checksum
 		// issues and prevent stalling due to old pad data. We are essentially "tricking" the ASM side here
 		// and likely a better solution would be for the ASM side to know who is disconnected and handle it accordingly
-		results[i]->latestFrame = latestFrameFromOpps;
+		results[i].latestFrame = latestFrameFromOpps;
 		appendWordToBuffer(&m_read_queue, lastChecksumFrame);
 		appendWordToBuffer(&m_read_queue, lastChecksum);
 	}
@@ -1726,11 +1823,11 @@ void CEXISlippi::prepareOpponentInputs(s32 frame, bool shouldSkip)
 	for (int i = 0; i < remotePlayerCount; i++)
 	{
 		// determine offset from which to copy data
-		offset[i] = (results[i]->latestFrame - frame) * SLIPPI_PAD_FULL_SIZE;
+		offset[i] = (results[i].latestFrame - frame) * SLIPPI_PAD_FULL_SIZE;
 		offset[i] = offset[i] < 0 ? 0 : offset[i];
 
 		// add latest frame we are transfering to begining of return buf
-		int32_t latestFrame = results[i]->latestFrame;
+		int32_t latestFrame = results[i].latestFrame;
 		if (latestFrame > frame)
 			latestFrame = frame;
 		latestFrameRead[i] = latestFrame;
@@ -1750,19 +1847,21 @@ void CEXISlippi::prepareOpponentInputs(s32 frame, bool shouldSkip)
 	// copy pad data over
 	for (int i = 0; i < SLIPPI_REMOTE_PLAYER_MAX; i++)
 	{
-		std::vector<u8> tx;
-
 		// Get pad data if this remote player exists
-		if (i < remotePlayerCount && offset[i] < results[i]->data.size())
+		if (i < remotePlayerCount && offset[i] < static_cast<int>(results[i].dataLen))
 		{
-			auto txStart = results[i]->data.begin() + offset[i];
-			auto txEnd = results[i]->data.end();
-			tx.insert(tx.end(), txStart, txEnd);
+			size_t bytesToCopy =
+			    std::min(results[i].dataLen - static_cast<size_t>(offset[i]),
+			             static_cast<size_t>(SLIPPI_PAD_FULL_SIZE * ROLLBACK_MAX_FRAMES));
+			m_read_queue.insert(m_read_queue.end(), results[i].data.begin() + offset[i],
+			                    results[i].data.begin() + offset[i] + bytesToCopy);
+			m_read_queue.resize(m_read_queue.size() +
+			                        SLIPPI_PAD_FULL_SIZE * ROLLBACK_MAX_FRAMES - bytesToCopy,
+			                    0);
+			continue;
 		}
 
-		tx.resize(SLIPPI_PAD_FULL_SIZE * ROLLBACK_MAX_FRAMES, 0);
-
-		m_read_queue.insert(m_read_queue.end(), tx.begin(), tx.end());
+		m_read_queue.resize(m_read_queue.size() + SLIPPI_PAD_FULL_SIZE * ROLLBACK_MAX_FRAMES, 0);
 	}
 
 	// Append the per-remote-player should-despawn flags
@@ -1786,30 +1885,12 @@ void CEXISlippi::handleCaptureSavestate(u8 *payload)
 
 	// u64 startTime = Common::Timer::GetTimeUs();
 
-	// Grab an available savestate
-	std::unique_ptr<SlippiSavestate> ss;
-	if (!availableSavestates.empty())
-	{
-		ss = std::move(availableSavestates.back());
-		availableSavestates.pop_back();
-	}
-	else
-	{
-		// If there were no available savestates, use the oldest one
-		auto it = activeSavestates.begin();
-		ss = std::move(it->second);
-		activeSavestates.erase(it->first);
-	}
-
-	// If there is already a savestate for this frame, remove it and add it to available
-	if (activeSavestates.count(frame))
-	{
-		availableSavestates.push_back(std::move(activeSavestates[frame]));
-		activeSavestates.erase(frame);
-	}
-
-	ss->Capture();
-	activeSavestates[frame] = std::move(ss);
+	auto &slot = rollbackSavestates[static_cast<size_t>(frame) % rollbackSavestates.size()];
+	if (!slot.state)
+		slot.state = std::make_unique<SlippiSavestate>();
+	slot.state->Capture();
+	slot.frame = frame;
+	slot.valid = true;
 
 	// u32 timeDiff = (u32)(Common::Timer::GetTimeUs() - startTime);
 	// INFO_LOG(SLIPPI_ONLINE, "SLIPPI ONLINE: Captured savestate for frame %d in: %f ms", frame,
@@ -1821,7 +1902,8 @@ void CEXISlippi::handleLoadSavestate(u8 *payload)
 	s32 frame = payload[0] << 24 | payload[1] << 16 | payload[2] << 8 | payload[3];
 	u32 *preserveArr = (u32 *)(&payload[4]);
 
-	if (!activeSavestates.count(frame))
+	auto *slot = findRollbackSavestate(frame);
+	if (!slot)
 	{
 		// This savestate does not exist... uhhh? What do we do?
 		ERROR_LOG(SLIPPI_ONLINE, "SLIPPI ONLINE: Savestate for frame %d does not exist.", frame);
@@ -1843,15 +1925,10 @@ void CEXISlippi::handleLoadSavestate(u8 *payload)
 	}
 
 	// Load savestate
-	activeSavestates[frame]->Load(blocks);
+	slot->state->Load(blocks);
 
-	// Move all active savestates to available
-	for (auto it = activeSavestates.begin(); it != activeSavestates.end(); ++it)
-	{
-		availableSavestates.push_back(std::move(it->second));
-	}
-
-	activeSavestates.clear();
+	for (auto &rollbackSlot : rollbackSavestates)
+		rollbackSlot.valid = false;
 
 	// u32 timeDiff = (u32)(Common::Timer::GetTimeUs() - startTime);
 	// INFO_LOG(SLIPPI_ONLINE, "SLIPPI ONLINE: Loaded savestate for frame %d in: %f ms", frame, ((double)timeDiff) /
@@ -2114,6 +2191,7 @@ void CEXISlippi::prepareOnlineMatchState()
 
 		if (!slippi_netplay)
 		{
+			resetRollbackSavestates();
 #ifdef LOCAL_TESTING
 			slippi_netplay = std::make_unique<SlippiNetplayClient>(true);
 #else
@@ -3337,19 +3415,15 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
 		time(&gameStartTime); // Store game start time
 		u8 receiveCommandsLen = memPtr[1];
 		configureCommands(&memPtr[1], receiveCommandsLen);
-		writeToFileAsync(&memPtr[0], receiveCommandsLen + 1, "create");
+		enqueueReplayEvent(&memPtr[0], receiveCommandsLen + 1, ReplayEventOperation::Create, true,
+		                   true, true);
 		bufLoc += receiveCommandsLen + 1;
 		g_needInputForFrame = true;
-
-		m_slippiserver->startGame();
-		m_slippiserver->write(&memPtr[0], receiveCommandsLen + 1);
-
-		slprs_exi_device_reporter_push_replay_data(slprs_exi_device_ptr, &memPtr[0], receiveCommandsLen + 1);
 	}
 
 	if (byte == CMD_MENU_FRAME)
 	{
-		m_slippiserver->write(&memPtr[0], _uSize);
+		enqueueReplayEvent(&memPtr[0], _uSize, ReplayEventOperation::Append, false, true, false);
 		g_needInputForFrame = true;
 		return;
 	}
@@ -3375,10 +3449,8 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
 		switch (byte)
 		{
 		case CMD_RECEIVE_GAME_END:
-			writeToFileAsync(&memPtr[bufLoc], payloadLen + 1, "close");
-			m_slippiserver->write(&memPtr[bufLoc], payloadLen + 1);
-			m_slippiserver->endGame();
-			slprs_exi_device_reporter_push_replay_data(slprs_exi_device_ptr, &memPtr[bufLoc], payloadLen + 1);
+			enqueueReplayEvent(&memPtr[bufLoc], payloadLen + 1, ReplayEventOperation::Close, true,
+			                   true, true, true);
 			break;
 		case CMD_PREPARE_REPLAY:
 			// log.open("log.txt");
@@ -3389,9 +3461,8 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
 			break;
 		case CMD_FRAME_BOOKEND:
 			g_needInputForFrame = true;
-			writeToFileAsync(&memPtr[bufLoc], payloadLen + 1, "");
-			m_slippiserver->write(&memPtr[bufLoc], payloadLen + 1);
-			slprs_exi_device_reporter_push_replay_data(slprs_exi_device_ptr, &memPtr[bufLoc], payloadLen + 1);
+			enqueueReplayEvent(&memPtr[bufLoc], payloadLen + 1, ReplayEventOperation::Append, true,
+			                   true, true);
 			break;
 		case CMD_IS_STOCK_STEAL:
 			prepareIsStockSteal(&memPtr[bufLoc + 1]);
@@ -3519,9 +3590,8 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
 			break;
 		}
 		default:
-			writeToFileAsync(&memPtr[bufLoc], payloadLen + 1, "");
-			m_slippiserver->write(&memPtr[bufLoc], payloadLen + 1);
-			slprs_exi_device_reporter_push_replay_data(slprs_exi_device_ptr, &memPtr[bufLoc], payloadLen + 1);
+			enqueueReplayEvent(&memPtr[bufLoc], payloadLen + 1, ReplayEventOperation::Append, true,
+			                   true, true);
 			break;
 		}
 

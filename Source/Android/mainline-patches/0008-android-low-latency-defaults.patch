@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: laurenceputterman <mlputterman@gmail.com>
 Date: Sun, 17 May 2026 21:05:49 -0700
-Subject: [PATCH 8/8] android: low latency defaults
+Subject: [PATCH 8/9] android: low latency defaults
 
 ---
  Source/Core/AudioCommon/OboeStream.cpp       | 21 +++++++++++++++++++-

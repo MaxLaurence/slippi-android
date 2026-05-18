@@ -15,6 +15,7 @@ public final class DolphinSettings {
     public static final String PREF_KEY_AUDIO_BACKEND = "audio_backend";
     public static final String PREF_KEY_AUDIO_BUFFER_BURSTS = "audio_buffer_bursts";
     public static final String PREF_KEY_DISPLAY_LATENCY_MODE = "display_latency_mode";
+    public static final String PREF_KEY_SMOOTH_NETPLAY = "smooth_netplay";
     public static final String PREF_KEY_GFX_ASPECT_RATIO = "gfx_aspect_ratio";
     public static final String PREF_KEY_EFB_SCALE = "gfx_efb_scale";
     public static final String PREF_KEY_WIDESCREEN_HACK = "gfx_widescreen_hack";
@@ -137,6 +138,24 @@ public final class DolphinSettings {
         prefs(context).edit()
                 .putString(PREF_KEY_DISPLAY_LATENCY_MODE, mode.configValue)
                 .apply();
+    }
+
+    public static boolean isSmoothNetplayEnabled(Context context) {
+        return prefs(context).getBoolean(PREF_KEY_SMOOTH_NETPLAY, false);
+    }
+
+    public static void setSmoothNetplayEnabled(Context context, boolean enabled) {
+        prefs(context).edit().putBoolean(PREF_KEY_SMOOTH_NETPLAY, enabled).apply();
+        applyIshiirukaSmoothNetplayConfig(context);
+    }
+
+    public static String smoothNetplayIniValue(Context context) {
+        return isSmoothNetplayEnabled(context) ? "True" : "False";
+    }
+
+    public static void applyIshiirukaSmoothNetplayConfig(Context context) {
+        NativeLibrary.SetConfig("Dolphin.ini", "Core", "SlippiSmoothNetplay",
+                smoothNetplayIniValue(context));
     }
 
     public static int getAspectRatio(Context context) {

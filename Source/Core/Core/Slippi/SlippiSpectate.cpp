@@ -2,6 +2,7 @@
 #include "Common/Common.h"
 #include "Common/CommonTypes.h"
 #include "Common/Logging/Log.h"
+#include "Common/Thread.h"
 #include "base64.hpp"
 #include <Core/ConfigManager.h>
 
@@ -11,6 +12,9 @@
 #include <ws2tcpip.h>
 #else
 #include <errno.h>
+#endif
+#ifdef __ANDROID__
+#include <sys/resource.h>
 #endif
 
 // CALLED FROM DOLPHIN MAIN THREAD
@@ -271,6 +275,11 @@ void SlippiSpectateServer::handleMessage(u8 *buffer, u32 length, u16 peer_id)
 
 void SlippiSpectateServer::SlippicommSocketThread(void)
 {
+	Common::SetCurrentThreadName("Slippi Spectate");
+#ifdef __ANDROID__
+	setpriority(PRIO_PROCESS, 0, 10);
+#endif
+
 	if (enet_initialize() != 0)
 	{
 		WARN_LOG(SLIPPI, "An error occurred while initializing spectator server.");

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: laurenceputterman <mlputterman@gmail.com>
 Date: Sun, 17 May 2026 15:52:26 -0700
-Subject: [PATCH 6/8] android latency input display polish
+Subject: [PATCH 6/9] android latency input display polish
 
 ---
  Source/Android/jni/MainAndroid.cpp    | 10 ++++++++--
