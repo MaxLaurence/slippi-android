@@ -1408,6 +1408,7 @@ void CEXISlippi::handleOnlineInputs(u8 *payload)
 		isCurrentlyAdvancing = false;
 		fallBehindCounter = 0;
 		fallFarBehindCounter = 0;
+		resetSmoothNetplaySync();
 
 		// Reset character selections such that they are cleared for next game
 		localSelections.Reset();
@@ -1510,7 +1511,11 @@ bool CEXISlippi::shouldSkipOnlineFrame(s32 frame, s32 finalizedFrame)
 	// get to the right place
 	auto isTimeSyncFrame = frame % SLIPPI_ONLINE_LOCKSTEP_INTERVAL; // Only time sync every 30 frames
 	if (SConfig::GetInstance().m_slippiSmoothNetplay)
+	{
+		framesToSkip = 0;
+		isCurrentlySkipping = false;
 		return false;
+	}
 
 	if (isTimeSyncFrame == 0 && !isCurrentlySkipping && frame <= 120)
 	{
@@ -1551,6 +1556,80 @@ bool CEXISlippi::shouldSkipOnlineFrame(s32 frame, s32 finalizedFrame)
 	return false;
 }
 
+void CEXISlippi::resetSmoothNetplaySync()
+{
+	smoothNetplayOffsetUs = 0.0f;
+	hasSmoothNetplayOffset = false;
+}
+
+s32 CEXISlippi::getMinimumRemoteInputHeadroom(s32 frame)
+{
+	s32 minHeadroom = ROLLBACK_MAX_FRAMES;
+	bool hasRemotePlayer = false;
+	u8 remotePlayerCount = matchmaking->RemotePlayerCount();
+	for (u8 i = 0; i < remotePlayerCount; i++)
+	{
+		auto pad = slippi_netplay->GetSlippiRemotePad(i, ROLLBACK_MAX_FRAMES);
+		if (pad.isDisconnected)
+			continue;
+
+		hasRemotePlayer = true;
+		const s32 rollbackFloor = frame - ROLLBACK_MAX_FRAMES;
+		minHeadroom = std::min(minHeadroom, pad.latestFrame - rollbackFloor);
+	}
+
+	return hasRemotePlayer ? minHeadroom : ROLLBACK_MAX_FRAMES;
+}
+
+float CEXISlippi::calculateSmoothNetplaySpeed(s32 offsetUs, s32 minInputHeadroom)
+{
+	constexpr float FRAME_TIME_US = 16683.0f;
+	constexpr float OFFSET_FILTER_ALPHA = 0.25f;
+	constexpr float OFFSET_DEADZONE_US = 8000.0f;
+	constexpr float OFFSET_CORRECTION_WINDOW_FRAMES = 4.0f;
+	constexpr float MAX_SPEED_UP = 0.005f;
+	constexpr float MAX_SLOW_DOWN = 0.003f;
+
+	const float offsetSample = static_cast<float>(offsetUs);
+	if (!hasSmoothNetplayOffset)
+	{
+		smoothNetplayOffsetUs = offsetSample;
+		hasSmoothNetplayOffset = true;
+	}
+	else
+	{
+		smoothNetplayOffsetUs =
+		    smoothNetplayOffsetUs * (1.0f - OFFSET_FILTER_ALPHA) + offsetSample * OFFSET_FILTER_ALPHA;
+	}
+
+	float deviation = 0.0f;
+	if (smoothNetplayOffsetUs < -OFFSET_DEADZONE_US)
+	{
+		const float multiplier =
+		    std::min((-smoothNetplayOffsetUs - OFFSET_DEADZONE_US) /
+		                 (OFFSET_CORRECTION_WINDOW_FRAMES * FRAME_TIME_US),
+		             1.0f);
+		deviation = multiplier * MAX_SPEED_UP;
+	}
+	else if (smoothNetplayOffsetUs > OFFSET_DEADZONE_US)
+	{
+		const float multiplier =
+		    std::min((smoothNetplayOffsetUs - OFFSET_DEADZONE_US) /
+		                 (OFFSET_CORRECTION_WINDOW_FRAMES * FRAME_TIME_US),
+		             1.0f);
+		deviation = -multiplier * MAX_SLOW_DOWN;
+	}
+
+	if (minInputHeadroom < 3)
+	{
+		const float headroomPressure = std::min(static_cast<float>(3 - minInputHeadroom) / 3.0f, 1.0f);
+		deviation = std::min(deviation, -headroomPressure * MAX_SLOW_DOWN);
+	}
+
+	deviation = std::max(std::min(deviation, MAX_SPEED_UP), -MAX_SLOW_DOWN);
+	return 1.0f + deviation;
+}
+
 bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
 {
 	// If the opponent is a bot running ahead to give us more inputs, we should
@@ -1578,10 +1657,14 @@ bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
 		if (isTimeSyncFrame)
 		{
 			auto offsetUs = slippi_netplay->CalcTimeOffsetUs();
-			SConfig::GetInstance().m_EmulationSpeed = 1.0f;
+			const s32 minInputHeadroom = getMinimumRemoteInputHeadroom(frame);
+			const float smoothSpeed = calculateSmoothNetplaySpeed(offsetUs, minInputHeadroom);
+			SConfig::GetInstance().m_EmulationSpeed = smoothSpeed;
 			framesToAdvance = 0;
 			isCurrentlyAdvancing = false;
-			INFO_LOG(SLIPPI_ONLINE, "[Frame %d] Smooth netplay offset: %d us", frame, offsetUs);
+			INFO_LOG(SLIPPI_ONLINE,
+			         "[Frame %d] Smooth netplay offset: %d us (filtered: %.0f us, headroom: %d, speed: %.3f%%)",
+			         frame, offsetUs, smoothNetplayOffsetUs, minInputHeadroom, smoothSpeed * 100.0f);
 		}
 		return false;
 	}

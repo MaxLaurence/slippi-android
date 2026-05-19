@@ -6,15 +6,22 @@ plugins {
 // WebView pointed at slippi.gg/online/enable (see
 // SlippiLoginActivity) so we don't carry any Firebase / Slippi
 // credentials in the binary.
+def repoRoot = file("${rootDir}/../..")
 def forceTouchControls = project.findProperty('forceTouchControls')?.toString()?.toBoolean() ?: false
 def skipMainlineCoreBuild = project.findProperty('skipMainlineCoreBuild')?.toString()?.toBoolean() ?: false
 def allowDirtyMainlineSource = project.findProperty('allowDirtyMainlineSource')?.toString()?.toBoolean() ?: false
+def supportedAndroidAbis = ['arm64-v8a', 'x86_64']
+def androidAbi = project.findProperty('androidAbi')?.toString()?.trim() ?: 'arm64-v8a'
+if (!supportedAndroidAbis.contains(androidAbi)) {
+    throw new GradleException(
+            "Unsupported androidAbi='${androidAbi}'. Supported values: ${supportedAndroidAbis.join(', ')}")
+}
 def androidVersionPattern = ~/^v?([0-9]+)\.([0-9]+)\.([0-9]+)-android-r([0-9]+)(-[A-Za-z0-9][A-Za-z0-9._-]*)?$/
 def runGit = { List<String> args ->
     def standardOutputBytes = new ByteArrayOutputStream()
     def errorOutputBytes = new ByteArrayOutputStream()
     def result = exec {
-        workingDir file("${rootDir}/../..")
+        workingDir repoRoot
         commandLine args
         ignoreExitValue true
         standardOutput = standardOutputBytes
@@ -77,13 +84,53 @@ if (androidVersionCode != expectedAndroidVersionCode &&
             "${androidVersionName} (expected ${expectedAndroidVersionCode}). " +
             "Pass -PallowAndroidVersionCodeOverride=true only for a deliberate compatibility build.")
 }
+def apkOutputNameFor = { String variantName ->
+    if (androidAbi == 'arm64-v8a') {
+        return "app-${variantName}.apk"
+    }
+    "slippi-android-${androidVersionName}-${androidAbi}-${variantName}.apk".toString()
+}
 def slippiRustPatchDir = file("${rootDir}/slippi-rust-patches")
-def mainlineSlippiRoot = file("${rootDir}/../../Externals/MainlineSlippiDolphin")
+def mainlineSlippiRoot = new File(repoRoot, 'Externals/MainlineSlippiDolphin')
 def mainlinePatchDir = file("${rootDir}/mainline-patches")
 def mainlineWorkDir = layout.buildDirectory.dir("mainlineSlippi/source")
-def mainlineCmakeBuildDir = layout.buildDirectory.dir("mainlineSlippi/cmake/arm64-v8a")
+def mainlineCmakeBuildDir = layout.buildDirectory.dir("mainlineSlippi/cmake/${androidAbi}")
 def mainlineGeneratedDir = layout.buildDirectory.dir("generated/mainlineSlippi")
 def mainlineOboePrefabDir = layout.buildDirectory.dir("mainlineSlippi/oboePrefab")
+
+def rustToolchainArgsFor = { File sourceDir ->
+    def args = []
+    def homeDir = System.getProperty('user.home')
+    def rustToolchain = ''
+    try {
+        def tomlText = new File(sourceDir, 'Externals/SlippiRustExtensions/rust-toolchain.toml').text
+        def m = (tomlText =~ /channel\s*=\s*"([^"]+)"/)
+        if (m.find()) rustToolchain = m.group(1)
+    } catch (Exception ignored) {}
+    if (!rustToolchain) rustToolchain = '1.88.0'
+
+    def osName = System.getProperty('os.name').toLowerCase()
+    def arch = System.getProperty('os.arch')
+    def hostTriple
+    if (osName.contains('mac')) {
+        hostTriple = arch == 'aarch64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin'
+    } else if (osName.contains('linux')) {
+        hostTriple = (arch == 'aarch64' || arch == 'arm64')
+                ? 'aarch64-unknown-linux-gnu' : 'x86_64-unknown-linux-gnu'
+    } else {
+        throw new GradleException("Unsupported Rust build host OS: ${System.getProperty('os.name')}")
+    }
+
+    def rustupRoot = "${homeDir}/.rustup/toolchains/${rustToolchain}-${hostTriple}/bin"
+    def rustcPath = new File(rustupRoot, 'rustc')
+    def cargoPath = new File(rustupRoot, 'cargo')
+    def rustupPath = new File("${homeDir}/.cargo/bin/rustup")
+    if (rustcPath.exists()) args << "-DRust_COMPILER=${rustcPath.absolutePath}"
+    if (cargoPath.exists()) args << "-DRust_CARGO=${cargoPath.absolutePath}"
+    if (rustupPath.exists()) args << "-DRust_RUSTUP=${rustupPath.absolutePath}"
+    args << '-DRust_RESOLVE_RUSTUP_TOOLCHAINS=OFF'
+    return args
+}
 
 android {
     namespace 'org.dolphinemu.dolphinemu'
@@ -97,37 +144,19 @@ android {
         versionCode androidVersionCode
         versionName androidVersionName
         buildConfigField 'boolean', 'FORCE_TOUCH_CONTROLS', forceTouchControls ? 'true' : 'false'
+        buildConfigField 'String', 'ANDROID_ABI', "\"${androidAbi}\""
 
         externalNativeBuild {
             cmake {
-                // Point corrosion directly at the specific rustup-managed
-                // toolchain pinned in Externals/SlippiRustExtensions/rust-toolchain.toml.
-                // This avoids relying on corrosion's auto-detection of the
-                // "active" toolchain via `rustup toolchain list`, which fails
-                // when invoked from outside the override directory.
-                def homeDir = System.getProperty('user.home')
-                def rustToolchain = ''
-                try {
-                    def tomlText = new File("${rootDir}/../../Externals/SlippiRustExtensions/rust-toolchain.toml").text
-                    def m = (tomlText =~ /channel\s*=\s*"([^"]+)"/)
-                    if (m.find()) rustToolchain = m.group(1)
-                } catch (Exception ignored) {}
-                if (!rustToolchain) rustToolchain = '1.88.0'
-                def rustupRoot = "${homeDir}/.rustup/toolchains/${rustToolchain}-aarch64-apple-darwin/bin"
-                def rustcPath = new File(rustupRoot, 'rustc').exists() ? "${rustupRoot}/rustc" : ''
-                def cargoPath = new File(rustupRoot, 'cargo').exists() ? "${rustupRoot}/cargo" : ''
-                def rustupPath = new File("${homeDir}/.cargo/bin/rustup").exists()
-                        ? "${homeDir}/.cargo/bin/rustup" : ''
-
                 arguments(
                     '-DANDROID_STL=c++_shared',
                     '-DANDROID_PLATFORM=android-29',
                     '-DCMAKE_BUILD_TYPE=Release',
                     '-DENABLE_PCH=OFF',
-                    // ENABLE_GENERIC=OFF lets the top-level CMakeLists pick up
-                    // the aarch64 branch and turn on the JitArm64 sources —
-                    // without it we'd get a JIT-less interpreter-only build,
-                    // which is unplayable for Melee.
+                    // ENABLE_GENERIC=OFF lets the top-level CMakeLists select
+                    // the native JIT for the requested ABI. Without it, Android
+                    // can fall back to a JIT-less interpreter build, which is
+                    // unplayable for Melee.
                     '-DENABLE_GENERIC=OFF',
                     '-DUSE_EGL=1',
                     '-DUSE_X11=0',
@@ -138,19 +167,16 @@ android {
                     '-DENABLE_TESTS=OFF',
                     '-DENABLE_VULKAN=ON'
                 )
-                if (rustcPath) arguments "-DRust_COMPILER=${rustcPath}"
-                if (cargoPath) arguments "-DRust_CARGO=${cargoPath}"
-                if (rustupPath) arguments "-DRust_RUSTUP=${rustupPath}"
-                arguments '-DRust_RESOLVE_RUSTUP_TOOLCHAINS=OFF'
+                arguments(*rustToolchainArgsFor(repoRoot))
 
-                abiFilters 'arm64-v8a'
+                abiFilters androidAbi
                 cppFlags '-std=c++17 -fexceptions -frtti'
                 targets 'main'
             }
         }
 
         ndk {
-            abiFilters 'arm64-v8a'
+            abiFilters androidAbi
         }
     }
 
@@ -239,6 +265,14 @@ android {
     lint {
         abortOnError false
         checkReleaseBuilds false
+    }
+}
+
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        variant.outputs.each { output ->
+            output.outputFileName.set(apkOutputNameFor(variant.name))
+        }
     }
 }
 
@@ -428,6 +462,7 @@ tasks.register('printAndroidVersion') {
     doLast {
         println "androidVersionName=${androidVersionName}"
         println "androidVersionCode=${androidVersionCode}"
+        println "androidAbi=${androidAbi}"
     }
 }
 
@@ -449,6 +484,75 @@ tasks.register('validateAndroidReleaseVersion') {
 
 tasks.matching { it.name == 'assembleRelease' }.configureEach {
     dependsOn tasks.named('validateAndroidReleaseVersion')
+}
+
+def variantOutputDir = { String variantName ->
+    file("${buildDir}/outputs/apk/${variantName}")
+}
+
+def apkOutputForVariant = { String variantName ->
+    def outputDir = variantOutputDir(variantName)
+    def metadataFile = new File(outputDir, 'output-metadata.json')
+    if (metadataFile.isFile()) {
+        def metadata = new groovy.json.JsonSlurper().parse(metadataFile)
+        def outputFile = metadata.elements?.find { it.outputFile }?.outputFile
+        if (outputFile) {
+            return new File(outputDir, outputFile.toString())
+        }
+    }
+
+    return new File(outputDir, apkOutputNameFor(variantName))
+}
+
+def verifyPackagedApk = { String variantName ->
+    def apk = apkOutputForVariant(variantName)
+    if (!apk.isFile()) {
+        throw new GradleException("Expected ${variantName} APK was not produced: ${apk}")
+    }
+
+    def entriesOutput = new ByteArrayOutputStream()
+    exec {
+        commandLine 'unzip', '-Z1', apk.absolutePath
+        standardOutput = entriesOutput
+    }
+    def entries = entriesOutput.toString('UTF-8').readLines()
+    def expectedLibPrefix = "lib/${androidAbi}/".toString()
+    def nativeEntries = entries.findAll { it.startsWith('lib/') }
+    def wrongAbiEntries = nativeEntries.findAll { !it.startsWith(expectedLibPrefix) }
+    if (!wrongAbiEntries.empty) {
+        throw new GradleException(
+                "APK ${apk.name} contains native libraries outside ${expectedLibPrefix}: " +
+                        wrongAbiEntries.take(8).join(', '))
+    }
+
+    def requiredEntries = [
+            expectedLibPrefix + 'libmain.so',
+            expectedLibPrefix + 'libmainline_slippi.so',
+            expectedLibPrefix + 'libslippi_rust_extensions.so',
+            'assets/MainlineSys/bootloader.gct',
+            'assets/MainlinePlaybackGeckoCodes/GALE01r2.ini'
+    ]
+    def missingEntries = requiredEntries.findAll { !entries.contains(it) }
+    if (!missingEntries.empty) {
+        throw new GradleException(
+                "APK ${apk.name} is missing required packaged files: " +
+                        missingEntries.join(', '))
+    }
+
+    logger.lifecycle("Verified ${apk.name} packages ${androidAbi} Ishiiruka and mainline Slippi cores")
+}
+
+['debug', 'release'].each { variantName ->
+    def capitalized = variantName.capitalize()
+    def verifyTask = tasks.register("verify${capitalized}ApkContents") {
+        onlyIf { !skipMainlineCoreBuild }
+        doLast {
+            verifyPackagedApk(variantName)
+        }
+    }
+    tasks.matching { it.name == "assemble${capitalized}" }.configureEach {
+        finalizedBy verifyTask
+    }
 }
 
 def mainlineSubmodulePaths = [
@@ -575,29 +679,6 @@ tasks.register('applyMainlineSlippiPatches') {
     }
 }
 
-def rustToolchainArgsFor = { File sourceDir ->
-    def args = []
-    def homeDir = System.getProperty('user.home')
-    def rustToolchain = ''
-    try {
-        def tomlText = new File(sourceDir, 'Externals/SlippiRustExtensions/rust-toolchain.toml').text
-        def m = (tomlText =~ /channel\s*=\s*"([^"]+)"/)
-        if (m.find()) rustToolchain = m.group(1)
-    } catch (Exception ignored) {}
-    if (!rustToolchain) rustToolchain = '1.88.0'
-    def hostTriple = System.getProperty('os.arch') == 'aarch64'
-            ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin'
-    def rustupRoot = "${homeDir}/.rustup/toolchains/${rustToolchain}-${hostTriple}/bin"
-    def rustcPath = new File(rustupRoot, 'rustc')
-    def cargoPath = new File(rustupRoot, 'cargo')
-    def rustupPath = new File("${homeDir}/.cargo/bin/rustup")
-    if (rustcPath.exists()) args << "-DRust_COMPILER=${rustcPath.absolutePath}"
-    if (cargoPath.exists()) args << "-DRust_CARGO=${cargoPath.absolutePath}"
-    if (rustupPath.exists()) args << "-DRust_RUSTUP=${rustupPath.absolutePath}"
-    args << '-DRust_RESOLVE_RUSTUP_TOOLCHAINS=OFF'
-    return args
-}
-
 tasks.register('configureMainlineSlippiCore', Exec) {
     dependsOn tasks.named('applyMainlineSlippiPatches')
     dependsOn tasks.named('extractMainlineOboePrefab')
@@ -624,7 +705,7 @@ tasks.register('configureMainlineSlippiCore', Exec) {
                 '-G', 'Ninja',
                 "-DCMAKE_MAKE_PROGRAM=${ninja.absolutePath}",
                 "-DCMAKE_TOOLCHAIN_FILE=${new File(ndkDir, 'build/cmake/android.toolchain.cmake').absolutePath}",
-                '-DANDROID_ABI=arm64-v8a',
+                "-DANDROID_ABI=${androidAbi}",
                 '-DANDROID_PLATFORM=android-29',
                 '-DANDROID_STL=c++_static',
                 '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON',
@@ -664,10 +745,11 @@ tasks.register('syncMainlineSlippiCore') {
     onlyIf { !skipMainlineCoreBuild }
     doLast {
         def generatedDir = mainlineGeneratedDir.get().asFile
-        def jniDir = new File(generatedDir, 'jniLibs/arm64-v8a')
+        def jniRoot = new File(generatedDir, 'jniLibs')
+        def jniDir = new File(jniRoot, androidAbi)
         def assetDir = new File(generatedDir, 'assets/MainlineSys')
         def playbackAssetDir = new File(generatedDir, 'assets/MainlinePlaybackGeckoCodes')
-        delete jniDir
+        delete jniRoot
         delete assetDir
         delete playbackAssetDir
         jniDir.mkdirs()

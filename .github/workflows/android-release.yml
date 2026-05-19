@@ -55,6 +55,7 @@ jobs:
           rust_version="$(sed -n 's/^channel = "\(.*\)"/\1/p' Externals/SlippiRustExtensions/rust-toolchain.toml)"
           rustup toolchain install "$rust_version"
           rustup target add --toolchain "$rust_version" aarch64-linux-android
+          rustup target add --toolchain "$rust_version" x86_64-linux-android
 
       - name: Resolve version
         id: version
@@ -100,19 +101,56 @@ jobs:
         env:
           ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
 
-      - name: Build release APK
+      - name: Build and package release APKs
         run: |
-          ./Source/Android/gradlew -p Source/Android :app:assembleRelease \
-            -PandroidVersionName='${{ steps.version.outputs.name }}' \
-            -PandroidVersionCode='${{ steps.version.outputs.code }}'
-
-      - name: Package APK
-        run: |
+          set -euo pipefail
           mkdir -p android-release
+
+          build_apk() {
+            local abi="$1"
+            ./Source/Android/gradlew -p Source/Android :app:assembleRelease \
+              -PandroidAbi="$abi" \
+              -PandroidVersionName='${{ steps.version.outputs.name }}' \
+              -PandroidVersionCode='${{ steps.version.outputs.code }}'
+          }
+
+          build_apk arm64-v8a
           cp Source/Android/app/build/outputs/apk/release/app-release.apk \
             "android-release/slippi-android-${{ steps.version.outputs.tag }}.apk"
-          shasum -a 256 "android-release/slippi-android-${{ steps.version.outputs.tag }}.apk" \
-            > "android-release/slippi-android-${{ steps.version.outputs.tag }}.apk.sha256"
+
+          build_apk x86_64
+          cp Source/Android/app/build/outputs/apk/release/slippi-android-${{ steps.version.outputs.name }}-x86_64-release.apk \
+            "android-release/slippi-android-${{ steps.version.outputs.tag }}-x86_64.apk"
+
+          for apk in android-release/*.apk; do
+            shasum -a 256 "$apk" > "$apk.sha256"
+          done
+
+      - name: Verify packaged APKs
+        run: |
+          set -euo pipefail
+
+          verify_apk() {
+            local apk="$1"
+            local abi="$2"
+            entries="$(unzip -Z1 "$apk")"
+            grep -qx "lib/$abi/libmain.so" <<< "$entries"
+            grep -qx "lib/$abi/libmainline_slippi.so" <<< "$entries"
+            grep -qx "lib/$abi/libslippi_rust_extensions.so" <<< "$entries"
+            grep -qx "assets/MainlineSys/bootloader.gct" <<< "$entries"
+            wrong_abis="$(
+              awk -F/ '/^lib\// { print $2 }' <<< "$entries" |
+                sort -u |
+                grep -vx "$abi" || true
+            )"
+            if [ -n "$wrong_abis" ]; then
+              echo "$apk contains unexpected native ABI(s): $wrong_abis" >&2
+              exit 1
+            fi
+          }
+
+          verify_apk "android-release/slippi-android-${{ steps.version.outputs.tag }}.apk" "arm64-v8a"
+          verify_apk "android-release/slippi-android-${{ steps.version.outputs.tag }}-x86_64.apk" "x86_64"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4

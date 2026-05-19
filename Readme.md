@@ -3,7 +3,8 @@
 An unofficial Android port of [Project Slippi](https://slippi.gg) (the
 Ishiiruka fork of Dolphin), built and tuned for the
 [Ayn Thor](https://www.ayntec.com/) handheld but expected to run on most
-recent aarch64 Android devices with Adreno or comparable GPUs.
+recent ARM64 Android devices with Adreno or comparable GPUs. A separate
+`x86_64` build is available for Intel/AMD Chromebooks that run Android apps.
 
 > **Status:** Plays Melee online via Slippi netplay (direct-connect,
 > unranked, teams) at full speed on the Thor, with ranked queues
@@ -28,8 +29,11 @@ For the official desktop launcher, go to https://slippi.gg.
 
 ## Install
 
-1. Download `slippi-android-vX.Y.Z-android-rN.apk` from the
+1. Download the right APK from the
    [Releases](../../releases) page.
+   - Android phones, tablets, handhelds, and ARM Chromebooks:
+     `slippi-android-vX.Y.Z-android-rN.apk`
+   - Intel/AMD Chromebooks: `slippi-android-vX.Y.Z-android-rN-x86_64.apk`
 2. On the Android device, enable installs from the file manager /
    browser you'll use ("Install unknown apps" → that app → toggle on).
 3. Open the APK and install.
@@ -75,8 +79,11 @@ For the official desktop launcher, go to https://slippi.gg.
 1. Install [Obtainium](https://obtainium.imranr.dev/).
 2. Add this app with the GitHub source URL:
    `https://github.com/MaxLaurence/slippi-android`
-3. If Obtainium asks for an APK filter, use:
-   `slippi-android-v.*\.apk`
+3. If Obtainium asks for an APK filter, use this for normal ARM64 Android
+   devices:
+   `^slippi-android-v.*-android-r[0-9]+\.apk$`
+   For Intel/AMD Chromebooks, use:
+   `^slippi-android-v.*-android-r[0-9]+-x86_64\.apk$`
 4. Install the latest release.
 
 The release package ID is `org.ishiiruka.slippidolphin`. In-place
@@ -91,7 +98,10 @@ switching to this update channel.
 - Official GameCube USB adapter (WUP-028 / WUP-028-NA), including
   hot-plug and 4-port local versus.
 - Bluetooth controllers and on-device gamepads.
-- JitArm64 — full-speed Melee on ARM64.
+- JIT-backed native cores for ARM64 Android and x86_64 Chromebook builds.
+  ARM64 is the primary tested path; x86_64 is intended for Intel/AMD
+  ChromeOS devices and depends more heavily on the Chromebook's Android
+  container and GPU driver behavior.
 - Both Vulkan (default) and OpenGL ES 3.2 backends, runtime-toggle
   from the launcher.
 - Player names, connect codes, chat messages.
@@ -151,13 +161,16 @@ switching to this update channel.
   plays.
 - First boot of a new game compiles ~hundreds of shaders (~5–10s on
   Adreno 740) before the first frame.
-- macOS hosts assumed for builds; Linux works with a one-line tweak
-  to `Source/Android/app/build.gradle` (the rustup path is
-  hard-coded to `aarch64-apple-darwin`).
 - The Thor's onboard stick reports saturated raw values past ~1/3 of
   physical travel for some firmware revisions. Calibration helps
   inside the unsaturated portion; for the strongest input precision,
   use the GC adapter.
+- ChromeOS support is ABI/package-level and still needs per-device QA.
+  Use the `x86_64` APK only on Intel/AMD Chromebooks; ARM Chromebooks
+  should use the normal APK. The custom Qualcomm/Turnip driver path is
+  ARM/Adreno-specific, so x86_64 Chromebooks use the system ChromeOS
+  Android graphics stack. Direct USB GameCube adapter passthrough can
+  vary by Chromebook model and policy.
 
 ## Build from source
 
@@ -176,11 +189,20 @@ export PATH=$HOME/.cargo/bin:/opt/homebrew/bin:$PATH
 # Debug APK (signed with your debug keystore, fast):
 ./Source/Android/gradlew -p Source/Android :app:assembleDebug
 
+# Chromebook / Intel-AMD ChromeOS debug APK:
+./Source/Android/gradlew -p Source/Android :app:assembleDebug -PandroidAbi=x86_64
+
 # Distributable / release APK (signed):
 ./Source/Android/gradlew -p Source/Android :app:assembleRelease
+
+# Chromebook / Intel-AMD ChromeOS release APK:
+./Source/Android/gradlew -p Source/Android :app:assembleRelease -PandroidAbi=x86_64
 ```
 
 Output APKs land at `Source/Android/app/build/outputs/apk/{debug,release}/`.
+The default ARM64 build keeps the standard `app-debug.apk` /
+`app-release.apk` names. The x86_64 build gets an ABI-specific filename
+such as `slippi-android-3.6.0-android-r7-x86_64-release.apk`.
 
 ## Credits
 

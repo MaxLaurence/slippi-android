@@ -322,6 +322,9 @@ class CEXISlippi : public IEXIDevice
 	void FileWriteThread(void);
 	void resetRollbackSavestates(bool singleSlotOnly = false);
 	RollbackSavestateSlot *findRollbackSavestate(s32 frame);
+	void resetSmoothNetplaySync();
+	s32 getMinimumRemoteInputHeadroom(s32 frame);
+	float calculateSmoothNetplaySpeed(s32 offsetUs, s32 minInputHeadroom);
 
 	std::array<ReplayEvent, REPLAY_EVENT_RING_CAPACITY> replayEventRing;
 	std::atomic<size_t> replayEventHead{0};
@@ -364,6 +367,8 @@ class CEXISlippi : public IEXIDevice
 	bool isCurrentlyAdvancing = false;
 	int fallBehindCounter = 0;
 	int fallFarBehindCounter = 0;
+	float smoothNetplayOffsetUs = 0.0f;
+	bool hasSmoothNetplayOffset = false;
 
 	std::string forcedError = "";
 

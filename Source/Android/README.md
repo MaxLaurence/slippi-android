@@ -1,8 +1,9 @@
 # Slippi for Android — build & dev notes
 
-Aarch64-Android build of Slippi Ishiiruka with Slippi netplay /
-matchmaking via the cross-compiled Rust extensions
-(`Externals/SlippiRustExtensions/`).
+Android build of Slippi Ishiiruka with Slippi netplay / matchmaking via
+the cross-compiled Rust extensions (`Externals/SlippiRustExtensions/`).
+The default ABI is `arm64-v8a`; Chromebook-oriented `x86_64` builds are
+available with `-PandroidAbi=x86_64`.
 
 For a user-facing overview see the [top-level Readme](../../Readme.md).
 This document is the build/dev/debug reference.
@@ -17,10 +18,11 @@ This document is the build/dev/debug reference.
   `sdkmanager 'ndk;27.1.12297006' 'build-tools;35.0.0' 'platforms;android-35'`
 - rustup with the toolchain pinned in
   `Externals/SlippiRustExtensions/rust-toolchain.toml` (currently
-  `1.88.0`) and the `aarch64-linux-android` target:
+  `1.88.0`) and the Android Rust targets you plan to build:
   ```
   rustup toolchain install 1.88.0
   rustup target add --toolchain 1.88.0 aarch64-linux-android
+  rustup target add --toolchain 1.88.0 x86_64-linux-android
   ```
 - The submodules: `git submodule update --init --recursive` from the repo
   root. This includes `Externals/MainlineSlippiDolphin`, a shallow checkout
@@ -38,6 +40,9 @@ export PATH=$HOME/.cargo/bin:/opt/homebrew/bin:$PATH
 
 # Self-contained debug build with Ishiiruka + mainline Slippi cores:
 ./Source/Android/gradlew -p Source/Android :app:assembleDebug
+
+# Chromebook / Intel-AMD ChromeOS debug build:
+./Source/Android/gradlew -p Source/Android :app:assembleDebug -PandroidAbi=x86_64
 
 # Force the onscreen GameCube touch controls even when a built-in or
 # physical controller is detected:
@@ -59,6 +64,20 @@ Output APKs:
 
 - `Source/Android/app/build/outputs/apk/debug/app-debug.apk`
 - `Source/Android/app/build/outputs/apk/release/app-release.apk`
+- `Source/Android/app/build/outputs/apk/debug/slippi-android-<version>-x86_64-debug.apk`
+- `Source/Android/app/build/outputs/apk/release/slippi-android-<version>-x86_64-release.apk`
+
+Supported `androidAbi` values are `arm64-v8a` and `x86_64`. The
+`arm64-v8a` build remains the default for phones, tablets and ARM
+Chromebooks and keeps the default `app-debug.apk` / `app-release.apk`
+output names. The `x86_64` build is the Chromebook path for Intel/AMD
+ChromeOS devices and gets an ABI-specific filename. The build intentionally
+packages one ABI at a time to avoid shipping stale or unintended native
+libraries; verify an APK with:
+
+```sh
+unzip -l <apk> | rg 'lib/(x86_64|arm64-v8a)|libmainline_slippi'
+```
 
 Package IDs:
 
@@ -77,12 +96,18 @@ again.
 
 A clean build compiles both native cores. Ishiiruka uses this checkout's
 normal CMake path; mainline is built from `Externals/MainlineSlippiDolphin`
-into `app/build/generated/mainlineSlippi/jniLibs/arm64-v8a/libmainline_slippi.so`
+into `app/build/generated/mainlineSlippi/jniLibs/<androidAbi>/libmainline_slippi.so`
 and packages `Data/Sys` as `assets/MainlineSys` plus
 `Data/PlaybackGeckoCodes` as `assets/MainlinePlaybackGeckoCodes`. Use
 `-PskipMainlineCoreBuild=true` for Java/AGP-only iteration; it reuses any
 previously generated mainline output, and a clean tree without that output will
 show the Mainline option as missing.
+
+For `-PandroidAbi=x86_64`, the APK should contain at least
+`lib/x86_64/libmain.so`, `lib/x86_64/libmainline_slippi.so`,
+`lib/x86_64/libslippi_rust_extensions.so`, and
+`assets/MainlineSys`. That covers both the Ishiiruka and embedded mainline
+runtime paths for Chromebook-compatible installs.
 
 Before mainline CMake configure runs, Gradle copies the upstream checkout into
 `app/build/mainlineSlippi/source` and applies
@@ -169,11 +194,15 @@ The Android release workflow expects these repository secrets:
 - `ANDROID_RELEASE_KEY_PASSWORD`
 
 Create a release by pushing a tag like `v3.6.0-android-r7`. The
-workflow builds `app-release.apk`, renames it to
-`slippi-android-v3.6.0-android-r7.apk`, uploads a `.sha256` file, and
-attaches both to the GitHub Release. Keep one Android APK asset per
-release when possible; if desktop assets also share the release, tell
-Obtainium users to filter APKs with `slippi-android-v.*\.apk`.
+workflow builds both Android ABIs. The default ARM64 release keeps the
+existing asset name, for example `slippi-android-v3.6.0-android-r7.apk`.
+The Intel/AMD Chromebook build is published beside it as
+`slippi-android-v3.6.0-android-r7-x86_64.apk`. Both APKs get `.sha256`
+files and are checked for `libmain.so`, `libmainline_slippi.so`, and
+the expected single native ABI before upload. If desktop assets also
+share the release, tell Obtainium users to filter APKs with
+`^slippi-android-v.*-android-r[0-9]+\.apk$`; Chromebook users should
+filter for `^slippi-android-v.*-android-r[0-9]+-x86_64\.apk$`.
 
 ## Install + run
 
@@ -191,6 +220,24 @@ $ADB pair <thor-ip>:<port>     # one-time
 $ADB connect <thor-ip>:<port>
 $ADB devices                   # confirm
 ```
+
+## Chromebook / ChromeOS notes
+
+For Intel/AMD Chromebooks, build and install the `x86_64` APK:
+
+```sh
+./Source/Android/gradlew -p Source/Android :app:assembleDebug -PandroidAbi=x86_64
+$ADB install -r Source/Android/app/build/outputs/apk/debug/slippi-android-*-x86_64-debug.apk
+```
+
+ChromeOS runs the app through Android, so device behavior still depends on
+the Android container and GPU stack exposed by that Chromebook. The custom
+Qualcomm/Turnip driver path is ARM/Adreno-specific; on x86_64 ChromeOS use
+the system-provided Vulkan or OpenGL ES backend and test both if the first
+backend is unstable. Standard Android gamepads should follow the normal
+Android input path. Direct USB GameCube adapter behavior needs physical
+Chromebook testing because ChromeOS Android USB host passthrough varies by
+model and policy.
 
 ## First-run flow (in the launcher)
 
@@ -737,10 +784,8 @@ the right first step before deciding raw evdev is the only option.
 - First boot of a new game compiles ~hundreds of shaders (~5–10s on
   Adreno 740) before the first frame.
 - Audio backend hasn't been latency-tuned.
-- Linux build hosts: the gradle config hard-codes
-  `aarch64-apple-darwin` in the rustup path resolution. Edit
-  `Source/Android/app/build.gradle` around line ~32 if you're on
-  Linux.
+- macOS and Linux build hosts resolve the pinned rustup toolchain for
+  the current host architecture automatically.
 
 ## What changed vs upstream Slippi/Ishiiruka
 
