@@ -1609,7 +1609,7 @@ void SlippiNetplayClient::SendSlippiPad(const SlippiPad *pad)
 	auto currentFrame = localPadRing.LatestFrame();
 	if (currentFrame != INT_MIN)
 	{
-		int minimumAllowed = currentFrame - (ROLLBACK_MAX_FRAMES * 2 + 2);
+		int minimumAllowed = currentFrame - 128; // Large enough for any reasonable delay combinations
 		minAckFrame = std::max(minAckFrame, minimumAllowed);
 	}
 	localPadRing.DropBefore(minAckFrame);
