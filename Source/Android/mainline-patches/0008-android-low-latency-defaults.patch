@@ -54,7 +54,7 @@ index c3ff080c716577672065cbace741034f77835ba1..7ea01103c85d363e2d4c08427f843e0b
    return oboe::DataCallbackResult::Continue;
  }
 diff --git a/Source/Core/Core/Config/GraphicsSettings.cpp b/Source/Core/Core/Config/GraphicsSettings.cpp
-index e7dbf8279f22e38f6826b8c1ff17872a4421cc14..a48dac93a9cbca59ebb9e752b1ef792f0ef11968 100644
+index e7dbf8279f22e38f6826b8c1ff17872a4421cc14..10a853fae693ae904d82f0409806e24028c3f0fd 100644
 --- a/Source/Core/Core/Config/GraphicsSettings.cpp
 +++ b/Source/Core/Core/Config/GraphicsSettings.cpp
 @@ -197,7 +197,7 @@ const Info<bool> GFX_HACK_DEFER_EFB_COPIES{{System::GFX, "Hacks", "DeferEFBCopie
@@ -125,7 +125,7 @@ index 7e3033f76508e7fc07e3b73cf3423ed3d30fffc2..d7336fbc7f6117681550c1571f74684d
                                                    "AndroidAudioBufferBursts"},
                                                   4};
 diff --git a/Source/Core/Core/Slippi/SlippiNetplay.cpp b/Source/Core/Core/Slippi/SlippiNetplay.cpp
-index 03811417b063ba87d24da4310ff19220d43c9345..fce6bfdbd76e25164d6c15b1e7914dc30f16068e 100644
+index 7499e7725aec2060364a0c0e809cb0b1beee0941..991ae78824baa7a8d951346f8271cb3afacfb428 100644
 --- a/Source/Core/Core/Slippi/SlippiNetplay.cpp
 +++ b/Source/Core/Core/Slippi/SlippiNetplay.cpp
 @@ -76,11 +76,10 @@ bool AndroidLatencyTraceEnabled()

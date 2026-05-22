@@ -1249,7 +1249,7 @@ index eab36049e8dce5ee401b41d3a60267ae557a9028..0c488dcb657dd5a773c325d47bf02422
  extern const Info<bool> MAIN_AUDIO_MUTE_ON_DISABLED_SPEED_LIMIT;
  #ifdef _WIN32
 diff --git a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
-index 1955502b224872450c5759901be8dcd097d61a16..a06dc4b5b9e69df0e7117faa0caf083786d3a54d 100644
+index 4e7d656550e7435cf5404d507f46bd646c242d8a..2e6715335b639a6b8343dea69c090deebdaee1ad 100644
 --- a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
 +++ b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
 @@ -3,9 +3,14 @@
@@ -1290,7 +1290,7 @@ index 1955502b224872450c5759901be8dcd097d61a16..a06dc4b5b9e69df0e7117faa0caf0837
    direct_codes =
        std::make_unique<SlippiDirectCodes>(slprs_exi_device_ptr, SlippiDirectCodes::DIRECT);
    teams_codes = std::make_unique<SlippiDirectCodes>(slprs_exi_device_ptr, SlippiDirectCodes::TEAMS);
-@@ -723,6 +737,9 @@ void CEXISlippi::prepareGameInfo(u8* payload)
+@@ -720,6 +734,9 @@ void CEXISlippi::prepareGameInfo(u8* payload)
    // Return the size of the gecko code list
    prepareGeckoList();
    appendWordToBuffer(&m_read_queue, static_cast<u32>(gecko_list.size()));
@@ -1300,7 +1300,7 @@ index 1955502b224872450c5759901be8dcd097d61a16..a06dc4b5b9e69df0e7117faa0caf0837
  
    // Initialize frame sequence index value for reading rollbacks
    frame_seq_idx = 0;
-@@ -863,19 +880,19 @@ void CEXISlippi::prepareCharacterFrameData(Slippi::FrameData* frame, u8 port, u8
+@@ -860,19 +877,19 @@ void CEXISlippi::prepareCharacterFrameData(Slippi::FrameData* frame, u8 port, u8
  
    // Add all of the inputs in order
    appendWordToBuffer(&m_read_queue, data.randomSeed);
@@ -1329,7 +1329,7 @@ index 1955502b224872450c5759901be8dcd097d61a16..a06dc4b5b9e69df0e7117faa0caf0837
    m_read_queue.push_back(data.cstickXRaw);
    m_read_queue.push_back(data.cstickYRaw);
    // NOTE TO DEV: If you add data here, make sure to increase the size above
-@@ -948,6 +965,16 @@ void CEXISlippi::prepareFrameData(u8* payload)
+@@ -945,6 +962,16 @@ void CEXISlippi::prepareFrameData(u8* payload)
    g_playback_status->last_frame = m_current_game->GetLatestIndex();
    auto is_frame_complete = checkFrameFullyFetched(frame_idx);
    auto is_frame_ready = is_frame_found && (is_processing_complete || is_frame_complete);
@@ -1346,7 +1346,7 @@ index 1955502b224872450c5759901be8dcd097d61a16..a06dc4b5b9e69df0e7117faa0caf0837
  
    // If there is a start_frame configured, manage the fast-forward flag
    if (watch_settings.start_frame > Slippi::GAME_FIRST_FRAME)
-@@ -1134,6 +1161,12 @@ void CEXISlippi::prepareIsFileReady()
+@@ -1131,6 +1158,12 @@ void CEXISlippi::prepareIsFileReady()
    auto is_new_replay = g_replay_comm->isNewReplay();
    if (!is_new_replay)
    {
@@ -1359,7 +1359,7 @@ index 1955502b224872450c5759901be8dcd097d61a16..a06dc4b5b9e69df0e7117faa0caf0837
      g_replay_comm->nextReplay();
      m_read_queue.push_back(0);
      return;
-@@ -1147,11 +1180,13 @@ void CEXISlippi::prepareIsFileReady()
+@@ -1144,11 +1177,13 @@ void CEXISlippi::prepareIsFileReady()
      // Do not start if replay file doesn't exist
      // TODO: maybe display error message?
      INFO_LOG_FMT(SLIPPI, "EXI_DeviceSlippi.cpp: Replay file does not exist?");
@@ -1373,7 +1373,7 @@ index 1955502b224872450c5759901be8dcd097d61a16..a06dc4b5b9e69df0e7117faa0caf0837
  
    // Clear playback control related vars
    g_playback_status->resetPlayback();
-@@ -3295,6 +3330,7 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
+@@ -3292,6 +3327,7 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
      case CMD_GET_GECKO_CODES:
        m_read_queue.clear();
        m_read_queue.insert(m_read_queue.begin(), gecko_list.begin(), gecko_list.end());

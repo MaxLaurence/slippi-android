@@ -8,7 +8,7 @@ Subject: [PATCH 4/9] android mainline latency trace
  1 file changed, 118 insertions(+), 2 deletions(-)
 
 diff --git a/Source/Core/Core/Slippi/SlippiNetplay.cpp b/Source/Core/Core/Slippi/SlippiNetplay.cpp
-index f84da0d4a2c033d1628d4ee9d84d3895a0b0b8e4..03811417b063ba87d24da4310ff19220d43c9345 100644
+index ec64c2d6e793745c6e6a619d8dc11edabac22a31..7499e7725aec2060364a0c0e809cb0b1beee0941 100644
 --- a/Source/Core/Core/Slippi/SlippiNetplay.cpp
 +++ b/Source/Core/Core/Slippi/SlippiNetplay.cpp
 @@ -8,7 +8,15 @@
