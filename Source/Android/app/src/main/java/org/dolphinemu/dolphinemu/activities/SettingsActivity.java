@@ -284,13 +284,18 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     private void populateControlsPane(LinearLayout body) {
+        DolphinSettings.TouchControlsMode touchControlsMode =
+                DolphinSettings.getTouchControlsMode(this);
         addActionRow(body, "Stick calibration", getString(R.string.calibrate_device),
                 v -> showCalibrationChooser());
         addActionRow(body, "Button remap",
                 hasWiiUAdapter() ? "Built-in controls and GC adapter ports"
                         : getString(R.string.calibrate_device),
                 v -> showRemapChooser());
-        addActionRow(body, "Touch controls", "Edit the on-screen controller layout",
+        addActionRow(body, "Touch controls",
+                touchControlsMode.label + " - " + touchControlsMode.summary,
+                v -> showTouchControlsModeChooser());
+        addActionRow(body, "Touch layout", "Edit the on-screen controller layout",
                 v -> startActivity(new Intent(this, TouchOverlayActivity.class)));
     }
 
@@ -882,6 +887,25 @@ public class SettingsActivity extends AppCompatActivity {
                     it.putExtra(CalibrationActivity.EXTRA_DEVICE_KEY, deviceKeys.get(which));
                     it.putExtra(CalibrationActivity.EXTRA_DEVICE_LABEL, labels.get(which));
                     startActivity(it);
+                })
+                .show();
+    }
+
+    private void showTouchControlsModeChooser() {
+        DolphinSettings.TouchControlsMode[] choices = DolphinSettings.TOUCH_CONTROLS_MODES;
+        CharSequence[] labels = new CharSequence[choices.length];
+        String current = DolphinSettings.getTouchControlsMode(this).prefValue;
+        int checked = 0;
+        for (int i = 0; i < choices.length; i++) {
+            labels[i] = choices[i].label + "\n" + choices[i].summary;
+            if (choices[i].prefValue.equals(current)) checked = i;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Touch controls")
+                .setSingleChoiceItems(labels, checked, (d, which) -> {
+                    DolphinSettings.setTouchControlsMode(this, choices[which]);
+                    d.dismiss();
+                    showPane(selectedPane);
                 })
                 .show();
     }

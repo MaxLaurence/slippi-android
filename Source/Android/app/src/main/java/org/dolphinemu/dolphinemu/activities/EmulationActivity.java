@@ -323,7 +323,8 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
                 + " rawSource=" + rawSourceLabel()
                 + (profile.hasCalibration(ControllerProfile.DEVICE_BUILTIN, ControllerProfile.Stick.MAIN)
                         ? " (saved)" : " (defaults — wizard never saved)"));
-        Log.i(TAG, "touch controls force flag=" + BuildConfig.FORCE_TOUCH_CONTROLS);
+        Log.i(TAG, "touch controls force build=" + BuildConfig.FORCE_TOUCH_CONTROLS
+                + " mode=" + DolphinSettings.getTouchControlsMode(this).prefValue);
 
         NativeLibrary.setEmulationActivity(this);
         GpuDriverManager.prepareNativeDirectoriesForCurrentBackend(this);
@@ -986,7 +987,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     }
 
     private boolean shouldPollRawStickSource() {
-        return !useGcAdapter && hasRawStickSource() && !BuildConfig.FORCE_TOUCH_CONTROLS;
+        return !useGcAdapter && hasRawStickSource() && !shouldForceTouchControls();
     }
 
     private void startRawInputPolling() {
@@ -1245,8 +1246,10 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
             }
             return;
         }
-        boolean show = !useGcAdapter && (BuildConfig.FORCE_TOUCH_CONTROLS
-                || !PhysicalControllerDetector.hasUsableP1Controller(rawStickInput));
+        boolean forceTouchControls = shouldForceTouchControls();
+        boolean show = !useGcAdapter && !shouldHideTouchControls()
+                && (forceTouchControls
+                        || !PhysicalControllerDetector.hasUsableP1Controller(rawStickInput));
         if (show == touchOverlayVisible) return;
 
         touchOverlayVisible = show;
@@ -1260,8 +1263,19 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
             startRawInputPolling();
         }
         Log.i(TAG, "touch controls " + (show ? "shown" : "hidden")
-                + " force=" + BuildConfig.FORCE_TOUCH_CONTROLS
+                + " force=" + forceTouchControls
+                + " mode=" + DolphinSettings.getTouchControlsMode(this).prefValue
                 + " rawSource=" + hasRawStickSource());
+    }
+
+    private boolean shouldForceTouchControls() {
+        return BuildConfig.FORCE_TOUCH_CONTROLS
+                || DolphinSettings.isTouchControlsAlwaysOn(this);
+    }
+
+    private boolean shouldHideTouchControls() {
+        return !BuildConfig.FORCE_TOUCH_CONTROLS
+                && DolphinSettings.isTouchControlsOff(this);
     }
 
     private String rawSourceLabel() {

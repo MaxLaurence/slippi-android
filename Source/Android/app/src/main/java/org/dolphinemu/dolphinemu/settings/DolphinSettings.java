@@ -21,9 +21,14 @@ public final class DolphinSettings {
     public static final String PREF_KEY_WIDESCREEN_HACK = "gfx_widescreen_hack";
     public static final String PREF_KEY_SHOW_FPS = "gfx_show_fps";
     public static final String PREF_KEY_SHOW_NETPLAY_PING = "gfx_show_netplay_ping";
+    public static final String PREF_KEY_TOUCH_CONTROLS_MODE = "touch_controls_mode";
+    private static final String PREF_KEY_FORCE_TOUCH_CONTROLS_LEGACY = "force_touch_controls";
 
     public static final String BACKEND_VULKAN = "Vulkan";
     public static final String BACKEND_OGL = "OGL";
+    public static final String TOUCH_CONTROLS_AUTO = "auto";
+    public static final String TOUCH_CONTROLS_ALWAYS_ON = "always_on";
+    public static final String TOUCH_CONTROLS_OFF = "off";
     public static final String DISPLAY_LATENCY_SMOOTH = "smooth";
     public static final String DISPLAY_LATENCY_FASTEST = "fastest";
     public static final String AUDIO_BACKEND_OBOE = "Oboe";
@@ -89,6 +94,15 @@ public final class DolphinSettings {
             new Choice(EFB_3X, "3x"),
             new Choice(EFB_4X, "4x"),
             new Choice(EFB_AUTO_INTEGRAL, "Auto integral"),
+    };
+
+    public static final TouchControlsMode[] TOUCH_CONTROLS_MODES = {
+            new TouchControlsMode(TOUCH_CONTROLS_AUTO, "Auto",
+                    "Hide when a built-in or Bluetooth controller is detected"),
+            new TouchControlsMode(TOUCH_CONTROLS_ALWAYS_ON, "Always on",
+                    "Show even when Android detects a controller"),
+            new TouchControlsMode(TOUCH_CONTROLS_OFF, "Off",
+                    "Never show the on-screen controller"),
     };
 
     private DolphinSettings() {}
@@ -224,6 +238,34 @@ public final class DolphinSettings {
         prefs(context).edit().putBoolean(PREF_KEY_SHOW_NETPLAY_PING, enabled).apply();
     }
 
+    public static TouchControlsMode getTouchControlsMode(Context context) {
+        SharedPreferences p = prefs(context);
+        String value = p.getString(PREF_KEY_TOUCH_CONTROLS_MODE, null);
+        if (value == null && p.getBoolean(PREF_KEY_FORCE_TOUCH_CONTROLS_LEGACY, false)) {
+            return TOUCH_CONTROLS_MODES[1];
+        }
+        for (TouchControlsMode mode : TOUCH_CONTROLS_MODES) {
+            if (mode.prefValue.equals(value)) return mode;
+        }
+        return TOUCH_CONTROLS_MODES[0];
+    }
+
+    public static void setTouchControlsMode(Context context, TouchControlsMode mode) {
+        String value = mode == null ? TOUCH_CONTROLS_AUTO : mode.prefValue;
+        prefs(context).edit()
+                .putString(PREF_KEY_TOUCH_CONTROLS_MODE, sanitizeTouchControlsMode(value))
+                .remove(PREF_KEY_FORCE_TOUCH_CONTROLS_LEGACY)
+                .apply();
+    }
+
+    public static boolean isTouchControlsAlwaysOn(Context context) {
+        return TOUCH_CONTROLS_ALWAYS_ON.equals(getTouchControlsMode(context).prefValue);
+    }
+
+    public static boolean isTouchControlsOff(Context context) {
+        return TOUCH_CONTROLS_OFF.equals(getTouchControlsMode(context).prefValue);
+    }
+
     public static String booleanIniValue(boolean enabled) {
         return enabled ? "True" : "False";
     }
@@ -305,6 +347,13 @@ public final class DolphinSettings {
         return ASPECT_MELEE;
     }
 
+    private static String sanitizeTouchControlsMode(String value) {
+        if (TOUCH_CONTROLS_ALWAYS_ON.equals(value) || TOUCH_CONTROLS_OFF.equals(value)) {
+            return value;
+        }
+        return TOUCH_CONTROLS_AUTO;
+    }
+
     public static final class AudioPreset {
         public final String backend;
         public final int bursts;
@@ -358,6 +407,18 @@ public final class DolphinSettings {
         public Choice(int value, String label) {
             this.value = value;
             this.label = label;
+        }
+    }
+
+    public static final class TouchControlsMode {
+        public final String prefValue;
+        public final String label;
+        public final String summary;
+
+        public TouchControlsMode(String prefValue, String label, String summary) {
+            this.prefValue = prefValue;
+            this.label = label;
+            this.summary = summary;
         }
     }
 }

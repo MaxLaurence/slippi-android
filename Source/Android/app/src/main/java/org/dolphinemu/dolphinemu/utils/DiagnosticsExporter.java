@@ -153,6 +153,8 @@ public final class DiagnosticsExporter {
                 GameSettingsOverride.isMeleeWidescreenEnabled(context));
         appendKV(sb, "Dolphin widescreen hack",
                 DolphinSettings.isWidescreenHackEnabled(context));
+        appendKV(sb, "Touch controls mode",
+                DolphinSettings.getTouchControlsMode(context).prefValue);
         appendKV(sb, "Show FPS overlay", DolphinSettings.isShowFpsEnabled(context));
         appendKV(sb, "Show netplay ping", DolphinSettings.isShowNetplayPingEnabled(context));
     }

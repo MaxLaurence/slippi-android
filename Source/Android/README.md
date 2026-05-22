@@ -777,10 +777,12 @@ the right first step before deciding raw evdev is the only option.
 - JIT memory allocation under Android's W^X — `MemoryUtil.cpp` still
   uses `PROT_READ|PROT_WRITE|PROT_EXEC` mmap. Works on app-private
   anonymous maps through Android 14; future versions may restrict.
-- On-screen touch overlay has not had device QA yet. Use the
-  launcher **Touch controls** link to edit layout, or build with
-  `-PforceTouchControls=true` to force it visible on handhelds that
-  also have built-in controls.
+- On-screen touch overlay visibility is controlled from
+  Settings > Controls > Touch controls. Auto hides it when Android
+  detects a usable built-in or Bluetooth controller; Always on and Off
+  override that detection. The launcher **Touch layout** link edits the
+  layout. For development builds, `-PforceTouchControls=true` still
+  forces the overlay visible.
 - First boot of a new game compiles ~hundreds of shaders (~5–10s on
   Adreno 740) before the first frame.
 - Audio backend hasn't been latency-tuned.

@@ -1137,7 +1137,7 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
 
     private boolean shouldPollRawStickSource() {
         return !isReplayMode && !useGcAdapter && hasRawStickSource()
-                && !BuildConfig.FORCE_TOUCH_CONTROLS;
+                && !shouldForceTouchControls();
     }
 
     private void startRawInputPolling() {
@@ -1390,8 +1390,10 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             }
             return;
         }
-        boolean show = !useGcAdapter && (BuildConfig.FORCE_TOUCH_CONTROLS
-                || !PhysicalControllerDetector.hasUsableP1Controller(rawStickInput));
+        boolean forceTouchControls = shouldForceTouchControls();
+        boolean show = !useGcAdapter && !shouldHideTouchControls()
+                && (forceTouchControls
+                        || !PhysicalControllerDetector.hasUsableP1Controller(rawStickInput));
         if (show == touchOverlayVisible) return;
 
         touchOverlayVisible = show;
@@ -1405,8 +1407,19 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             startRawInputPolling();
         }
         Log.i(TAG, "mainline touch controls " + (show ? "shown" : "hidden")
-                + " force=" + BuildConfig.FORCE_TOUCH_CONTROLS
+                + " force=" + forceTouchControls
+                + " mode=" + DolphinSettings.getTouchControlsMode(this).prefValue
                 + " rawSource=" + hasRawStickSource());
+    }
+
+    private boolean shouldForceTouchControls() {
+        return BuildConfig.FORCE_TOUCH_CONTROLS
+                || DolphinSettings.isTouchControlsAlwaysOn(this);
+    }
+
+    private boolean shouldHideTouchControls() {
+        return !BuildConfig.FORCE_TOUCH_CONTROLS
+                && DolphinSettings.isTouchControlsOff(this);
     }
 
     private void startEmulationIfNeeded() {
