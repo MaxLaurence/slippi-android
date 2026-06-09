@@ -10,10 +10,10 @@ Subject: [PATCH 2/9] disable ranked mode on android
  3 files changed, 27 insertions(+)
 
 diff --git a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
-index 2e6715335b639a6b8343dea69c090deebdaee1ad..6ec2a4743269bd52d4397810cc037337e4a72c6d 100644
+index 064f6752cf8adacba8631941d84b0a593f69f939..c39dea064ed07b549f0ffa89851a4f5105d4dd3d 100644
 --- a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
 +++ b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
-@@ -1792,6 +1792,16 @@ void CEXISlippi::startFindMatch(u8* payload)
+@@ -1876,6 +1876,16 @@ void CEXISlippi::startFindMatch(u8* payload)
    SlippiMatchmaking::MatchSearchSettings search;
    search.mode = (SlippiMatchmaking::OnlinePlayMode)payload[0];
  
