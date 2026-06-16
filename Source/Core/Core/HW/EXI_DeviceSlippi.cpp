@@ -1424,7 +1424,8 @@ void CEXISlippi::handleOnlineInputs(u8 *payload)
 		// Both clients reach this path when a poor-performance termination fires: the initiating
 		// side set the reason locally, the other side received it over the disconnect. Show the
 		// message on both ends rather than only where the debt happened to cross the threshold first.
-		if (slippi_netplay->GetDisconnectReason() == SlippiNetplayClient::SlippiDisconnectReason::POOR_PERFORMANCE)
+		if (slippi_netplay &&
+		    slippi_netplay->GetDisconnectReason() == SlippiNetplayClient::SlippiDisconnectReason::POOR_PERFORMANCE)
 		{
 			OSD::AddTypedMessage(
 			    OSD::MessageType::PoorPerformanceTermination,
@@ -1465,6 +1466,9 @@ void CEXISlippi::handlePoorMatchPerformance(s32 frame)
 	if (lastSearch.mode != SlippiMatchmaking::OnlinePlayMode::RANKED)
 		return;
 
+	if (!slippi_netplay)
+		return;
+
 	u64 intervalFrames = 150; // Check every 2.5 seconds
 	u64 frameTimeUs = 16683;
 
@@ -1472,12 +1476,19 @@ void CEXISlippi::handlePoorMatchPerformance(s32 frame)
 	if ((frame + (intervalFrames - 50)) % intervalFrames != 0)
 		return;
 
+	// The modifier increases if we've been in a game for a minute. At that point, make it a little harder
+	// for the debt to accumulate to failure
+	double modifier = frame > 3600 ? 1.15 : 1.0;
+
 	auto curTimeUs = Common::Timer::GetTimeUs();
 
 	// Iniitalize the first instance
 	if (lastIntervalTimeUs == 0)
 	{
 		lastIntervalTimeUs = curTimeUs;
+		// Discard ping samples collected before this point so the first processed interval's
+		// average covers exactly one interval instead of everything since connection start
+		slippi_netplay->GetAndResetAvgPingMs();
 		return; // We will start processing the next time
 	}
 
@@ -1490,19 +1501,42 @@ void CEXISlippi::handlePoorMatchPerformance(s32 frame)
 	// (local or otherwise) is survivable but sustained degradation isn't. The decay keeps this independent of
 	// match length: scattered blips drain away before they can accumulate to the termination threshold.
 	s32 terminateThreshold = 30;
-	s32 debt;
-	if (ratio >= 1.75)
-		debt = 15; // Severe
-	else if (ratio >= 1.50)
-		debt = 8; // Bad
-	else if (ratio >= 1.10)
-		debt = 4; // Mild
+	s32 speedDebt;
+	if (ratio >= 1.0 + 0.75 * modifier)
+		speedDebt = 15; // Severe
+	else if (ratio >= 1.0 + 0.5 * modifier)
+		speedDebt = 8; // Bad
+	else if (ratio >= 1.0 + 0.1 * modifier)
+		speedDebt = 4; // Mild
 	else
-		debt = -1; // Healthy interval, pay down accumulated debt
+		speedDebt = -1; // Healthy interval, pay down accumulated debt
+
+	// High ping feeds the same accumulator. Averaging over the interval (~150 samples) means a brief
+	// spike gets diluted while sustained high ping keeps every interval elevated. The mild tier starts
+	// just above the 90ms "playable" line; against the -1 decay, a connection oscillating around that
+	// line net-accumulates once it spends over a fifth of its time above it, and a constantly-mild
+	// connection terminates in 8 intervals (~20s). An average of 0 means no acks arrived this
+	// interval; the speed ratio handles that case.
+	double avgPingMs = slippi_netplay->GetAndResetAvgPingMs();
+	s32 pingDebt;
+	if (avgPingMs >= 200 * modifier)
+		pingDebt = 15; // Severe
+	else if (avgPingMs >= 120 * modifier)
+		pingDebt = 8; // Bad
+	else if (avgPingMs >= 90 * modifier)
+		pingDebt = 4; // Mild
+	else
+		pingDebt = -1; // Healthy interval, pay down accumulated debt
+
+	// Take the worse of the two signals rather than summing: a network problem often inflates both
+	// (waiting on remote inputs stretches the interval and delays acks), so summing would double-count
+	// a single underlying cause
+	s32 debt = std::max(speedDebt, pingDebt);
 
 	perfDebt = std::max(0, perfDebt + debt);
-	INFO_LOG(SLIPPI_ONLINE, "Modifying performance debt by %d. Currently at: %d/%d", debt, perfDebt,
-	         terminateThreshold);
+	INFO_LOG(SLIPPI_ONLINE,
+	         "Modifying performance debt by %d (speed: %d, ping: %d, avgPingMs: %.1f). Currently at: %d/%d", debt,
+	         speedDebt, pingDebt, avgPingMs, perfDebt, terminateThreshold);
 	if (perfDebt >= terminateThreshold)
 	{
 		// Tell the server about the poor performance, then drop all remote players with a
