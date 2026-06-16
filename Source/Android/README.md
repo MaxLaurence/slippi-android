@@ -672,14 +672,16 @@ has moved beyond `android-port`, it runs `scripts/sync-upstream-slippi.sh` to:
 - replay and export `Source/Android/mainline-patches` with
   `scripts/mainline-patch.sh`;
 - run `scripts/mainline-patch.sh verify --patch-only`;
+- run `:app:assembleDebug` when a scheduled or repository-dispatch sync creates
+  update commits;
 - open or update a GitHub PR with release links and a plain-language summary.
 
 Patch conflicts intentionally fail the workflow so a human can resolve the
 Android patch queue instead of letting the bot choose runtime behavior. The
 workflow can also be triggered manually from GitHub Actions; enable
-`run_debug_build` there when you want it to run `:app:assembleDebug` after the
-patch verifier. After the PR merges, create the next `v*-android-r*` tag to
-trigger the existing Android Release workflow.
+`run_debug_build` there when you want the manual run to do the same debug build
+after the patch verifier. After the PR merges, create the next `v*-android-r*`
+tag to trigger the existing Android Release workflow.
 
 ## Raw stick input providers
 

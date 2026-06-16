@@ -34,7 +34,7 @@ jobs:
       VERIFY_PATCHES: 'true'
       CREATE_PR: 'true'
       GH_TOKEN: ${{ github.token }}
-      RUN_DEBUG_BUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.run_debug_build == true && 'true' || 'false' }}
+      RUN_DEBUG_BUILD: ${{ github.event_name != 'workflow_dispatch' || inputs.run_debug_build == true }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
