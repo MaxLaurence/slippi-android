@@ -660,6 +660,27 @@ When upstream changes arrive, update the submodule base, rebuild
 apply conflicts in normal Git, export the refreshed queue, and run
 `scripts/mainline-patch.sh verify`.
 
+## Automated upstream sync
+
+`.github/workflows/upstream-slippi-sync.yml` checks every six hours for new
+tagged Project Slippi Ishiiruka and mainline Dolphin releases. When either side
+has moved beyond `android-port`, it runs `scripts/sync-upstream-slippi.sh` to:
+
+- create an `automation/upstream-slippi/...` branch from `android-port`;
+- merge the latest tagged Ishiiruka release;
+- pin `Externals/MainlineSlippiDolphin` to the latest tagged mainline release;
+- replay and export `Source/Android/mainline-patches` with
+  `scripts/mainline-patch.sh`;
+- run `scripts/mainline-patch.sh verify --patch-only`;
+- open or update a GitHub PR with release links and a plain-language summary.
+
+Patch conflicts intentionally fail the workflow so a human can resolve the
+Android patch queue instead of letting the bot choose runtime behavior. The
+workflow can also be triggered manually from GitHub Actions; enable
+`run_debug_build` there when you want it to run `:app:assembleDebug` after the
+patch verifier. After the PR merges, create the next `v*-android-r*` tag to
+trigger the existing Android Release workflow.
+
 ## Raw stick input providers
 
 Android's public `MotionEvent` axes are already normalized and, on

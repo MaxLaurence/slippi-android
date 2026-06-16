@@ -1,0 +1,71 @@
+name: Upstream Slippi Sync
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      run_debug_build:
+        description: 'Also run a full Android debug build after replaying patches'
+        required: false
+        default: false
+        type: boolean
+  repository_dispatch:
+    types: [slippi-upstream-release]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-slippi-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Check upstream and open PR
+    runs-on: macos-latest
+    env:
+      BASE_BRANCH: android-port
+      FORK_REMOTE: origin
+      UPSTREAM_REMOTE: upstream-ishiiruka
+      UPSTREAM_URL: https://github.com/project-slippi/Ishiiruka.git
+      MAINLINE_REMOTE: origin
+      VERIFY_PATCHES: 'true'
+      CREATE_PR: 'true'
+      GH_TOKEN: ${{ github.token }}
+      RUN_DEBUG_BUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.run_debug_build == true && 'true' || 'false' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android packages
+        run: sdkmanager 'ndk;27.1.12297006' 'build-tools;35.0.0' 'platforms;android-35' 'cmake;3.22.1'
+
+      - name: Set up Rust for debug build
+        if: env.RUN_DEBUG_BUILD == 'true'
+        run: |
+          rust_version="$(sed -n 's/^channel = "\(.*\)"/\1/p' Externals/SlippiRustExtensions/rust-toolchain.toml)"
+          rustup toolchain install "$rust_version"
+          rustup target add --toolchain "$rust_version" aarch64-linux-android
+          rustup target add --toolchain "$rust_version" x86_64-linux-android
+
+      - name: Configure Git identity
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Sync upstream release
+        run: scripts/sync-upstream-slippi.sh
