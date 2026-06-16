@@ -218,7 +218,7 @@ index 2b638f5984eb17e6607793ac22efbe48fac14984..26eec6b0c6f7a193b2480bf4f5ef786c
      MemArenaAndroid.cpp
    )
 diff --git a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
-index c39dea064ed07b549f0ffa89851a4f5105d4dd3d..2f930fa93d8e0d72b1545cbc906abb5583b03b3d 100644
+index 4caa8e9d9acc6c0d710299fd077321c4dd6391b5..b5f92cff7eb44fcfbad28d6cc84e2dbb73ba6e31 100644
 --- a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
 +++ b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
 @@ -9,6 +9,8 @@
@@ -288,7 +288,7 @@ index c39dea064ed07b549f0ffa89851a4f5105d4dd3d..2f930fa93d8e0d72b1545cbc906abb55
  template <typename T>
  bool isFutureReady(std::future<T>& t)
  {
-@@ -1587,6 +1633,10 @@ bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
+@@ -1621,6 +1667,10 @@ bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
  
  void CEXISlippi::handleSendInputs(s32 frame, u8 delay, s32 checksum_frame, u32 checksum, u8* inputs)
  {
