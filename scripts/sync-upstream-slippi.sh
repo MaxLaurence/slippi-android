@@ -85,22 +85,30 @@ ensure_mainline_submodule() {
   [[ -e "$submodule/.git" ]] || die "missing submodule at $submodule_rel"
 }
 
+top_level_fetch() {
+  git -c submodule.recurse=false fetch --no-recurse-submodules "$@"
+}
+
+mainline_fetch() {
+  git -C "$submodule" -c submodule.recurse=false fetch --no-recurse-submodules "$@"
+}
+
 fetch_top_level_refs() {
   log "Fetching fork branch and upstream Ishiiruka tags"
-  git fetch "$fork_remote" \
+  top_level_fetch "$fork_remote" \
     "+refs/heads/$base_branch:refs/remotes/$fork_remote/$base_branch" --prune
-  git fetch "$fork_remote" --tags
+  top_level_fetch "$fork_remote" "refs/tags/*:refs/tags/*"
 
-  git fetch "$upstream_remote" \
+  top_level_fetch "$upstream_remote" \
     "+refs/heads/slippi:refs/remotes/$upstream_remote/slippi" --prune
-  git fetch "$upstream_remote" --tags
+  top_level_fetch "$upstream_remote" "refs/tags/*:refs/tags/*"
 }
 
 fetch_mainline_refs() {
   log "Fetching mainline Dolphin tags"
-  git -C "$submodule" fetch "$mainline_remote" \
+  mainline_fetch "$mainline_remote" \
     "+refs/heads/slippi:refs/remotes/$mainline_remote/slippi" --prune
-  git -C "$submodule" fetch "$mainline_remote" --tags
+  mainline_fetch "$mainline_remote" "refs/tags/*:refs/tags/*"
 }
 
 latest_ishiiruka_tag() {
