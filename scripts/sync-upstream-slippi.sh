@@ -184,7 +184,7 @@ EOF
 
 - Confirm the Android build workflow is green.
 - Smoke-test the generated debug or release APK if the upstream change touches netplay, replay, input, or runtime behavior.
-- After merging, create the next `v*-android-r*` tag to trigger the existing Android Release workflow.
+- After merging this upstream-sync PR, the merge-to-release workflow creates the next `v*-android-r*` release tag and dispatches the Android Release workflow automatically.
 EOF
 }
 

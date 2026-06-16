@@ -680,8 +680,28 @@ Patch conflicts intentionally fail the workflow so a human can resolve the
 Android patch queue instead of letting the bot choose runtime behavior. The
 workflow can also be triggered manually from GitHub Actions; enable
 `run_debug_build` there when you want the manual run to do the same debug build
-after the patch verifier. After the PR merges, create the next `v*-android-r*`
-tag to trigger the existing Android Release workflow.
+after the patch verifier. After an upstream-sync PR merges, the
+merge-to-release workflow handles the Android release tag and build dispatch.
+
+## Merge-to-release automation
+
+`.github/workflows/upstream-sync-release.yml` listens only for merged PRs whose
+source branch starts with `automation/upstream-slippi/` and whose base branch is
+`android-port`. Normal PRs do not match that gate and do not create releases.
+
+For matching upstream-sync PRs, it runs
+`scripts/release-merged-upstream-sync.sh` to:
+
+- find the latest merged Ishiiruka release tag and the tagged mainline Dolphin
+  submodule version;
+- choose the next Android release tag, such as `v3.6.5-android-r1`;
+- create or update a GitHub release with plain-language notes;
+- dispatch `.github/workflows/android-release.yml` on the new tag so release
+  APKs are built, verified, checksummed, and uploaded.
+
+The separate dispatch is intentional. Tags created with GitHub Actions'
+default `GITHUB_TOKEN` do not recursively trigger tag-push workflows, while
+`workflow_dispatch` does create a new workflow run.
 
 ## Raw stick input providers
 

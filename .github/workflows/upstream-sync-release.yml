@@ -1,0 +1,45 @@
+name: Release Merged Upstream Sync
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  actions: write
+  pull-requests: read
+
+concurrency:
+  group: upstream-sync-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Tag, release, and dispatch Android build
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'android-port' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'automation/upstream-slippi/')
+    runs-on: ubuntu-latest
+    env:
+      BASE_BRANCH: android-port
+      UPSTREAM_SYNC_BRANCH: ${{ github.event.pull_request.head.ref }}
+      RELEASE_WORKFLOW: android-release.yml
+      DISPATCH_RELEASE: 'true'
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout merged branch
+        uses: actions/checkout@v4
+        with:
+          ref: android-port
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Configure Git identity
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Create release and dispatch Android build
+        run: scripts/release-merged-upstream-sync.sh
