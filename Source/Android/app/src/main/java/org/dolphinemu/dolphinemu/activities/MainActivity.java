@@ -501,6 +501,12 @@ public class MainActivity extends AppCompatActivity {
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "SIDevice1", portN);
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "SIDevice2", portN);
         NativeLibrary.SetConfig("Dolphin.ini", "Core", "SIDevice3", portN);
+        if (DolphinSettings.hasGcAdapterRumbleSetting(this)) {
+            String adapterRumble = DolphinSettings.isGcAdapterRumbleEnabled(this) ? "True" : "False";
+            for (int port = 0; port < 4; port++) {
+                NativeLibrary.SetConfig("Dolphin.ini", "Core", "AdapterRumble" + port, adapterRumble);
+            }
+        }
         return hasAdapter;
     }
 

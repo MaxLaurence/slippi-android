@@ -578,6 +578,13 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core", "SIDevice1", portN);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core", "SIDevice2", portN);
         NativeConfig.setInt(NativeConfig.LAYER_BASE, "Dolphin", "Core", "SIDevice3", portN);
+        if (DolphinSettings.hasGcAdapterRumbleSetting(this)) {
+            boolean adapterRumble = DolphinSettings.isGcAdapterRumbleEnabled(this);
+            for (int port = 0; port < 4; port++) {
+                NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Core",
+                        "AdapterRumble" + port, adapterRumble);
+            }
+        }
         NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Slippi",
                 "EnableJukebox", false);
         NativeConfig.setBoolean(NativeConfig.LAYER_BASE, "Dolphin", "Slippi",
@@ -637,6 +644,12 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         writeIniValue(dolphinIni, "Core", "SIDevice1", Integer.toString(portN));
         writeIniValue(dolphinIni, "Core", "SIDevice2", Integer.toString(portN));
         writeIniValue(dolphinIni, "Core", "SIDevice3", Integer.toString(portN));
+        if (DolphinSettings.hasGcAdapterRumbleSetting(this)) {
+            String adapterRumble = DolphinSettings.isGcAdapterRumbleEnabled(this) ? "True" : "False";
+            for (int port = 0; port < 4; port++) {
+                writeIniValue(dolphinIni, "Core", "AdapterRumble" + port, adapterRumble);
+            }
+        }
         writeIniValue(dolphinIni, "Slippi", "EnableJukebox", "False");
         writeIniValue(dolphinIni, "Slippi", "EnableSpectator", "False");
         writeIniValue(dolphinIni, "Slippi", "ReplayDir", replayDir);

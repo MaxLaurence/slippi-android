@@ -577,7 +577,7 @@ GCPadStatus Input(int chan, std::chrono::high_resolution_clock::time_point* tp)
 
 void Output(int chan, u8 rumble_command)
 {
-  if (!UseAdapter() || !s_detected || !s_fd)
+  if (!UseAdapter() || !s_detected || !s_fd || !SConfig::GetInstance().m_AdapterRumble[chan])
     return;
 
   // Skip over rumble commands if it has not changed or the controller is wireless

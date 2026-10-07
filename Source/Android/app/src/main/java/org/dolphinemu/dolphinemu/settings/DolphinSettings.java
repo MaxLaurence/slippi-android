@@ -16,6 +16,7 @@ public final class DolphinSettings {
     public static final String PREF_KEY_AUDIO_BUFFER_BURSTS = "audio_buffer_bursts";
     public static final String PREF_KEY_DISPLAY_LATENCY_MODE = "display_latency_mode";
     public static final String PREF_KEY_SMOOTH_NETPLAY = "smooth_netplay";
+    public static final String PREF_KEY_GC_ADAPTER_RUMBLE = "gc_adapter_rumble";
     public static final String PREF_KEY_GFX_ASPECT_RATIO = "gfx_aspect_ratio";
     public static final String PREF_KEY_EFB_SCALE = "gfx_efb_scale";
     public static final String PREF_KEY_WIDESCREEN_HACK = "gfx_widescreen_hack";
@@ -158,6 +159,19 @@ public final class DolphinSettings {
 
     public static boolean isSmoothNetplayEnabled(Context context) {
         return prefs(context).getBoolean(PREF_KEY_SMOOTH_NETPLAY, false);
+    }
+
+    public static boolean hasGcAdapterRumbleSetting(Context context) {
+        // Preserve existing per-port INI settings until the user makes a choice.
+        return prefs(context).contains(PREF_KEY_GC_ADAPTER_RUMBLE);
+    }
+
+    public static boolean isGcAdapterRumbleEnabled(Context context) {
+        return prefs(context).getBoolean(PREF_KEY_GC_ADAPTER_RUMBLE, true);
+    }
+
+    public static void setGcAdapterRumbleEnabled(Context context, boolean enabled) {
+        prefs(context).edit().putBoolean(PREF_KEY_GC_ADAPTER_RUMBLE, enabled).apply();
     }
 
     public static void setSmoothNetplayEnabled(Context context, boolean enabled) {

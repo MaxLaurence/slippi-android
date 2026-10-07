@@ -292,11 +292,31 @@ public class SettingsActivity extends AppCompatActivity {
                 hasWiiUAdapter() ? "Built-in controls and GC adapter ports"
                         : getString(R.string.calibrate_device),
                 v -> showRemapChooser());
+        String adapterRumble = DolphinSettings.hasGcAdapterRumbleSetting(this)
+                ? (DolphinSettings.isGcAdapterRumbleEnabled(this) ? "On" : "Off")
+                : "Using existing core settings";
+        addActionRow(body, "GameCube adapter rumble",
+                adapterRumble + " • All USB GC ports, online and offline. Applies next launch.",
+                v -> showGcAdapterRumbleChooser());
         addActionRow(body, "Touch controls",
                 touchControlsMode.label + " - " + touchControlsMode.summary,
                 v -> showTouchControlsModeChooser());
         addActionRow(body, "Touch layout", "Edit the on-screen controller layout",
                 v -> startActivity(new Intent(this, TouchOverlayActivity.class)));
+    }
+
+    private void showGcAdapterRumbleChooser() {
+        int checked = DolphinSettings.hasGcAdapterRumbleSetting(this)
+                ? (DolphinSettings.isGcAdapterRumbleEnabled(this) ? 1 : 0) : -1;
+        new AlertDialog.Builder(this)
+                .setTitle("GameCube adapter rumble")
+                .setSingleChoiceItems(new String[]{"Off", "On"}, checked, (dialog, which) -> {
+                    DolphinSettings.setGcAdapterRumbleEnabled(this, which == 1);
+                    dialog.dismiss();
+                    refreshCurrentPane();
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
     }
 
     private void populateSupportPane(LinearLayout body) {
