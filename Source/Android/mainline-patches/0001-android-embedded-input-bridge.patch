@@ -1213,10 +1213,10 @@ index 10abba86350310860ed320e1b4e096799c96089d..d42210badcb085ec660c92b23f51b72d
  
    return homeDir;
 diff --git a/Source/Core/Core/Config/MainSettings.cpp b/Source/Core/Core/Config/MainSettings.cpp
-index 2a2e77d29827eb4448cd798d2aa9519736d59a6d..7e3033f76508e7fc07e3b73cf3423ed3d30fffc2 100644
+index 5b35406683b5fc05eb6ed24dfa423d10a4da9c59..f6db83d7a1a053f7f558bbf383e24c5cc02629da 100644
 --- a/Source/Core/Core/Config/MainSettings.cpp
 +++ b/Source/Core/Core/Config/MainSettings.cpp
-@@ -337,6 +337,9 @@ const Info<bool> MAIN_DUMP_UCODE{{System::Main, "DSP", "DumpUCode"}, false};
+@@ -339,6 +339,9 @@ const Info<bool> MAIN_DUMP_UCODE{{System::Main, "DSP", "DumpUCode"}, false};
  const Info<std::string> MAIN_AUDIO_BACKEND{{System::Main, "DSP", "Backend"},
                                             AudioCommon::GetDefaultSoundBackend()};
  const Info<int> MAIN_AUDIO_VOLUME{{System::Main, "DSP", "Volume"}, 10};
@@ -1227,7 +1227,7 @@ index 2a2e77d29827eb4448cd798d2aa9519736d59a6d..7e3033f76508e7fc07e3b73cf3423ed3
  const Info<bool> MAIN_AUDIO_MUTE_ON_DISABLED_SPEED_LIMIT{
      {System::Main, "DSP", "MuteOnDisabledSpeedLimit"}, false};
 diff --git a/Source/Core/Core/Config/MainSettings.h b/Source/Core/Core/Config/MainSettings.h
-index eab36049e8dce5ee401b41d3a60267ae557a9028..0c488dcb657dd5a773c325d47bf02422162321be 100644
+index 1c7ec6e581adc3132191b4c2ced03733b2f03771..c6348eb68babae3b972366ac9d09e8de5520b2a4 100644
 --- a/Source/Core/Core/Config/MainSettings.h
 +++ b/Source/Core/Core/Config/MainSettings.h
 @@ -18,7 +18,9 @@
@@ -1240,7 +1240,7 @@ index eab36049e8dce5ee401b41d3a60267ae557a9028..0c488dcb657dd5a773c325d47bf02422
  #define BACKEND_OPENAL "OpenAL"
  #define BACKEND_PULSEAUDIO "Pulse"
  #define BACKEND_OPENSLES "OpenSLES"
-@@ -197,6 +199,7 @@ extern const Info<bool> MAIN_DUMP_AUDIO_SILENT;
+@@ -199,6 +201,7 @@ extern const Info<bool> MAIN_DUMP_AUDIO_SILENT;
  extern const Info<bool> MAIN_DUMP_UCODE;
  extern const Info<std::string> MAIN_AUDIO_BACKEND;
  extern const Info<int> MAIN_AUDIO_VOLUME;
@@ -1249,7 +1249,7 @@ index eab36049e8dce5ee401b41d3a60267ae557a9028..0c488dcb657dd5a773c325d47bf02422
  extern const Info<bool> MAIN_AUDIO_MUTE_ON_DISABLED_SPEED_LIMIT;
  #ifdef _WIN32
 diff --git a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
-index b8cfc5c7f9ac0fae18fbe8761c137ad37cbdc805..c4b3dbd7f7b05db6cae9e2e11552f7874adcd51e 100644
+index 53da6801a0140bf41994287f1e1ff74347d24a24..7ca8557c5a24fc8bdbdd24232e45237e3db5de45 100644
 --- a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
 +++ b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
 @@ -3,9 +3,14 @@
@@ -1267,7 +1267,7 @@ index b8cfc5c7f9ac0fae18fbe8761c137ad37cbdc805..c4b3dbd7f7b05db6cae9e2e11552f787
  #include "Common/CommonPaths.h"
  #include "Common/CommonTypes.h"
  #include "Common/Logging/Log.h"
-@@ -52,6 +57,13 @@ extern std::unique_ptr<SlippiPlaybackStatus> g_playback_status;
+@@ -56,6 +61,13 @@ extern std::unique_ptr<SlippiPlaybackStatus> g_playback_status;
  extern std::unique_ptr<SlippiReplayComm> g_replay_comm;
  bool g_need_input_for_frame;
  
@@ -1281,7 +1281,7 @@ index b8cfc5c7f9ac0fae18fbe8761c137ad37cbdc805..c4b3dbd7f7b05db6cae9e2e11552f787
  #ifdef LOCAL_TESTING
  bool is_local_connected = false;
  int local_chat_message_id = 0;
-@@ -155,6 +167,8 @@ CEXISlippi::CEXISlippi(Core::System& system, const std::string current_file_name
+@@ -162,6 +174,8 @@ CEXISlippi::CEXISlippi(Core::System& system, const std::string current_file_name
    matchmaking = std::make_unique<SlippiMatchmaking>(slprs_exi_device_ptr, user.get());
    game_file_loader = std::make_unique<SlippiGameFileLoader>();
    g_replay_comm = std::make_unique<SlippiReplayComm>();
@@ -1290,7 +1290,7 @@ index b8cfc5c7f9ac0fae18fbe8761c137ad37cbdc805..c4b3dbd7f7b05db6cae9e2e11552f787
    direct_codes =
        std::make_unique<SlippiDirectCodes>(slprs_exi_device_ptr, SlippiDirectCodes::DIRECT);
    teams_codes = std::make_unique<SlippiDirectCodes>(slprs_exi_device_ptr, SlippiDirectCodes::TEAMS);
-@@ -720,6 +734,9 @@ void CEXISlippi::prepareGameInfo(u8* payload)
+@@ -737,6 +751,9 @@ void CEXISlippi::prepareGameInfo(u8* payload)
    // Return the size of the gecko code list
    prepareGeckoList();
    appendWordToBuffer(&m_read_queue, static_cast<u32>(gecko_list.size()));
@@ -1300,7 +1300,7 @@ index b8cfc5c7f9ac0fae18fbe8761c137ad37cbdc805..c4b3dbd7f7b05db6cae9e2e11552f787
  
    // Initialize frame sequence index value for reading rollbacks
    frame_seq_idx = 0;
-@@ -860,19 +877,19 @@ void CEXISlippi::prepareCharacterFrameData(Slippi::FrameData* frame, u8 port, u8
+@@ -877,19 +894,19 @@ void CEXISlippi::prepareCharacterFrameData(Slippi::FrameData* frame, u8 port, u8
  
    // Add all of the inputs in order
    appendWordToBuffer(&m_read_queue, data.randomSeed);
@@ -1329,7 +1329,7 @@ index b8cfc5c7f9ac0fae18fbe8761c137ad37cbdc805..c4b3dbd7f7b05db6cae9e2e11552f787
    m_read_queue.push_back(data.cstickXRaw);
    m_read_queue.push_back(data.cstickYRaw);
    // NOTE TO DEV: If you add data here, make sure to increase the size above
-@@ -945,6 +962,16 @@ void CEXISlippi::prepareFrameData(u8* payload)
+@@ -962,6 +979,16 @@ void CEXISlippi::prepareFrameData(u8* payload)
    g_playback_status->last_frame = m_current_game->GetLatestIndex();
    auto is_frame_complete = checkFrameFullyFetched(frame_idx);
    auto is_frame_ready = is_frame_found && (is_processing_complete || is_frame_complete);
@@ -1346,7 +1346,7 @@ index b8cfc5c7f9ac0fae18fbe8761c137ad37cbdc805..c4b3dbd7f7b05db6cae9e2e11552f787
  
    // If there is a start_frame configured, manage the fast-forward flag
    if (watch_settings.start_frame > Slippi::GAME_FIRST_FRAME)
-@@ -1131,6 +1158,12 @@ void CEXISlippi::prepareIsFileReady()
+@@ -1148,6 +1175,12 @@ void CEXISlippi::prepareIsFileReady()
    auto is_new_replay = g_replay_comm->isNewReplay();
    if (!is_new_replay)
    {
@@ -1359,7 +1359,7 @@ index b8cfc5c7f9ac0fae18fbe8761c137ad37cbdc805..c4b3dbd7f7b05db6cae9e2e11552f787
      g_replay_comm->nextReplay();
      m_read_queue.push_back(0);
      return;
-@@ -1144,11 +1177,13 @@ void CEXISlippi::prepareIsFileReady()
+@@ -1161,11 +1194,13 @@ void CEXISlippi::prepareIsFileReady()
      // Do not start if replay file doesn't exist
      // TODO: maybe display error message?
      INFO_LOG_FMT(SLIPPI, "EXI_DeviceSlippi.cpp: Replay file does not exist?");
@@ -1373,7 +1373,7 @@ index b8cfc5c7f9ac0fae18fbe8761c137ad37cbdc805..c4b3dbd7f7b05db6cae9e2e11552f787
  
    // Clear playback control related vars
    g_playback_status->resetPlayback();
-@@ -3413,6 +3448,7 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
+@@ -3460,6 +3495,7 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
      case CMD_GET_GECKO_CODES:
        m_read_queue.clear();
        m_read_queue.insert(m_read_queue.begin(), gecko_list.begin(), gecko_list.end());
@@ -1382,7 +1382,7 @@ index b8cfc5c7f9ac0fae18fbe8761c137ad37cbdc805..c4b3dbd7f7b05db6cae9e2e11552f787
      case CMD_ONLINE_INPUTS:
        handleOnlineInputs(&mem_ptr[buf_loc + 1]);
 diff --git a/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp b/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp
-index beb633f499294f27b910d1b493027e43e9f4832d..512f944699b7583788b28d9e51ef6b8a08012386 100644
+index 8108f3d1ed3cca4eb3c48dd869a8baafbb134779..9649413d72eb2fdfa1b863b4e28454ec42a40426 100644
 --- a/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp
 +++ b/Source/Core/Core/HW/SI/SI_DeviceGCController.cpp
 @@ -3,6 +3,9 @@
@@ -1520,7 +1520,7 @@ index beb633f499294f27b910d1b493027e43e9f4832d..512f944699b7583788b28d9e51ef6b8a
  
    HandleMoviePadStatus(m_system.GetMovie(), m_device_number, &pad_status);
 diff --git a/Source/Core/Core/HW/SI/SI_DeviceGCController.h b/Source/Core/Core/HW/SI/SI_DeviceGCController.h
-index 19b5bdb14b21ae7042f6d9cfb6e843467810c9fe..18a5a6dd7a039485fe9245c6bd968e8960f6694a 100644
+index 6cf5ca55307e4f44fa72435926b74cb921a0d574..c51335196bdac75e3d05534601ce8b8ade02a70e 100644
 --- a/Source/Core/Core/HW/SI/SI_DeviceGCController.h
 +++ b/Source/Core/Core/HW/SI/SI_DeviceGCController.h
 @@ -16,6 +16,16 @@ class MovieManager;

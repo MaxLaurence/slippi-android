@@ -10,10 +10,10 @@ Subject: [PATCH 2/9] disable ranked mode on android
  3 files changed, 27 insertions(+)
 
 diff --git a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
-index c4b3dbd7f7b05db6cae9e2e11552f7874adcd51e..4caa8e9d9acc6c0d710299fd077321c4dd6391b5 100644
+index 7ca8557c5a24fc8bdbdd24232e45237e3db5de45..77979a36972e4abfee273888a568e7094af79a8a 100644
 --- a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
 +++ b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
-@@ -1910,6 +1910,16 @@ void CEXISlippi::startFindMatch(u8* payload)
+@@ -1943,6 +1943,16 @@ void CEXISlippi::startFindMatch(u8* payload)
    SlippiMatchmaking::MatchSearchSettings search;
    search.mode = (SlippiMatchmaking::OnlinePlayMode)payload[0];
  
@@ -31,13 +31,13 @@ index c4b3dbd7f7b05db6cae9e2e11552f7874adcd51e..4caa8e9d9acc6c0d710299fd077321c4
    shift_jis_code.insert(shift_jis_code.begin(), &payload[1], &payload[1] + 18);
    shift_jis_code.erase(std::find(shift_jis_code.begin(), shift_jis_code.end(), 0x00),
 diff --git a/Source/Core/Core/Slippi/SlippiMatchmaking.cpp b/Source/Core/Core/Slippi/SlippiMatchmaking.cpp
-index 70b39bcf1914f6e026f263b7d5dedfc31e669e45..616bab4428981f8b1124cb597aa40750e0280bb2 100644
+index ae174e804e5c92d3cf65e545a9ae53655070289f..d3dbe0a90d4e74032ff396e4ff04a2ae957413ad 100644
 --- a/Source/Core/Core/Slippi/SlippiMatchmaking.cpp
 +++ b/Source/Core/Core/Slippi/SlippiMatchmaking.cpp
-@@ -62,6 +62,17 @@ void SlippiMatchmaking::FindMatch(MatchSearchSettings settings)
- {
-   is_mm_connected = false;
+@@ -55,6 +55,17 @@ SlippiMatchmaking::~SlippiMatchmaking()
  
+ void SlippiMatchmaking::FindMatch(MatchSearchSettings settings)
+ {
 +#ifdef ANDROID
 +  if (settings.mode == SlippiMatchmaking::OnlinePlayMode::RANKED)
 +  {
@@ -52,7 +52,7 @@ index 70b39bcf1914f6e026f263b7d5dedfc31e669e45..616bab4428981f8b1124cb597aa40750
    ERROR_LOG_FMT(SLIPPI_ONLINE, "[Matchmaking] Starting matchmaking...");
  
    m_search_settings = settings;
-@@ -71,6 +82,11 @@ void SlippiMatchmaking::FindMatch(MatchSearchSettings settings)
+@@ -64,6 +75,11 @@ void SlippiMatchmaking::FindMatch(MatchSearchSettings settings)
    m_matchmake_thread = std::thread(&SlippiMatchmaking::MatchmakeThread, this);
  }
  
@@ -65,14 +65,14 @@ index 70b39bcf1914f6e026f263b7d5dedfc31e669e45..616bab4428981f8b1124cb597aa40750
  {
    return m_state;
 diff --git a/Source/Core/Core/Slippi/SlippiMatchmaking.h b/Source/Core/Core/Slippi/SlippiMatchmaking.h
-index 2087ef6eacb626f923abd34e3102d9ae9a2e4b3f..26705da9bd24bec265d755f1d075e843292d6be6 100644
+index a31005f8779dcda1805bb946d10745f60d220543..a0d297b6c168bafeeada1d2d4910e49d54328fad 100644
 --- a/Source/Core/Core/Slippi/SlippiMatchmaking.h
 +++ b/Source/Core/Core/Slippi/SlippiMatchmaking.h
-@@ -94,6 +94,7 @@ public:
+@@ -105,6 +105,7 @@ public:
    u8 RemotePlayerCount();
    MatchmakeResult GetMatchmakeResult();
    static bool IsFixedRulesMode(OnlinePlayMode mode);
 +  static const char* RankedDisabledMessage();
  
  protected:
-   const std::string MM_HOST_DEV = "mm2.slippi.gg";  // Dev host
+   // Public STUN servers used to learn the netplay socket's public address, tried in order until

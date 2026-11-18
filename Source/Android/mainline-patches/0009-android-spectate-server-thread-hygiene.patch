@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: laurenceputterman <mlputterman@gmail.com>
+Date: Wed, 18 Nov 2026 09:46:44 -0800
+Subject: [PATCH 9/9] android spectate server thread hygiene
+
+Name the spectator socket thread, lower its priority on Android, and skip start/end game events when the spectator server is disabled (matching write()). Carried over from the former android-netplay-hot-paths patch; that patch's pad ring, batched pad send, replay IO ring and rollback savestate slot rewrite was dropped when rebasing onto v4.0.0-mainline-beta.21, because beta.20 rewrote the same netplay paths (9-byte wire pads, player drop reports, input suggestions).
+---
+ Source/Core/Core/Slippi/SlippiSpectate.cpp | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/Source/Core/Core/Slippi/SlippiSpectate.cpp b/Source/Core/Core/Slippi/SlippiSpectate.cpp
+index cd7a1aa86af5b93b8480a84ef1ec40d4ef091dd0..f9b5911796bf5116e0561264760f5f893bb3a6b7 100644
+--- a/Source/Core/Core/Slippi/SlippiSpectate.cpp
++++ b/Source/Core/Core/Slippi/SlippiSpectate.cpp
+@@ -4,6 +4,7 @@
+ #include "Common/Base64.hpp"
+ #include "Common/CommonTypes.h"
+ #include "Common/Logging/Log.h"
++#include "Common/Thread.h"
+ #include "Common/Version.h"
+ 
+ // Networking
+@@ -13,6 +14,9 @@
+ #else
+ #include <errno.h>
+ #endif
++#ifdef __ANDROID__
++#include <sys/resource.h>
++#endif
+ 
+ inline bool isSpectatorEnabled()
+ {
+@@ -37,6 +41,9 @@ void SlippiSpectateServer::write(u8* payload, u32 length)
+ // CALLED FROM DOLPHIN MAIN THREAD
+ void SlippiSpectateServer::startGame()
+ {
++  if (!isSpectatorEnabled())
++    return;
++
+   json start_game_message;
+   start_game_message["type"] = "start_game";
+   m_event_queue.Push(start_game_message.dump());
+@@ -45,6 +52,9 @@ void SlippiSpectateServer::startGame()
+ // CALLED FROM DOLPHIN MAIN THREAD
+ void SlippiSpectateServer::endGame(bool dolphin_closed)
+ {
++  if (!isSpectatorEnabled())
++    return;
++
+   json end_game_message;
+   end_game_message["type"] = "end_game";
+   end_game_message["dolphin_closed"] = dolphin_closed;
+@@ -264,6 +274,11 @@ void SlippiSpectateServer::handleMessage(u8* buffer, u32 length, u16 peer_id)
+ 
+ void SlippiSpectateServer::SlippicommSocketThread(void)
+ {
++  Common::SetCurrentThreadName("Slippi Spectate");
++#ifdef __ANDROID__
++  setpriority(PRIO_PROCESS, 0, 10);
++#endif
++
+   if (enet_initialize() != 0)
+   {
+     WARN_LOG_FMT(SLIPPI, "An error occurred while initializing spectator server.");

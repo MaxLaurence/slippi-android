@@ -8,18 +8,18 @@ Subject: [PATCH 5/9] android wup stale neutralize
  1 file changed, 67 insertions(+), 2 deletions(-)
 
 diff --git a/Source/Core/InputCommon/GCAdapter.cpp b/Source/Core/InputCommon/GCAdapter.cpp
-index c30c542e96cdead0dc3daa20ac578bccdb04e5d0..e48f3a78144ffc41d948054188a5dc50af856ff8 100644
+index 0cd6c4fa8100ea991c4782b5f1953c5779e2f292..9b16ca4f7d421f29014f356e5f0e54155f13d7ad 100644
 --- a/Source/Core/InputCommon/GCAdapter.cpp
 +++ b/Source/Core/InputCommon/GCAdapter.cpp
-@@ -13,6 +13,7 @@
- 
+@@ -14,6 +14,7 @@
  #include <algorithm>
  #include <array>
+ #include <atomic>
 +#include <chrono>
  #include <mutex>
  #include <optional>
  
-@@ -112,12 +113,21 @@ constexpr size_t CONTROLLER_OUTPUT_INIT_PAYLOAD_SIZE = 1;
+@@ -117,12 +118,21 @@ constexpr size_t CONTROLLER_OUTPUT_INIT_PAYLOAD_SIZE = 1;
  #endif
  constexpr size_t CONTROLLER_OUTPUT_RUMBLE_PAYLOAD_SIZE = 5;
  
@@ -41,9 +41,9 @@ index c30c542e96cdead0dc3daa20ac578bccdb04e5d0..e48f3a78144ffc41d948054188a5dc50
    bool is_new_connection = false;
  };
  
-@@ -176,6 +186,44 @@ static u64 s_consecutive_slow_transfers = 0;
- static double s_read_rate = 0.0;
- // slippi change: for poll rate display
+@@ -188,6 +198,44 @@ static std::array<u64, SerialInterface::MAX_SI_CHANNELS> s_game_poll_counts{};
+ static std::atomic<ReportCallback> s_report_callback{nullptr};
+ // slippi change: input suggestions
  
 +#if GCADAPTER_USE_ANDROID_IMPLEMENTATION
 +static u64 NowUs()
@@ -86,7 +86,7 @@ index c30c542e96cdead0dc3daa20ac578bccdb04e5d0..e48f3a78144ffc41d948054188a5dc50
  static void ReadThreadFunc()
  {
    Common::SetCurrentThreadName("GCAdapter Read Thread");
-@@ -817,6 +865,15 @@ GCPadStatus Input(int chan)
+@@ -843,6 +891,15 @@ GCPadStatus Input(int chan, bool is_game_poll)
  
    auto& pad_state = s_port_states[chan];
  
@@ -102,7 +102,7 @@ index c30c542e96cdead0dc3daa20ac578bccdb04e5d0..e48f3a78144ffc41d948054188a5dc50
    // Return the "origin" state for the first input on a new connection.
    if (pad_state.is_new_connection)
    {
-@@ -857,12 +914,16 @@ void ProcessInputPayload(const u8* data, std::size_t size)
+@@ -887,12 +944,16 @@ void ProcessInputPayload(const u8* data, std::size_t size)
    else
    {
      std::lock_guard lk(s_read_mutex);
@@ -120,7 +120,7 @@ index c30c542e96cdead0dc3daa20ac578bccdb04e5d0..e48f3a78144ffc41d948054188a5dc50
  
        auto& pad_state = s_port_states[chan];
  
-@@ -918,7 +979,7 @@ void ProcessInputPayload(const u8* data, std::size_t size)
+@@ -948,7 +1009,7 @@ void ProcessInputPayload(const u8* data, std::size_t size)
        if (type != ControllerType::None && pad_state.controller_type == ControllerType::None)
        {
          NOTICE_LOG_FMT(CONTROLLERINTERFACE, "New device connected to Port {} of Type: {:02x}",
@@ -129,7 +129,7 @@ index c30c542e96cdead0dc3daa20ac578bccdb04e5d0..e48f3a78144ffc41d948054188a5dc50
  
          pad.button |= PAD_GET_ORIGIN;
          pad_state.origin = pad;
-@@ -927,6 +988,10 @@ void ProcessInputPayload(const u8* data, std::size_t size)
+@@ -957,6 +1018,10 @@ void ProcessInputPayload(const u8* data, std::size_t size)
  
        pad_state.controller_type = type;
        pad_state.status = pad;
@@ -138,5 +138,5 @@ index c30c542e96cdead0dc3daa20ac578bccdb04e5d0..e48f3a78144ffc41d948054188a5dc50
 +      pad_state.last_payload_time_us = payload_time_us;
 +#endif
      }
-   }
- }
+ 
+     // slippi change: input suggestions. Stamped under the same lock the game's polls take, so the

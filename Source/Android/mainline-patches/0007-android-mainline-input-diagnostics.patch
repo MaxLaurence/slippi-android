@@ -5,13 +5,13 @@ Subject: [PATCH 7/9] android: mainline input diagnostics
 
 ---
  Source/Android/jni/MainAndroid.cpp            |  19 +++
- .../Core/Common/AndroidInputDiagnostics.cpp   | 123 ++++++++++++++++++
+ .../Core/Common/AndroidInputDiagnostics.cpp   | 123 +++++++++++++++++
  Source/Core/Common/AndroidInputDiagnostics.h  |  17 +++
  Source/Core/Common/CMakeLists.txt             |   2 +
  Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp  |  50 +++++++
  Source/Core/Core/NetPlayClient.cpp            |  70 +++++++++-
- Source/Core/InputCommon/GCAdapter.cpp         | 122 ++++++++++++++---
- 7 files changed, 386 insertions(+), 17 deletions(-)
+ Source/Core/InputCommon/GCAdapter.cpp         | 129 +++++++++++++++---
+ 7 files changed, 389 insertions(+), 21 deletions(-)
  create mode 100644 Source/Core/Common/AndroidInputDiagnostics.cpp
  create mode 100644 Source/Core/Common/AndroidInputDiagnostics.h
 
@@ -218,7 +218,7 @@ index 2b638f5984eb17e6607793ac22efbe48fac14984..26eec6b0c6f7a193b2480bf4f5ef786c
      MemArenaAndroid.cpp
    )
 diff --git a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
-index 4caa8e9d9acc6c0d710299fd077321c4dd6391b5..b5f92cff7eb44fcfbad28d6cc84e2dbb73ba6e31 100644
+index 77979a36972e4abfee273888a568e7094af79a8a..ce07d4eafdb7f8b23784a5e29bc71f882b78874d 100644
 --- a/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
 +++ b/Source/Core/Core/HW/EXI/EXI_DeviceSlippi.cpp
 @@ -9,6 +9,8 @@
@@ -230,8 +230,8 @@ index 4caa8e9d9acc6c0d710299fd077321c4dd6391b5..b5f92cff7eb44fcfbad28d6cc84e2dbb
  #endif
  
  #include "Common/CommonPaths.h"
-@@ -45,6 +47,10 @@
- #include "Core/System.h"
+@@ -49,6 +51,10 @@
+ #include "InputCommon/GCAdapter.h"
  #include "VideoCommon/OnScreenDisplay.h"
  
 +#ifdef ANDROID
@@ -241,7 +241,7 @@ index 4caa8e9d9acc6c0d710299fd077321c4dd6391b5..b5f92cff7eb44fcfbad28d6cc84e2dbb
  // The Rust library that houses a "shadow" EXI Device that we can call into.
  #include "SlippiRustExtensions.h"
  
-@@ -74,6 +80,46 @@ namespace ExpansionInterface
+@@ -81,6 +87,46 @@ void doConnectionCleanup(std::unique_ptr<SlippiMatchmaking> mm,
  static std::unordered_map<u8, std::string> slippi_names;
  static std::unordered_map<u8, std::string> slippi_connect_codes;
  
@@ -288,7 +288,7 @@ index 4caa8e9d9acc6c0d710299fd077321c4dd6391b5..b5f92cff7eb44fcfbad28d6cc84e2dbb
  template <typename T>
  bool isFutureReady(std::future<T>& t)
  {
-@@ -1621,6 +1667,10 @@ bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
+@@ -1643,6 +1689,10 @@ bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
  
  void CEXISlippi::handleSendInputs(s32 frame, u8 delay, s32 checksum_frame, u32 checksum, u8* inputs)
  {
@@ -409,21 +409,18 @@ index af5f545ab095121878469ae55b807118b3ee1e9f..e031ba77ca984cfac5bc3b8a5b5c0ffd
    {
      if (m_local_player->pid != m_current_golfer)
 diff --git a/Source/Core/InputCommon/GCAdapter.cpp b/Source/Core/InputCommon/GCAdapter.cpp
-index 029ac1ce4352e0df72cfe8fea152136bce7e144c..8153a3386f45c3910e69be21deb46fad17fbd0e2 100644
+index 0bae02a6fe1c4c285b46a0d66146baf1b1451448..906a137480f82d324b8f9c4e7304c70e961e06fd 100644
 --- a/Source/Core/InputCommon/GCAdapter.cpp
 +++ b/Source/Core/InputCommon/GCAdapter.cpp
-@@ -13,8 +13,10 @@
- 
- #include <algorithm>
- #include <array>
-+#include <atomic>
+@@ -16,6 +16,7 @@
+ #include <atomic>
  #include <cerrno>
  #include <chrono>
 +#include <cstring>
  #include <mutex>
  #include <optional>
  
-@@ -44,6 +46,7 @@
+@@ -49,6 +50,7 @@
  #include "Common/ScopeGuard.h"
  #include "Core/LibusbUtils.h"
  #elif GCADAPTER_USE_ANDROID_IMPLEMENTATION
@@ -431,8 +428,8 @@ index 029ac1ce4352e0df72cfe8fea152136bce7e144c..8153a3386f45c3910e69be21deb46fad
  #include "jni/AndroidCommon/IDCache.h"
  #endif
  
-@@ -189,6 +192,9 @@ static double s_read_rate = 0.0;
- // slippi change: for poll rate display
+@@ -201,6 +203,9 @@ static std::atomic<ReportCallback> s_report_callback{nullptr};
+ // slippi change: input suggestions
  
  #if GCADAPTER_USE_ANDROID_IMPLEMENTATION
 +static std::atomic<u64> s_android_payload_sequence{0};
@@ -441,7 +438,7 @@ index 029ac1ce4352e0df72cfe8fea152136bce7e144c..8153a3386f45c3910e69be21deb46fad
  static u64 NowUs()
  {
    return static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
-@@ -204,6 +210,61 @@ static void BoostAndroidAdapterThread(const char* thread_name)
+@@ -216,6 +221,61 @@ static void BoostAndroidAdapterThread(const char* thread_name)
    }
  }
  
@@ -503,7 +500,7 @@ index 029ac1ce4352e0df72cfe8fea152136bce7e144c..8153a3386f45c3910e69be21deb46fad
  static GCPadStatus NeutralPadForStalePayload(int chan, PortState& pad_state, u64 now_us)
  {
    GCPadStatus pad = {};
-@@ -229,6 +290,12 @@ static GCPadStatus NeutralPadForStalePayload(int chan, PortState& pad_state, u64
+@@ -241,6 +301,12 @@ static GCPadStatus NeutralPadForStalePayload(int chan, PortState& pad_state, u64
                   "Android WUP stale report neutralized port={} age_us={} threshold_us={} "
                   "type_byte={:02x}",
                   chan, age_us, STALE_PAYLOAD_NEUTRAL_US, pad_state.type_byte);
@@ -516,11 +513,15 @@ index 029ac1ce4352e0df72cfe8fea152136bce7e144c..8153a3386f45c3910e69be21deb46fad
    }
    return pad;
  }
-@@ -877,27 +944,43 @@ GCPadStatus Input(int chan)
+@@ -899,31 +965,47 @@ GCPadStatus Input(int chan, bool is_game_poll)
      return {};
  #endif
  
 -  std::lock_guard lk(s_read_mutex);
+-
+-  // slippi change: input suggestions
+-  if (is_game_poll)
+-    s_game_poll_counts[chan]++;
 -
 -  auto& pad_state = s_port_states[chan];
 -
@@ -540,6 +541,10 @@ index 029ac1ce4352e0df72cfe8fea152136bce7e144c..8153a3386f45c3910e69be21deb46fad
 -    pad_state.is_new_connection = false;
 -    return pad_state.origin;
 +    std::lock_guard lk(s_read_mutex);
++
++    // slippi change: input suggestions
++    if (is_game_poll)
++      s_game_poll_counts[chan]++;
 +
 +    auto& pad_state = s_port_states[chan];
 +
@@ -574,7 +579,7 @@ index 029ac1ce4352e0df72cfe8fea152136bce7e144c..8153a3386f45c3910e69be21deb46fad
  }
  
  // Get ControllerType from first byte in input payload.
-@@ -921,9 +1004,13 @@ void ProcessInputPayload(const u8* data, std::size_t size)
+@@ -951,9 +1033,13 @@ void ProcessInputPayload(const u8* data, std::size_t size)
    )
    {
      // This can occur for a few frames on initialization.
@@ -589,15 +594,15 @@ index 029ac1ce4352e0df72cfe8fea152136bce7e144c..8153a3386f45c3910e69be21deb46fad
      Reset(CalledFromReadThread::Yes);
  #endif
    }
-@@ -1009,6 +1096,11 @@ void ProcessInputPayload(const u8* data, std::size_t size)
-       pad_state.last_payload_time_us = payload_time_us;
+@@ -1040,6 +1126,11 @@ void ProcessInputPayload(const u8* data, std::size_t size)
  #endif
      }
-+
+ 
 +#if GCADAPTER_USE_ANDROID_IMPLEMENTATION
 +    s_android_last_payload_us.store(payload_time_us, std::memory_order_relaxed);
 +    s_android_payload_sequence.fetch_add(1, std::memory_order_relaxed);
 +#endif
-   }
- }
- 
++
+     // slippi change: input suggestions. Stamped under the same lock the game's polls take, so the
+     // counts say exactly which polls happened before this report was stored
+     report_callback = s_report_callback.load();
