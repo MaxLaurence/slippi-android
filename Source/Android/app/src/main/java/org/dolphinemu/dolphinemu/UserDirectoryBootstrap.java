@@ -45,8 +45,8 @@ public final class UserDirectoryBootstrap {
      * using the first-launch extract, which is missing whatever new content
      * we added.
      */
-    private static final int SYS_VERSION = 3;
-    private static final int MAINLINE_SYS_VERSION = 2;
+    private static final int SYS_VERSION = 4;
+    private static final int MAINLINE_SYS_VERSION = 3;
     private static final String SYS_VERSION_FILE = "sys_version";
 
     public static synchronized void ensureLayout(Context ctx) {

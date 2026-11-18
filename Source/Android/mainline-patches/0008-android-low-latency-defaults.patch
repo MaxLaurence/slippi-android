@@ -67,10 +67,10 @@ index e7dbf8279f22e38f6826b8c1ff17872a4421cc14..10a853fae693ae904d82f0409806e240
      {System::GFX, "Hacks", "EFBEmulateFormatChanges"}, false};
  const Info<bool> GFX_HACK_VERTEX_ROUNDING{{System::GFX, "Hacks", "VertexRounding"}, false};
 diff --git a/Source/Core/Core/Config/MainSettings.cpp b/Source/Core/Core/Config/MainSettings.cpp
-index 7e3033f76508e7fc07e3b73cf3423ed3d30fffc2..d7336fbc7f6117681550c1571f74684d9e70b453 100644
+index f6db83d7a1a053f7f558bbf383e24c5cc02629da..d83d6560c35dca545ff5742f01fc4ee2ca53f7e2 100644
 --- a/Source/Core/Core/Config/MainSettings.cpp
 +++ b/Source/Core/Core/Config/MainSettings.cpp
-@@ -52,7 +52,7 @@ const Info<std::string> SLIPPI_REPLAY_DIR{{System::Main, "Slippi", "ReplayDir"},
+@@ -54,7 +54,7 @@ const Info<std::string> SLIPPI_REPLAY_DIR{{System::Main, "Slippi", "ReplayDir"},
                                            File::GetHomeDirectory() + DIR_SEP + "Slippi"};
  const Info<bool> SLIPPI_ENABLE_FRAME_INDEX{{System::Main, "Slippi", "EnableFrameIndex"}, false};
  const Info<bool> SLIPPI_BLOCKING_PIPES{{System::Main, "Slippi", "BlockingPipes"}, false};
@@ -79,7 +79,7 @@ index 7e3033f76508e7fc07e3b73cf3423ed3d30fffc2..d7336fbc7f6117681550c1571f74684d
  const Info<int> SLIPPI_JUKEBOX_VOLUME{{System::Main, "Slippi", "JukeboxVolume"}, 100};
  
  const Info<bool> SLIPPI_ENABLE_RANK_LOCAL{{System::Main, "Slippi", "ShowLocalRankInfo"}, true};
-@@ -75,7 +75,7 @@ const Info<bool> MAIN_DSP_HLE{{System::Main, "Core", "DSPHLE"}, true};
+@@ -77,7 +77,7 @@ const Info<bool> MAIN_DSP_HLE{{System::Main, "Core", "DSPHLE"}, true};
  const Info<int> MAIN_MAX_FALLBACK{{System::Main, "Core", "MaxFallback"}, 100};
  const Info<int> MAIN_TIMING_VARIANCE{{System::Main, "Core", "TimingVariance"}, 8};
  const Info<bool> MAIN_CPU_THREAD{{System::Main, "Core", "CPUThread"}, true};
@@ -88,7 +88,7 @@ index 7e3033f76508e7fc07e3b73cf3423ed3d30fffc2..d7336fbc7f6117681550c1571f74684d
  const Info<std::string> MAIN_DEFAULT_ISO{{System::Main, "Core", "DefaultISO"}, ""};
  const Info<bool> MAIN_ENABLE_CHEATS{{System::Main, "Core", "EnableCheats"}, true};
  const Info<int> MAIN_GC_LANGUAGE{{System::Main, "Core", "SelectedLanguage"}, 0};
-@@ -84,7 +84,7 @@ const Info<bool> MAIN_OVERRIDE_REGION_SETTINGS{{System::Main, "Core", "OverrideR
+@@ -86,7 +86,7 @@ const Info<bool> MAIN_OVERRIDE_REGION_SETTINGS{{System::Main, "Core", "OverrideR
  const Info<bool> MAIN_DPL2_DECODER{{System::Main, "Core", "DPL2Decoder"}, false};
  const Info<AudioCommon::DPL2Quality> MAIN_DPL2_QUALITY{{System::Main, "Core", "DPL2Quality"},
                                                         AudioCommon::GetDefaultDPL2Quality()};
@@ -97,7 +97,7 @@ index 7e3033f76508e7fc07e3b73cf3423ed3d30fffc2..d7336fbc7f6117681550c1571f74684d
  const Info<int> MAIN_AUDIO_BUFFER_SIZE{{System::Main, "Core", "AudioBufferSize"}, 80};
  const Info<bool> MAIN_AUDIO_FILL_GAPS{{System::Main, "Core", "AudioFillGaps"}, true};
  const Info<std::string> MAIN_MEMCARD_A_PATH{{System::Main, "Core", "MemcardAPath"}, ""};
-@@ -297,7 +297,7 @@ const Info<u32> MAIN_CUSTOM_RTC_VALUE{{System::Main, "Core", "CustomRTCValue"},
+@@ -299,7 +299,7 @@ const Info<u32> MAIN_CUSTOM_RTC_VALUE{{System::Main, "Core", "CustomRTCValue"},
                                        (30 * 365 + 7) * 24 * 60 * 60};
  const Info<DiscIO::Region> MAIN_FALLBACK_REGION{{System::Main, "Core", "FallbackRegion"},
                                                  GetDefaultRegion()};
@@ -106,7 +106,7 @@ index 7e3033f76508e7fc07e3b73cf3423ed3d30fffc2..d7336fbc7f6117681550c1571f74684d
  const Info<bool> MAIN_ALLOW_SD_WRITES{{System::Main, "Core", "WiiSDCardAllowWrites"}, true};
  const Info<bool> MAIN_ENABLE_SAVESTATES{{System::Main, "Core", "EnableSaveStates"}, false};
  const Info<bool> MAIN_REAL_WII_REMOTE_REPEAT_REPORTS{
-@@ -328,7 +328,7 @@ const Info<bool> MAIN_DISABLE_SCREENSAVER{{System::Main, "Display", "DisableScre
+@@ -330,7 +330,7 @@ const Info<bool> MAIN_DISABLE_SCREENSAVER{{System::Main, "Display", "DisableScre
  
  // Main.DSP
  
@@ -115,7 +115,7 @@ index 7e3033f76508e7fc07e3b73cf3423ed3d30fffc2..d7336fbc7f6117681550c1571f74684d
  const Info<bool> MAIN_DSP_CAPTURE_LOG{{System::Main, "DSP", "CaptureLog"}, false};
  const Info<bool> MAIN_DSP_JIT{{System::Main, "DSP", "EnableJIT"}, true};
  const Info<bool> MAIN_DUMP_AUDIO{{System::Main, "DSP", "DumpAudio"}, false};
-@@ -336,7 +336,7 @@ const Info<bool> MAIN_DUMP_AUDIO_SILENT{{System::Main, "DSP", "DumpAudioSilent"}
+@@ -338,7 +338,7 @@ const Info<bool> MAIN_DUMP_AUDIO_SILENT{{System::Main, "DSP", "DumpAudioSilent"}
  const Info<bool> MAIN_DUMP_UCODE{{System::Main, "DSP", "DumpUCode"}, false};
  const Info<std::string> MAIN_AUDIO_BACKEND{{System::Main, "DSP", "Backend"},
                                             AudioCommon::GetDefaultSoundBackend()};
@@ -125,10 +125,10 @@ index 7e3033f76508e7fc07e3b73cf3423ed3d30fffc2..d7336fbc7f6117681550c1571f74684d
                                                    "AndroidAudioBufferBursts"},
                                                   4};
 diff --git a/Source/Core/Core/Slippi/SlippiNetplay.cpp b/Source/Core/Core/Slippi/SlippiNetplay.cpp
-index d7e8deedf0cb8d4394deed9eab04b8d551e93f13..54bb07181299fbf969db067c1d567785472cab21 100644
+index 0b96267b5a3a50c98f8362d7b1dced51e9ba8920..d7f3544170ec70d8c3ec49f5ac09876a9fc2ce13 100644
 --- a/Source/Core/Core/Slippi/SlippiNetplay.cpp
 +++ b/Source/Core/Core/Slippi/SlippiNetplay.cpp
-@@ -76,11 +76,10 @@ bool AndroidLatencyTraceEnabled()
+@@ -79,11 +79,10 @@ bool AndroidLatencyTraceEnabled()
  
  int AndroidActiveServiceTimeoutMs()
  {

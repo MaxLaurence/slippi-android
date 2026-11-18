@@ -3,6 +3,7 @@
 #include "Common/ENetUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
+#include "Common/Timer.h"
 #include <string>
 #include <vector>
 
@@ -15,17 +16,15 @@
 #elif defined _WIN32
 #endif
 
-class MmMessageType
+// Rust-side session states, see slprs_mm_state
+enum RustMmState
 {
-  public:
-	static std::string CREATE_TICKET;
-	static std::string CREATE_TICKET_RESP;
-	static std::string GET_TICKET_RESP;
+	RUST_MM_IDLE = 0,
+	RUST_MM_CONNECTING = 1,
+	RUST_MM_QUEUED = 2,
+	RUST_MM_MATCHED = 3,
+	RUST_MM_FAILED = 4,
 };
-
-std::string MmMessageType::CREATE_TICKET = "create-ticket";
-std::string MmMessageType::CREATE_TICKET_RESP = "create-ticket-resp";
-std::string MmMessageType::GET_TICKET_RESP = "get-ticket-resp";
 
 SlippiMatchmaking::SlippiMatchmaking(uintptr_t rs_exi_device_ptr, SlippiUser *user)
 {
@@ -36,9 +35,6 @@ SlippiMatchmaking::SlippiMatchmaking(uintptr_t rs_exi_device_ptr, SlippiUser *us
 	slprs_exi_device_ptr = rs_exi_device_ptr;
 
 	m_client = nullptr;
-	m_server = nullptr;
-
-	MM_HOST = scm_slippi_semver_str.find("dev") == std::string::npos ? MM_HOST_PROD : MM_HOST_DEV;
 
 	generator = std::default_random_engine(Common::Timer::GetTimeMs());
 }
@@ -57,8 +53,6 @@ SlippiMatchmaking::~SlippiMatchmaking()
 
 void SlippiMatchmaking::FindMatch(MatchSearchSettings settings)
 {
-	isMmConnected = false;
-
 #ifdef ANDROID
 	if (settings.mode == SlippiMatchmaking::OnlinePlayMode::RANKED)
 	{
@@ -110,58 +104,6 @@ bool SlippiMatchmaking::IsFixedRulesMode(SlippiMatchmaking::OnlinePlayMode mode)
 	       mode == SlippiMatchmaking::OnlinePlayMode::PARTY;
 }
 
-void SlippiMatchmaking::sendMessage(json msg)
-{
-	enet_uint32 flags = ENET_PACKET_FLAG_RELIABLE;
-	u8 channelId = 0;
-
-	std::string msgContents = msg.dump();
-
-	ENetPacket *epac = enet_packet_create(msgContents.c_str(), msgContents.length(), flags);
-	enet_peer_send(m_server, channelId, epac);
-}
-
-int SlippiMatchmaking::receiveMessage(json &msg, int timeoutMs)
-{
-	int hostServiceTimeoutMs = 250;
-
-	// Make sure loop runs at least once
-	if (timeoutMs < hostServiceTimeoutMs)
-		timeoutMs = hostServiceTimeoutMs;
-
-	// This is not a perfect way to timeout but hopefully it's close enough?
-	int maxAttempts = timeoutMs / hostServiceTimeoutMs;
-
-	for (int i = 0; i < maxAttempts; i++)
-	{
-		ENetEvent netEvent;
-		int net = enet_host_service(m_client, &netEvent, hostServiceTimeoutMs);
-		if (net <= 0)
-			continue;
-
-		switch (netEvent.type)
-		{
-		case ENET_EVENT_TYPE_RECEIVE:
-		{
-
-			std::vector<u8> buf;
-			buf.insert(buf.end(), netEvent.packet->data, netEvent.packet->data + netEvent.packet->dataLength);
-
-			std::string str(buf.begin(), buf.end());
-			msg = json::parse(str);
-
-			enet_packet_destroy(netEvent.packet);
-			return 0;
-		}
-		case ENET_EVENT_TYPE_DISCONNECT:
-			// Return -2 code to indicate we have lost connection to the server
-			return -2;
-		}
-	}
-
-	return -1;
-}
-
 void SlippiMatchmaking::MatchmakeThread()
 {
 	while (IsSearching())
@@ -185,46 +127,18 @@ void SlippiMatchmaking::MatchmakeThread()
 		}
 	}
 
-	// Clean up ENET connections
+	// Leave the queue if we are still in it and free the port
 	terminateMmConnection();
-}
-
-void SlippiMatchmaking::disconnectFromServer()
-{
-	isMmConnected = false;
-
-	if (m_server)
-		enet_peer_disconnect(m_server, 0);
-	else
-		return;
-
-	ENetEvent netEvent;
-	while (enet_host_service(m_client, &netEvent, 3000) > 0)
-	{
-		switch (netEvent.type)
-		{
-		case ENET_EVENT_TYPE_RECEIVE:
-			enet_packet_destroy(netEvent.packet);
-			break;
-		case ENET_EVENT_TYPE_DISCONNECT:
-			m_server = nullptr;
-			return;
-		default:
-			break;
-		}
-	}
-
-	// didn't disconnect gracefully force disconnect
-	enet_peer_reset(m_server);
-	m_server = nullptr;
 }
 
 void SlippiMatchmaking::terminateMmConnection()
 {
-	// Disconnect from server
-	disconnectFromServer();
+	if (m_sessionId != 0)
+	{
+		slprs_mm_cancel(slprs_exi_device_ptr, m_sessionId);
+		m_sessionId = 0;
+	}
 
-	// Destroy client
 	if (m_client)
 	{
 		enet_host_destroy(m_client);
@@ -260,8 +174,8 @@ static char *getLocalAddressFallback()
 
 // Set up and connect a socket (UDP, so "connect" doesn't actually send any
 // packets) so that the OS will determine what device/local IP address we will
-// actually use.
-static enet_uint32 getLocalAddress(ENetAddress *mm_address)
+// actually use to reach the given remote address.
+static enet_uint32 getLocalAddress(ENetAddress *remote_address)
 {
 	ENetSocket socket = enet_socket_create(ENET_SOCKET_TYPE_DATAGRAM);
 	if (socket == -1)
@@ -271,7 +185,7 @@ static enet_uint32 getLocalAddress(ENetAddress *mm_address)
 		return 0;
 	}
 
-	if (enet_socket_connect(socket, mm_address) == -1)
+	if (enet_socket_connect(socket, remote_address) == -1)
 	{
 		ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Failed to get local address: socket connect");
 		enet_socket_destroy(socket);
@@ -290,10 +204,89 @@ static enet_uint32 getLocalAddress(ENetAddress *mm_address)
 	return enetAddress.host;
 }
 
+// Sends a STUN binding request to the given server from the netplay socket and reads back the
+// public address the server saw it come from. The request and reply encoding live on the Rust
+// side; this only moves bytes.
+bool SlippiMatchmaking::stunBindingRequest(const ENetAddress &server, SlippiStunObservation &result)
+{
+	u8 request[SLPRS_STUN_REQUEST_LEN];
+	slprs_stun_build_request(request);
+
+	ENetBuffer sendBuf;
+	sendBuf.data = request;
+	sendBuf.dataLength = sizeof(request);
+
+	for (int attempt = 0; attempt < 3; attempt++)
+	{
+		int sent = enet_socket_send(m_client->socket, &server, &sendBuf, 1);
+		if (sent != (int)sizeof(request))
+		{
+			WARN_LOG(SLIPPI_ONLINE, "[Matchmaking] STUN send failed with %d", sent);
+			return false;
+		}
+
+		u32 startMs = Common::Timer::GetTimeMs();
+		while (Common::Timer::GetTimeMs() - startMs < 500)
+		{
+			if (isMmTerminated)
+				return false;
+
+			enet_uint32 condition = ENET_SOCKET_WAIT_RECEIVE;
+			if (enet_socket_wait(m_client->socket, &condition, 100) != 0)
+			{
+				WARN_LOG(SLIPPI_ONLINE, "[Matchmaking] STUN wait failed");
+				return false;
+			}
+			if (!(condition & ENET_SOCKET_WAIT_RECEIVE))
+				continue;
+
+			u8 response[512];
+			ENetBuffer recvBuf;
+			recvBuf.data = response;
+			recvBuf.dataLength = sizeof(response);
+			ENetAddress from;
+			int received = enet_socket_receive(m_client->socket, &from, &recvBuf, 1);
+			if (received <= 0)
+				continue;
+
+			if (slprs_stun_parse_response(request, response, (size_t)received, &result))
+				return true;
+		}
+	}
+
+	return false;
+}
+
+// Keeps the NAT mapping for the netplay socket alive while we wait in the queue. Any reply is
+// drained so it is not left for the netplay host to find later.
+void SlippiMatchmaking::sendStunKeepalive()
+{
+	m_lastKeepaliveMs = Common::Timer::GetTimeMs();
+	if (!m_client || !m_hasStunAddr)
+		return;
+
+	u8 request[SLPRS_STUN_REQUEST_LEN];
+	slprs_stun_build_request(request);
+
+	ENetBuffer sendBuf;
+	sendBuf.data = request;
+	sendBuf.dataLength = sizeof(request);
+	enet_socket_send(m_client->socket, &m_stunAddr, &sendBuf, 1);
+
+	enet_uint32 condition = ENET_SOCKET_WAIT_RECEIVE;
+	if (enet_socket_wait(m_client->socket, &condition, 100) == 0 && (condition & ENET_SOCKET_WAIT_RECEIVE))
+	{
+		u8 response[512];
+		ENetBuffer recvBuf;
+		recvBuf.data = response;
+		recvBuf.dataLength = sizeof(response);
+		ENetAddress from;
+		enet_socket_receive(m_client->socket, &from, &recvBuf, 1);
+	}
+}
+
 void SlippiMatchmaking::startMatchmaking()
 {
-	// I don't understand why I have to do this... if I don't do this, rand always returns the
-	// same value
 	m_client = nullptr;
 
 	int retryCount = 0;
@@ -324,7 +317,6 @@ void SlippiMatchmaking::startMatchmaking()
 	}
 
 	retryCount = 0;
-	auto userInfo = m_user->GetUserInfo();
 	while (m_client == nullptr && retryCount < 15)
 	{
 		bool customPort = SConfig::GetInstance().m_slippiForceNetplayPort;
@@ -335,9 +327,8 @@ void SlippiMatchmaking::startMatchmaking()
 			m_hostPort = 41000 + (generator() % 10000);
 		ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Port to use: %d...", m_hostPort);
 
-		// We are explicitly setting the client address because we are trying to utilize our connection
-		// to the matchmaking service in order to hole punch. This port will end up being the port
-		// we listen on when we start our server
+		// The host is bound to the port we will play on. Talking to the STUN servers through its
+		// socket creates the NAT mapping opponents will use and tells us what it is.
 		ENetAddress clientAddr;
 		clientAddr.host = ENET_HOST_ANY;
 		clientAddr.port = m_hostPort;
@@ -355,57 +346,22 @@ void SlippiMatchmaking::startMatchmaking()
 		return;
 	}
 
-	ENetAddress addr;
-	enet_address_set_host(&addr, MM_HOST.c_str());
-	addr.port = MM_PORT;
-
-	m_server = enet_host_connect(m_client, &addr, 3, 0);
-
-	if (m_server == nullptr)
+	// Resolve the STUN servers
+	std::vector<ENetAddress> stunAddrs;
+	for (auto &server : STUN_SERVERS)
 	{
-		// Failed to connect to server
-		m_state = ProcessState::ERROR_ENCOUNTERED;
-		m_errorMsg = "Failed to start connection to mm server";
-		ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Failed to start connection to mm server...");
-		return;
-	}
-
-	// Before we can request a ticket, we must wait for connection to be successful
-	int connectAttemptCount = 0;
-	while (!isMmConnected)
-	{
-		ENetEvent netEvent;
-		int net = enet_host_service(m_client, &netEvent, 500);
-		if (net <= 0 || netEvent.type != ENET_EVENT_TYPE_CONNECT)
+		ENetAddress addr;
+		if (enet_address_set_host(&addr, server.first.c_str()) != 0)
 		{
-			// Not yet connected, will retry
-			connectAttemptCount++;
-			if (connectAttemptCount >= 20)
-			{
-				ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Failed to connect to mm server...");
-				m_state = ProcessState::ERROR_ENCOUNTERED;
-				m_errorMsg = "Failed to connect to mm server";
-				return;
-			}
-
+			WARN_LOG(SLIPPI_ONLINE, "[Matchmaking] Failed to resolve STUN server %s", server.first.c_str());
 			continue;
 		}
-
-		netEvent.peer->data = &userInfo.displayName;
-		m_client->intercept = ENetUtil::InterceptCallback;
-		isMmConnected = true;
-		ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Connected to mm server...");
+		addr.port = server.second;
+		stunAddrs.push_back(addr);
 	}
-
-	ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Trying to find match...");
-
-	/*if (!m_user->IsLoggedIn())
-	{
-	    ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Must be logged in to queue");
-	    m_state = ProcessState::ERROR_ENCOUNTERED;
-	    m_errorMsg = "Must be logged in to queue. Go back to menu";
-	    return;
-	}*/
+	m_hasStunAddr = !stunAddrs.empty();
+	if (m_hasStunAddr)
+		m_stunAddr = stunAddrs[0];
 
 	// Determine local IP address. We can attempt to connect to our opponent via
 	// local IP address if we have the same external IP address. The following
@@ -421,7 +377,7 @@ void SlippiMatchmaking::startMatchmaking()
 	}
 	else
 	{
-		enet_uint32 localAddress = getLocalAddress(&addr);
+		enet_uint32 localAddress = m_hasStunAddr ? getLocalAddress(&m_stunAddr) : 0;
 		if (localAddress != 0)
 		{
 			sprintf(lanAddr, "%s:%d", inet_ntoa(*(struct in_addr *)&localAddress), m_hostPort);
@@ -435,54 +391,52 @@ void SlippiMatchmaking::startMatchmaking()
 	}
 	WARN_LOG(SLIPPI_ONLINE, "[Matchmaking] Sending LAN address: %s", lanAddr);
 
-	std::vector<u8> connectCodeBuf;
-	connectCodeBuf.insert(connectCodeBuf.end(), m_searchSettings.connectCode.begin(),
-	                      m_searchSettings.connectCode.end());
-
-	// Send message to server to create ticket
-	json request;
-	request["type"] = MmMessageType::CREATE_TICKET;
-	request["user"] = {{"uid", userInfo.uid},
-	                   {"playKey", userInfo.playKey},
-	                   {"connectCode", userInfo.connectCode},
-	                   {"displayName", userInfo.displayName}};
-	request["search"] = {{"mode", m_searchSettings.mode}, {"connectCode", connectCodeBuf}};
-	request["appVersion"] = scm_slippi_semver_str;
-	request["ipAddressLan"] = lanAddr;
-	sendMessage(request);
-
-	// Get response from server
-	json response;
-	int rcvRes = receiveMessage(response, 5000);
-	if (rcvRes != 0)
+	// Ask two servers what public address they see, walking the list in order so a network
+	// that blocks the first entries still gets an answer. The Rust side compares the two
+	// answers to classify the NAT. The addresses themselves are never logged.
+	SlippiStunObservation stun[2] = {};
+	for (auto &addr : stunAddrs)
 	{
-		ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Did not receive response from server for create ticket");
-		m_state = ProcessState::ERROR_ENCOUNTERED;
-		m_errorMsg = "Failed to join mm queue";
-		return;
+		if (!stun[0].answered)
+		{
+			// Keepalives go to a server known to answer
+			if (stunBindingRequest(addr, stun[0]))
+				m_stunAddr = addr;
+		}
+		else if (stunBindingRequest(addr, stun[1]))
+		{
+			break;
+		}
 	}
+	m_lastKeepaliveMs = Common::Timer::GetTimeMs();
 
-	std::string respType = response["type"];
-	if (respType != MmMessageType::CREATE_TICKET_RESP)
-	{
-		ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Received incorrect response for create ticket");
-		ERROR_LOG(SLIPPI_ONLINE, "%s", response.dump().c_str());
-		m_state = ProcessState::ERROR_ENCOUNTERED;
-		m_errorMsg = "Invalid response when joining mm queue";
-		return;
-	}
+	int stunAnswers = (stun[0].answered ? 1 : 0) + (stun[1].answered ? 1 : 0);
+	if (stunAnswers == 0)
+		WARN_LOG(SLIPPI_ONLINE, "[Matchmaking] STUN lookup failed, the service will use the address it observes");
+	else
+		WARN_LOG(SLIPPI_ONLINE, "[Matchmaking] STUN servers answered: %d of 2", stunAnswers);
 
-	std::string err = response.value("error", "");
-	if (err.length() > 0)
-	{
-		ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Received error from server for create ticket");
-		m_state = ProcessState::ERROR_ENCOUNTERED;
-		m_errorMsg = err;
+	// Hand the search to the Rust side, which talks to the matchmaking service
+	std::string lan = lanAddr;
+
+	SlippiMatchmakingRequest request;
+	request.mode = (u8)m_searchSettings.mode;
+	request.connect_code = (const u8 *)m_searchSettings.connectCode.data();
+	request.connect_code_len = m_searchSettings.connectCode.size();
+	request.netplay_port = (u16)m_hostPort;
+	request.lan_addr = lan.c_str();
+	request.stun[0] = stun[0];
+	request.stun[1] = stun[1];
+
+	// A cancel that arrived during STUN must not start a session nobody will poll. Starting one
+	// would also end a newer search the user may have begun in the meantime.
+	if (isMmTerminated)
 		return;
-	}
+
+	m_sessionId = slprs_mm_start(slprs_exi_device_ptr, request);
 
 	m_state = ProcessState::MATCHMAKING;
-	ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Request ticket success");
+	ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Search started");
 }
 
 void SlippiMatchmaking::handleMatchmaking()
@@ -491,46 +445,58 @@ void SlippiMatchmaking::handleMatchmaking()
 	if (m_state != ProcessState::MATCHMAKING)
 		return;
 
-	// Get response from server
-	json getResp;
-	int rcvRes = receiveMessage(getResp, 2000);
-	if (rcvRes == -1)
+	int rustState = slprs_mm_state(slprs_exi_device_ptr);
+	switch (rustState)
 	{
-		INFO_LOG(SLIPPI_ONLINE, "[Matchmaking] Have not yet received assignment");
+	case RUST_MM_CONNECTING:
+	case RUST_MM_QUEUED:
+		if (m_hasStunAddr && Common::Timer::GetTimeMs() - m_lastKeepaliveMs >= STUN_KEEPALIVE_INTERVAL_MS)
+			sendStunKeepalive();
+		Common::SleepCurrentThread(250);
 		return;
-	}
-	else if (rcvRes != 0)
+
+	case RUST_MM_FAILED:
 	{
-		// Right now the only other code is -2 meaning the server died probably?
-		ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Lost connection to the mm server");
+		char *message = slprs_mm_error_message(slprs_exi_device_ptr);
+		m_errorMsg = message ? std::string(message) : "Matchmaking failed";
+		slprs_mm_free_string(message);
+		m_sessionId = 0;
+
+		ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Received error from server: %s", m_errorMsg.c_str());
 		m_state = ProcessState::ERROR_ENCOUNTERED;
-		m_errorMsg = "Lost connection to the mm server";
 		return;
 	}
 
-	std::string respType = getResp["type"];
-	if (respType != MmMessageType::GET_TICKET_RESP)
+	case RUST_MM_MATCHED:
+		break;
+
+	default:
+		// The session ended without a result, which only happens if it was cancelled out from
+		// under us
+		m_sessionId = 0;
+		m_state = ProcessState::ERROR_ENCOUNTERED;
+		m_errorMsg = "Matchmaking was cancelled";
+		return;
+	}
+
+	char *resultJson = slprs_mm_take_result_json(slprs_exi_device_ptr);
+	m_sessionId = 0;
+	if (!resultJson)
 	{
-		ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Received incorrect response for get ticket");
+		ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Match result was missing");
 		m_state = ProcessState::ERROR_ENCOUNTERED;
 		m_errorMsg = "Invalid response when getting mm status";
 		return;
 	}
 
-	std::string err = getResp.value("error", "");
-	std::string latestVersion = getResp.value("latestVersion", "");
-	if (err.length() > 0)
-	{
-		if (latestVersion != "")
-		{
-			// Update version number when the mm server tells us our version is outdated
-			m_user->OverwriteLatestVersion(
-			    latestVersion); // Force latest version for people whose file updates dont work
-		}
+	json getResp = json::parse(std::string(resultJson), nullptr, false);
+	slprs_mm_free_string(resultJson);
 
-		ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Received error from server for get ticket");
+	if (getResp.is_discarded() || !getResp.is_object())
+	{
+		ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Match result could not be parsed");
 		m_state = ProcessState::ERROR_ENCOUNTERED;
-		m_errorMsg = err;
+		m_errorMsg = "Invalid response when getting mm status";
 		return;
 	}
 
@@ -582,6 +548,7 @@ void SlippiMatchmaking::handleMatchmaking()
 				playerInfo.rankedUpdateCount = rankEl.value("updateCount", 0);
 				playerInfo.rankedGlobalPlacement = rankEl.value("globalPlacement", 0);
 				playerInfo.rankedRegionalPlacement = rankEl.value("regionalPlacement", 0);
+				playerInfo.rankedMmr = rankEl.value("mmr", 0.0f);
 			}
 
 			m_playerInfo.push_back(playerInfo);
@@ -660,7 +627,7 @@ void SlippiMatchmaking::handleMatchmaking()
 	m_mmResult.stages = m_allowedStages;
 	m_mmResult.items = getResp.value<u32>("items", 0);
 
-	// Disconnect and destroy enet client to mm server
+	// Free the port so the netplay client can bind it
 	terminateMmConnection();
 
 	// If ranked, report to backend that we are attempting to connect to this match
@@ -709,102 +676,99 @@ SlippiMatchmaking::SlippiRank SlippiMatchmaking::GetPlayerRank(u8 port)
 		return SlippiRank::Unranked;
 	}
 
-	if (rating <= 765.42f)
-	{
-		return SlippiRank::Bronze1;
-	}
-
-	if (rating > 765.43f && rating <= 913.71f)
-	{
-		return SlippiRank::Bronze2;
-	}
-
-	if (rating > 913.72f && rating <= 1054.86f)
-	{
-		return SlippiRank::Bronze3;
-	}
-
-	if (rating > 1054.87f && rating <= 1188.87f)
-	{
-		return SlippiRank::Silver1;
-	}
-
-	if (rating > 1188.88f && rating <= 1315.74f)
-	{
-		return SlippiRank::Silver2;
-	}
-
-	if (rating > 1315.75f && rating <= 1435.47f)
-	{
-		return SlippiRank::Silver3;
-	}
-
-	if (rating > 1435.48f && rating <= 1548.06f)
-	{
-		return SlippiRank::Gold1;
-	}
-
-	if (rating > 1548.07f && rating <= 1653.51f)
-	{
-		return SlippiRank::Gold2;
-	}
-
-	if (rating > 1653.52f && rating <= 1751.82f)
-	{
-		return SlippiRank::Gold3;
-	}
-
-	if (rating > 1751.83f && rating <= 1842.99f)
-	{
-		return SlippiRank::Platinum1;
-	}
-
-	if (rating > 1843.0f && rating <= 1927.02f)
-	{
-		return SlippiRank::Platinum2;
-	}
-
-	if (rating > 1927.03f && rating <= 2003.91f)
-	{
-		return SlippiRank::Platinum3;
-	}
-
-	if (rating > 2003.92f && rating <= 2073.66f)
-	{
-		return SlippiRank::Diamond1;
-	}
-
-	if (rating > 2073.67f && rating <= 2136.27f)
-	{
-		return SlippiRank::Diamond2;
-	}
-
-	if (rating > 2136.28f && rating <= 2191.74f)
-	{
-		return SlippiRank::Diamond3;
-	}
-
+	// Each threshold is the minimum rating for that rank. Checking from the top down means every
+	// rating lands in exactly one rank. This must match the launcher and website.
 	if (rating >= 2191.75f && (global > 0 || regional > 0))
 	{
 		return SlippiRank::Grandmaster;
 	}
 
-	if (rating > 2191.75f && rating <= 2274.99f)
-	{
-		return SlippiRank::Master1;
-	}
-
-	if (rating > 2275.0f && rating <= 2350.0f)
-	{
-		return SlippiRank::Master2;
-	}
-
-	if (rating > 2350.0f)
+	if (rating >= 2350.0f)
 	{
 		return SlippiRank::Master3;
 	}
 
-	return SlippiRank::Unranked;
+	if (rating >= 2275.0f)
+	{
+		return SlippiRank::Master2;
+	}
+
+	if (rating >= 2191.75f)
+	{
+		return SlippiRank::Master1;
+	}
+
+	if (rating >= 2136.28f)
+	{
+		return SlippiRank::Diamond3;
+	}
+
+	if (rating >= 2073.67f)
+	{
+		return SlippiRank::Diamond2;
+	}
+
+	if (rating >= 2003.92f)
+	{
+		return SlippiRank::Diamond1;
+	}
+
+	if (rating >= 1927.03f)
+	{
+		return SlippiRank::Platinum3;
+	}
+
+	if (rating >= 1843.0f)
+	{
+		return SlippiRank::Platinum2;
+	}
+
+	if (rating >= 1751.83f)
+	{
+		return SlippiRank::Platinum1;
+	}
+
+	if (rating >= 1653.52f)
+	{
+		return SlippiRank::Gold3;
+	}
+
+	if (rating >= 1548.07f)
+	{
+		return SlippiRank::Gold2;
+	}
+
+	if (rating >= 1435.48f)
+	{
+		return SlippiRank::Gold1;
+	}
+
+	if (rating >= 1315.75f)
+	{
+		return SlippiRank::Silver3;
+	}
+
+	if (rating >= 1188.88f)
+	{
+		return SlippiRank::Silver2;
+	}
+
+	if (rating >= 1054.87f)
+	{
+		return SlippiRank::Silver1;
+	}
+
+	if (rating >= 913.72f)
+	{
+		return SlippiRank::Bronze3;
+	}
+
+	if (rating >= 765.43f)
+	{
+		return SlippiRank::Bronze2;
+	}
+
+	return SlippiRank::Bronze1;
 }
 
 SlippiMatchmaking::MatchmakeResult SlippiMatchmaking::GetMatchmakeResult()

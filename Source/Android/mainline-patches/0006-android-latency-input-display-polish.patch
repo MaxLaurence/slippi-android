@@ -50,18 +50,18 @@ index a851e86dd85b923e7b2de890bc0e98149268b879..af5f545ab095121878469ae55b807118
  
    if (m_host_input_authority)
 diff --git a/Source/Core/InputCommon/GCAdapter.cpp b/Source/Core/InputCommon/GCAdapter.cpp
-index e48f3a78144ffc41d948054188a5dc50af856ff8..029ac1ce4352e0df72cfe8fea152136bce7e144c 100644
+index 9b16ca4f7d421f29014f356e5f0e54155f13d7ad..0bae02a6fe1c4c285b46a0d66146baf1b1451448 100644
 --- a/Source/Core/InputCommon/GCAdapter.cpp
 +++ b/Source/Core/InputCommon/GCAdapter.cpp
-@@ -13,6 +13,7 @@
- 
+@@ -14,6 +14,7 @@
  #include <algorithm>
  #include <array>
+ #include <atomic>
 +#include <cerrno>
  #include <chrono>
  #include <mutex>
  #include <optional>
-@@ -21,6 +22,7 @@
+@@ -26,6 +27,7 @@
  #include <libusb.h>
  #elif GCADAPTER_USE_ANDROID_IMPLEMENTATION
  #include <jni.h>
@@ -69,7 +69,7 @@ index e48f3a78144ffc41d948054188a5dc50af856ff8..029ac1ce4352e0df72cfe8fea152136b
  #endif
  
  #include "Common/BitUtils.h"
-@@ -194,6 +196,14 @@ static u64 NowUs()
+@@ -206,6 +208,14 @@ static u64 NowUs()
                                .count());
  }
  
@@ -84,7 +84,7 @@ index e48f3a78144ffc41d948054188a5dc50af856ff8..029ac1ce4352e0df72cfe8fea152136b
  static GCPadStatus NeutralPadForStalePayload(int chan, PortState& pad_state, u64 now_us)
  {
    GCPadStatus pad = {};
-@@ -227,6 +237,9 @@ static GCPadStatus NeutralPadForStalePayload(int chan, PortState& pad_state, u64
+@@ -239,6 +249,9 @@ static GCPadStatus NeutralPadForStalePayload(int chan, PortState& pad_state, u64
  static void ReadThreadFunc()
  {
    Common::SetCurrentThreadName("GCAdapter Read Thread");
@@ -93,8 +93,8 @@ index e48f3a78144ffc41d948054188a5dc50af856ff8..029ac1ce4352e0df72cfe8fea152136b
 +#endif
    NOTICE_LOG_FMT(CONTROLLERINTERFACE, "GCAdapter read thread started");
  
- #if GCADAPTER_USE_ANDROID_IMPLEMENTATION
-@@ -352,6 +365,9 @@ static void ReadThreadFunc()
+ #ifdef _WIN32
+@@ -369,6 +382,9 @@ static void ReadThreadFunc()
  static void WriteThreadFunc()
  {
    Common::SetCurrentThreadName("GCAdapter Write Thread");
@@ -103,4 +103,4 @@ index e48f3a78144ffc41d948054188a5dc50af856ff8..029ac1ce4352e0df72cfe8fea152136b
 +#endif
    NOTICE_LOG_FMT(CONTROLLERINTERFACE, "GCAdapter write thread started");
  
- #if GCADAPTER_USE_LIBUSB_IMPLEMENTATION
+ #ifdef _WIN32

@@ -45,11 +45,19 @@ static u8 s_controller_rumble[4];
 
 // Input handling
 static std::mutex s_read_mutex;
-static u8 s_controller_payload[37];
+static u8 s_controller_payload[ADAPTER_PAYLOAD_SIZE];
 static std::atomic<int> s_controller_payload_size{0};
 static std::atomic<u64> s_controller_payload_sequence{0};
 static std::atomic<u64> s_controller_payload_time_us{0};
 static constexpr u64 STALE_PAYLOAD_NEUTRAL_US = 25000;
+// First byte of a valid adapter input report (LIBUSB_DT_HID on desktop).
+static constexpr u8 ADAPTER_REPORT_ID = 0x21;
+
+// Input suggestions (upstream 3.7.0): how many times the game itself has polled
+// each port, stamped onto every report handed to the report callback. Protected
+// by s_read_mutex, matching upstream's s_mutex in GCAdapter.cpp.
+static u64 s_game_poll_counts[MAX_SI_CHANNELS] = {};
+static std::atomic<ReportCallback> s_report_callback{nullptr};
 
 // Output handling
 static std::mutex s_write_mutex;
@@ -333,6 +341,8 @@ static void Read()
       int read_size = env->CallStaticIntMethod(s_adapter_class, input_func);
 
       jbyte* java_data = env->GetByteArrayElements(*java_controller_payload, nullptr);
+      AdapterReport report;
+      bool should_report = false;
       {
         std::lock_guard<std::mutex> lk(s_read_mutex);
         // Upstream wrote `memcpy(s_controller_payload, java_data, 0x37)` here,
@@ -345,8 +355,27 @@ static void Read()
         s_controller_payload_size.store(read_size);
         s_controller_payload_time_us.store(NowUs());
         s_controller_payload_sequence.fetch_add(1);
+
+        should_report = read_size == ADAPTER_PAYLOAD_SIZE &&
+                        s_controller_payload[0] == ADAPTER_REPORT_ID &&
+                        s_report_callback.load() != nullptr;
+        if (should_report)
+        {
+          std::copy(std::begin(s_game_poll_counts), std::end(s_game_poll_counts),
+                    report.game_poll_counts);
+          std::copy(std::begin(s_controller_payload), std::end(s_controller_payload),
+                    report.payload);
+        }
       }
       env->ReleaseByteArrayElements(*java_controller_payload, java_data, 0);
+
+      // Called outside the lock so the game's reads are never held up by the callback.
+      if (should_report)
+      {
+        ReportCallback callback = s_report_callback.load();
+        if (callback)
+          callback(report);
+      }
 
       if (first_read)
       {
@@ -460,17 +489,26 @@ double ReadRate()
   return 0.0;
 }
 
-GCPadStatus Input(int chan, std::chrono::high_resolution_clock::time_point* tp)
+void SetReportCallback(ReportCallback callback)
 {
-  if (tp)
-    *tp = std::chrono::high_resolution_clock::now();
+  s_report_callback.store(callback);
+}
+
+u64 GetGamePollCount(int chan)
+{
+  std::lock_guard<std::mutex> lk(s_read_mutex);
+  return s_game_poll_counts[chan];
+}
+
+GCPadStatus Input(int chan, bool is_game_poll)
+{
   if (!UseAdapter() || !s_detected || !s_fd)
     return {};
 
   int payload_size = 0;
   u64 payload_sequence = 0;
   u64 payload_time_us = 0;
-  u8 controller_payload_copy[37];
+  u8 controller_payload_copy[ADAPTER_PAYLOAD_SIZE];
 
   {
     std::lock_guard<std::mutex> lk(s_read_mutex);
@@ -479,6 +517,9 @@ GCPadStatus Input(int chan, std::chrono::high_resolution_clock::time_point* tp)
     payload_size = s_controller_payload_size.load();
     payload_sequence = s_controller_payload_sequence.load();
     payload_time_us = s_controller_payload_time_us.load();
+
+    if (is_game_poll)
+      s_game_poll_counts[chan]++;
   }
   const u64 now_us = NowUs();
   const u64 age_us = payload_time_us > 0 && now_us > payload_time_us ? now_us - payload_time_us : 0;

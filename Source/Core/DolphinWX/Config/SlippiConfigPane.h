@@ -40,7 +40,7 @@ class SlippiNetplayConfigPane final : public wxPanel
 	void OnForceNetplayLanIpToggle(wxCommandEvent &event);
 	void OnNetplayLanIpChanged(wxCommandEvent &event);
 	void OnQuickChatChanged(wxCommandEvent &event);
-	void OnReduceTimingDispersionToggle(wxCommandEvent &event);
+	void OnInputSuggestionsToggle(wxCommandEvent &event);
 	void PopulateEnableChatChoiceBox();
 	void OnToggleJukeboxEnabled(wxCommandEvent &event);
 	void OnJukeboxVolumeUpdate(wxCommandEvent &event);
@@ -61,7 +61,7 @@ class SlippiNetplayConfigPane final : public wxPanel
 	wxStaticText *m_slippi_enable_quick_chat_txt;
 	wxChoice *m_slippi_enable_quick_chat_choice;
 
-	wxCheckBox *m_reduce_timing_dispersion_checkbox;
+	wxCheckBox *m_slippi_input_suggestions_checkbox;
 
 	wxCheckBox *m_slippi_show_player_rank;
 	wxCheckBox *m_slippi_show_opponent_rank;

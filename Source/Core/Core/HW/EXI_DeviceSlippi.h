@@ -164,7 +164,7 @@ class CEXISlippi : public IEXIDevice
 	    {CMD_GET_GECKO_CODES, 0},
 
 	    // The following are used for Slippi online and also have fixed sizes
-	    {CMD_ONLINE_INPUTS, 25},
+	    {CMD_ONLINE_INPUTS, 27},
 	    {CMD_CAPTURE_SAVESTATE, 32},
 	    {CMD_LOAD_SAVESTATE, 32},
 	    {CMD_GET_MATCH_STATE, 0},
@@ -271,16 +271,26 @@ class CEXISlippi : public IEXIDevice
 	bool isDisconnected();
 	bool isSlippiChatEnabled();
 	void handleOnlineInputs(u8 *payload);
-	void prepareOpponentInputs(s32 frame, bool shouldSkip);
+	bool prepareOpponentInputs(s32 frame, bool shouldSkip);
 	void handleSendInputs(s32 frame, u8 delay, s32 checksumFrame, u32 checksum, u8 *inputs);
+	void startInputSuggestions(u8 delay, u8 inputSourcePort);
+	void reportInputSuggestionsFrame(s32 frame, bool isSkip, bool isAdvancing, u8 inputSourcePort, u8 *inputs);
 	void handleCaptureSavestate(u8 *payload);
 	void handleLoadSavestate(u8 *payload);
 	void handleNameEntryLoad(u8 *payload);
 	void startFindMatch(u8 *payload);
 	void prepareOnlineMatchState();
 	void setMatchSelections(u8 *payload);
-	bool shouldSkipOnlineFrame(s32 frame, s32 finalizedFrame);
-	void handlePoorMatchPerformance(s32 frame);
+
+	// Why a frame is being held back instead of sent
+	enum class OnlineFrameSkip
+	{
+		NONE,
+		STALL,     // The opponent's inputs are past the rollback limit
+		TIME_SYNC, // We are running ahead of the opponent
+	};
+	OnlineFrameSkip shouldSkipOnlineFrame(s32 frame, s32 finalizedFrame);
+	void handleMatchQuality(s32 frame, bool isStall);
 	bool shouldAdvanceOnlineFrame(s32 frame);
 	bool opponentRunahead();
 	void handleLogInRequest();
@@ -343,8 +353,6 @@ class CEXISlippi : public IEXIDevice
 	std::vector<u8> geckoList;
 
 	u32 stallFrameCounts[SLIPPI_REMOTE_PLAYER_MAX] = {};
-	u64 lastIntervalTimeUs = 0;
-	s32 perfDebt = 0; // Leaky accumulator of poor-performance intervals (see handlePoorMatchPerformance)
 
 	std::vector<u8> m_read_queue;
 	std::unique_ptr<Slippi::SlippiGame> m_current_game = nullptr;
@@ -362,6 +370,7 @@ class CEXISlippi : public IEXIDevice
 	bool isEnetInitialized = false;
 
 	std::default_random_engine generator;
+	std::random_device padRngBitsSource;
 
 	// Frame skipping variables
 	int framesToSkip = 0;

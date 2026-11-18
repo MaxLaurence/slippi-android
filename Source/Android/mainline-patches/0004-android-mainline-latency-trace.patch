@@ -4,11 +4,11 @@ Date: Sun, 17 May 2026 11:33:10 -0700
 Subject: [PATCH 4/9] android mainline latency trace
 
 ---
- Source/Core/Core/Slippi/SlippiNetplay.cpp | 120 +++++++++++++++++++++-
- 1 file changed, 118 insertions(+), 2 deletions(-)
+ Source/Core/Core/Slippi/SlippiNetplay.cpp | 123 +++++++++++++++++++++-
+ 1 file changed, 121 insertions(+), 2 deletions(-)
 
 diff --git a/Source/Core/Core/Slippi/SlippiNetplay.cpp b/Source/Core/Core/Slippi/SlippiNetplay.cpp
-index 839396e6a464a8c2ae68c0717cd986cb5f0e2944..d7e8deedf0cb8d4394deed9eab04b8d551e93f13 100644
+index effacf717efa5ca3f0995c90bd6730032ce63151..0b96267b5a3a50c98f8362d7b1dced51e9ba8920 100644
 --- a/Source/Core/Core/Slippi/SlippiNetplay.cpp
 +++ b/Source/Core/Core/Slippi/SlippiNetplay.cpp
 @@ -8,7 +8,15 @@
@@ -27,7 +27,7 @@ index 839396e6a464a8c2ae68c0717cd986cb5f0e2944..d7e8deedf0cb8d4394deed9eab04b8d5
  #endif
  
  #include "Common/CommonTypes.h"
-@@ -23,12 +31,100 @@
+@@ -23,6 +31,9 @@
  #include "Core/ConfigManager.h"
  #include "Core/Core.h"
  #include "Core/NetPlayProto.h"
@@ -37,8 +37,9 @@ index 839396e6a464a8c2ae68c0717cd986cb5f0e2944..d7e8deedf0cb8d4394deed9eab04b8d5
  #include "Core/Slippi/SlippiGame.h"
  #include "Core/Slippi/SlippiNetplay.h"
  #include "Core/Slippi/SlippiPremadeText.h"
- #include "VideoCommon/OnScreenDisplay.h"
- #include "VideoCommon/VideoConfig.h"
+@@ -32,6 +43,91 @@
+ 
+ #include "SlippiRustExtensions.h"
  
 +#ifdef __ANDROID__
 +namespace
@@ -128,7 +129,7 @@ index 839396e6a464a8c2ae68c0717cd986cb5f0e2944..d7e8deedf0cb8d4394deed9eab04b8d5
  static std::mutex pad_mutex;
  static std::mutex ack_mutex;
  
-@@ -122,6 +218,10 @@ SlippiNetplayClient::SlippiNetplayClient(std::vector<std::string> addrs, std::ve
+@@ -157,6 +253,10 @@ SlippiNetplayClient::SlippiNetplayClient(std::vector<std::string> addrs, std::ve
      PanicAlertFmtT("Couldn't Create Client");
    }
  
@@ -139,16 +140,21 @@ index 839396e6a464a8c2ae68c0717cd986cb5f0e2944..d7e8deedf0cb8d4394deed9eab04b8d5
    for (int i = 0; i < remote_player_count; i++)
    {
      ENetAddress addr;
-@@ -1069,13 +1169,25 @@ void SlippiNetplayClient::ThreadFunc()
+@@ -1258,15 +1358,30 @@ void SlippiNetplayClient::ThreadFunc()
      }
  
      ENetEvent net_event;
 -    int net;
--    net = enet_host_service(m_client, &net_event, 250);
+     // The players can all be halted waiting on a dropped player, in which case no packets arrive to
+     // wake us up
+-    net = enet_host_service(m_client, &net_event, is_waiting_on_player_drop ? 10 : 250);
 +#ifdef __ANDROID__
-+    int net = enet_host_service(m_client, &net_event, AndroidActiveServiceTimeoutMs());
++    const int service_timeout_ms = is_waiting_on_player_drop ?
++                                       std::min(10, AndroidActiveServiceTimeoutMs()) :
++                                       AndroidActiveServiceTimeoutMs();
++    int net = enet_host_service(m_client, &net_event, service_timeout_ms);
 +#else
-+    int net = enet_host_service(m_client, &net_event, 250);
++    int net = enet_host_service(m_client, &net_event, is_waiting_on_player_drop ? 10 : 250);
 +#endif
 +    int drained_async_packets = 0;
      while (!m_async_queue.Empty())
@@ -167,9 +173,9 @@ index 839396e6a464a8c2ae68c0717cd986cb5f0e2944..d7e8deedf0cb8d4394deed9eab04b8d5
      if (net > 0)
      {
        sf::Packet rpac;
-@@ -1322,6 +1434,10 @@ void SlippiNetplayClient::SendSlippiPad(std::unique_ptr<SlippiPad> pad)
+@@ -1527,6 +1642,10 @@ void SlippiNetplayClient::SendSlippiPad(std::unique_ptr<SlippiPad> pad)
    for (auto it = m_local_pad_queue.begin(); it != m_local_pad_queue.end(); ++it)
-     spac->append((*it)->pad_buf, SLIPPI_PAD_DATA_SIZE);  // only transfer 8 bytes per pad
+     spac->append((*it)->pad_buf, SLIPPI_PAD_WIRE_SIZE);  // only transfer what goes over the network
  
 +#ifdef __ANDROID__
 +  AndroidLogPadSend(frame, m_local_pad_queue.size(), spac->getDataSize());

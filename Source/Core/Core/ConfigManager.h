@@ -151,7 +151,7 @@ struct SConfig : NonCopyable
 	bool bQoSEnabled = true;
 	bool bAdapterWarning = true;
 
-	bool bReduceTimingDispersion = false;
+	bool bSlippiInputSuggestions = true;
 	bool bSlippiPlayerRankDisplay = true;
 	bool bSlippiOpponentRankDisplay = true;
 	bool bSlippiJukeboxEnabled = true;
