@@ -516,6 +516,13 @@ static bool MsgAlert(const char* caption, const char* text, bool yes_no, int /*S
   return false;
 }
 
+void Host_ShowErrorDialog(const std::string& caption, const std::string& message)
+{
+  // Upstream 3.7.0 uses this when a Slippi game file cannot be resolved; reuse the
+  // emulation activity's alert path so the player sees why the game halted.
+  MsgAlert(caption.c_str(), message.c_str(), false, 0);
+}
+
 #define DVD_BANNER_WIDTH 96
 #define DVD_BANNER_HEIGHT 32
 

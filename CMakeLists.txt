@@ -597,8 +597,11 @@ set(_slippi_rust_feature_args)
 if(DIS_PLAYBACK)
 	set(_slippi_rust_feature_args FEATURES "playback")
 endif()
+# Only import the ffi crate. Without CRATES, Corrosion builds every binary in
+# the workspace (e.g. the slippi-hsd dev tool), including for Android targets.
 corrosion_import_crate(
 	MANIFEST_PATH ${CMAKE_SOURCE_DIR}/Externals/SlippiRustExtensions/Cargo.toml
+	CRATES slippi_rust_extensions
 	${_slippi_rust_feature_args}
 )
 

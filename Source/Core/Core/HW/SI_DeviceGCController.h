@@ -109,7 +109,6 @@ public:
 
 	// Return true on new data
 	bool GetData(u32& _Hi, u32& _Low) override;
-	bool GetData(u32 &_Hi, u32 &_Low, std::chrono::high_resolution_clock::time_point when) override;
 
 	// Send a command directly
 	void SendCommand(u32 _Cmd, u8 _Poll) override;
@@ -118,7 +117,8 @@ public:
 	void DoState(PointerWrap& p) override;
 
 	virtual GCPadStatus GetPadStatus();
-	virtual GCPadStatus GetPadStatus(std::chrono::high_resolution_clock::time_point tp);
+	// The status read for the game's own poll of the pad (GetData)
+	virtual GCPadStatus GetPadStatusForGamePoll();
 	virtual u32 MapPadStatus(const GCPadStatus &pad_status);
 	virtual EButtonCombo HandleButtonCombos(const GCPadStatus& pad_status);
 
@@ -128,6 +128,10 @@ public:
 
 	// Direct rumble to the right GC Controller
 	static void Rumble(int numPad, ControlState strength);
+
+	// The origin the game was given (stick x/y, c-stick x/y, L, R) and the analog mode it set. Returns
+	// false if the game has not asked for an origin yet.
+	bool GetReportedOrigin(u8 origin[6], u8 *analog_mode) const;
 
 protected:
 	void Calibrate();

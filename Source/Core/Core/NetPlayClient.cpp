@@ -30,11 +30,8 @@
 #include "Core/IPC_HLE/WII_IPC_HLE_Device_usb_bt_emu.h"
 #include "Core/Movie.h"
 #include "InputCommon/GCAdapter.h"
-#include "InputCommon/InputStabilizer.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/VideoConfig.h"
-
-static std::vector<InputStabilizer> stabilizers(4, InputStabilizer());
 
 static std::mutex crit_netplay_client;
 NetPlayClient* netplay_client = nullptr;
@@ -1145,7 +1142,7 @@ void NetPlayClient::SendSpectatorSetting(bool spectator) {
 // called from ---CPU--- thread
 void NetPlayClient::SendNetPad(int pad_nb)
 {
-	auto read_local_status = [](int local_pad, bool use_poll_stabilizer) {
+	auto read_local_status = [](int local_pad) {
 		GCPadStatus status = {0};
 		status.stickX = status.stickY =
 		status.substickX = status.substickY =
@@ -1157,14 +1154,6 @@ void NetPlayClient::SendNetPad(int pad_nb)
 		switch (SConfig::GetInstance().m_SIDevice[local_pad])
 		{
 		case SIDEVICE_WIIU_ADAPTER:
-			if (use_poll_stabilizer)
-			{
-				auto now = std::chrono::high_resolution_clock::now();
-				stabilizers[local_pad].feedPollTiming(now);
-				std::chrono::high_resolution_clock::time_point pollTiming =
-					stabilizers[local_pad].computeNextPollTiming();
-				return GCAdapter::Input(local_pad, &pollTiming);
-			}
 			return GCAdapter::Input(local_pad);
 		case SIDEVICE_GC_CONTROLLER:
 		default:
@@ -1195,7 +1184,7 @@ void NetPlayClient::SendNetPad(int pad_nb)
 			{
 				while (m_pad_buffer[ingame_pad].Size() <= target_buffer_size(ingame_pad))
 				{
-					GCPadStatus status = read_local_status(i, true);
+					GCPadStatus status = read_local_status(i);
 					m_pad_buffer[ingame_pad].Push(status);
 					SendPadState(ingame_pad, status);
 				}
@@ -1212,7 +1201,7 @@ void NetPlayClient::SendNetPad(int pad_nb)
 			{
 				while (m_pad_buffer[pad_nb].Size() <= target_buffer_size(pad_nb))
 				{
-					GCPadStatus status = read_local_status(local_pad, false);
+					GCPadStatus status = read_local_status(local_pad);
 					m_pad_buffer[pad_nb].Push(status);
 					SendPadState(pad_nb, status);
 				}

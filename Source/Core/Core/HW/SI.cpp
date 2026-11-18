@@ -15,6 +15,7 @@
 #include "Core/HW/ProcessorInterface.h"
 #include "Core/HW/SI.h"
 #include "Core/HW/SI_DeviceGBA.h"
+#include "Core/HW/SI_DeviceGCController.h"
 #include "Core/HW/SystemTimers.h"
 #include "Core/Movie.h"
 #include "Core/NetPlayProto.h"
@@ -25,9 +26,6 @@
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
 #include "InputCommon/GCAdapter.h"
 #include "InputCommon/GCPadStatus.h"
-#include "InputCommon/InputStabilizer.h"
-
-static std::vector<InputStabilizer> stabilizers(MAX_SI_CHANNELS, InputStabilizer());
 
 namespace SerialInterface
 {
@@ -371,28 +369,8 @@ void RegisterMMIO(MMIO::Mapping* mmio, u32 base)
 					    }
 				    }
 
-				    auto now = std::chrono::high_resolution_clock::now();
 				    // the HI register is read before the LO register (at least by Melee)
-				    if (SConfig::GetInstance().bReduceTimingDispersion)
-				    {
-					    if(!NetPlay::IsNetPlayRunning())
-					    {
-						    stabilizers[i].feedPollTiming(now);
-						    std::chrono::high_resolution_clock::time_point pollTiming =
-						        stabilizers[i].computeNextPollTiming();
-						    g_Channel[i].m_device->GetData(g_Channel[i].m_InHi.Hex, g_Channel[i].m_InLo.Hex,
-						                                   pollTiming);
-					    }
-					    else {
-						    g_Channel[i].m_device->GetData(g_Channel[i].m_InHi.Hex, g_Channel[i].m_InLo.Hex,
-						                                   now);
-						}
-				    }
-				    else
-				    {
-					    g_Channel[i].m_device->GetData(g_Channel[i].m_InHi.Hex, g_Channel[i].m_InLo.Hex,
-					                                   now); // Now added for measures
-					}
+				    g_Channel[i].m_device->GetData(g_Channel[i].m_InHi.Hex, g_Channel[i].m_InLo.Hex);
 			    }
 
 			g_StatusReg.Hex &= ~(1 << rdst_bit);
@@ -706,6 +684,15 @@ static void SendNetplayInputs(u64 userdata, s64 cyclesLate)
 		for(int i = 0; i < 4; i++)
 			netplay_client->SendNetPad(i);
 	}
+}
+
+bool GetGCControllerOrigin(int channel, u8 origin[6], u8 *analog_mode)
+{
+	if (channel < 0 || channel >= MAX_SI_CHANNELS || !SIDevice_IsGCController(GetDeviceType(channel)))
+		return false;
+
+	auto *device = static_cast<CSIDevice_GCController *>(g_Channel[channel].m_device.get());
+	return device->GetReportedOrigin(origin, analog_mode);
 }
 
 u32 GetPollXLines()

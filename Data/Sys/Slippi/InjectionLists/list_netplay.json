@@ -540,6 +540,20 @@
    "Tags": "[affects-gameplay]"
   },
   {
+   "InjectionAddress": "801CD37C",
+   "Name": "Required: Slippi Recording",
+   "Codetype": "Auto",
+   "Annotation": "Common/Initialize Stage Data/Reset Castle Wind.asm",
+   "Tags": "[affects-gameplay]"
+  },
+  {
+   "InjectionAddress": "801D69B0",
+   "Name": "Required: Slippi Recording",
+   "Codetype": "Auto",
+   "Annotation": "Common/Initialize Stage Data/Reset Kongo Log Bridge.asm",
+   "Tags": "[affects-gameplay]"
+  },
+  {
    "InjectionAddress": "80068EEC",
    "Name": "Required: Slippi Recording",
    "Codetype": "Auto",
@@ -1139,13 +1153,6 @@
    "Name": "Required: Slippi Online",
    "Codetype": "Auto",
    "Annotation": "Online/Menus/InGame/InitInGame.asm",
-   "Tags": ""
-  },
-  {
-   "InjectionAddress": "803A69C0",
-   "Name": "Required: Slippi Online",
-   "Codetype": "Auto",
-   "Annotation": "Online/Menus/InGame/ParseNumbersBetter.asm",
    "Tags": ""
   },
   {

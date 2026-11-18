@@ -96,10 +96,10 @@ void SlippiNetplayConfigPane::InitializeGUI()
 	m_slippi_netplay_lan_ip_ctrl->SetValidator(ipTextValidator);
 
 	// Input settings
-	m_reduce_timing_dispersion_checkbox = new wxCheckBox(this, wxID_ANY, _("Reduce Timing Dispersion"));
-	m_reduce_timing_dispersion_checkbox->SetToolTip(
-	    _("Make inputs feel more console-like for overclocked GCC to USB "
-	      "adapters at the cost of 1.6ms of input lag (2ms for single-port official adapter)."));
+	m_slippi_input_suggestions_checkbox = new wxCheckBox(this, wxID_ANY, _("Use Input Suggestions (Experimental)"));
+	m_slippi_input_suggestions_checkbox->SetToolTip(
+	    _("Send your newest GameCube adapter inputs to your opponent between frames, and use theirs to predict "
+	      "their inputs while waiting for them. Only predictions change; the game always runs on the real inputs."));
 
 	m_slippi_show_player_rank =
 	    new wxCheckBox(this, wxID_ANY, _("Show your rank (Character Select and Ranked Setup Screen)"));
@@ -171,7 +171,7 @@ void SlippiNetplayConfigPane::InitializeGUI()
 
 	wxStaticBoxSizer *const sbSlippiInputSettings = new wxStaticBoxSizer(wxVERTICAL, this, _("Slippi Input Settings"));
 	sbSlippiInputSettings->AddSpacer(space5);
-	sbSlippiInputSettings->Add(m_reduce_timing_dispersion_checkbox, 0, wxLEFT | wxRIGHT, space5);
+	sbSlippiInputSettings->Add(m_slippi_input_suggestions_checkbox, 0, wxLEFT | wxRIGHT, space5);
 	sbSlippiInputSettings->AddSpacer(space5);
 
 	wxBoxSizer *const main_sizer = new wxBoxSizer(wxVERTICAL);
@@ -246,7 +246,7 @@ void SlippiNetplayConfigPane::LoadGUIValues()
 		m_slippi_netplay_lan_ip_ctrl->Hide();
 	}
 
-	m_reduce_timing_dispersion_checkbox->SetValue(startup_params.bReduceTimingDispersion);
+	m_slippi_input_suggestions_checkbox->SetValue(startup_params.bSlippiInputSuggestions);
 
 	m_slippi_show_player_rank->SetValue(startup_params.bSlippiPlayerRankDisplay);
 	m_slippi_show_opponent_rank->SetValue(startup_params.bSlippiOpponentRankDisplay);
@@ -282,8 +282,7 @@ void SlippiNetplayConfigPane::BindEvents()
 	                                             this);
 	m_slippi_netplay_lan_ip_ctrl->Bind(wxEVT_TEXT, &SlippiNetplayConfigPane::OnNetplayLanIpChanged, this);
 
-	m_reduce_timing_dispersion_checkbox->Bind(wxEVT_CHECKBOX, &SlippiNetplayConfigPane::OnReduceTimingDispersionToggle,
-	                                          this);
+	m_slippi_input_suggestions_checkbox->Bind(wxEVT_CHECKBOX, &SlippiNetplayConfigPane::OnInputSuggestionsToggle, this);
 
 	m_slippi_show_player_rank->Bind(wxEVT_CHECKBOX, &SlippiNetplayConfigPane::OnToggleShowPlayerRank, this);
 	m_slippi_show_opponent_rank->Bind(wxEVT_CHECKBOX, &SlippiNetplayConfigPane::OnToggleShowOpponentRank, this);
@@ -369,9 +368,9 @@ void SlippiNetplayConfigPane::OnNetplayLanIpChanged(wxCommandEvent &event)
 	SConfig::GetInstance().m_slippiLanIp = m_slippi_netplay_lan_ip_ctrl->GetValue().c_str();
 }
 
-void SlippiNetplayConfigPane::OnReduceTimingDispersionToggle(wxCommandEvent &event)
+void SlippiNetplayConfigPane::OnInputSuggestionsToggle(wxCommandEvent &event)
 {
-	SConfig::GetInstance().bReduceTimingDispersion = m_reduce_timing_dispersion_checkbox->GetValue();
+	SConfig::GetInstance().bSlippiInputSuggestions = m_slippi_input_suggestions_checkbox->GetValue();
 }
 
 void SlippiNetplayConfigPane::OnToggleShowPlayerRank(wxCommandEvent &event)
