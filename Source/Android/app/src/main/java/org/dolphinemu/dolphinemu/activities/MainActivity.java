@@ -2,10 +2,13 @@ package org.dolphinemu.dolphinemu.activities;
 
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.hardware.input.InputManager;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.Log;
@@ -29,6 +32,7 @@ import org.dolphinemu.dolphinemu.MainlineCore;
 import org.dolphinemu.dolphinemu.NativeLibrary;
 import org.dolphinemu.dolphinemu.R;
 import org.dolphinemu.dolphinemu.UserDirectoryBootstrap;
+import org.dolphinemu.dolphinemu.controller.AndroidControllers;
 import org.dolphinemu.dolphinemu.gpu.GpuDriverManager;
 import org.dolphinemu.dolphinemu.settings.DolphinSettings;
 import org.dolphinemu.dolphinemu.utils.ContentCopyTask;
@@ -72,6 +76,25 @@ public class MainActivity extends AppCompatActivity {
     private TextView emulatorCoreStatus;
     private MaterialButtonToggleGroup emulatorCoreToggle;
     private MaterialButtonToggleGroup backendToggle;
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private InputManager inputManager;
+    private final InputManager.InputDeviceListener inputDeviceListener =
+            new InputManager.InputDeviceListener() {
+                @Override
+                public void onInputDeviceAdded(int deviceId) {
+                    refresh();
+                }
+
+                @Override
+                public void onInputDeviceRemoved(int deviceId) {
+                    refresh();
+                }
+
+                @Override
+                public void onInputDeviceChanged(int deviceId) {
+                    refresh();
+                }
+            };
 
     // Auth UI: three sibling containers, exactly one visible at a time.
     private LinearLayout authLoading;
@@ -149,6 +172,7 @@ public class MainActivity extends AppCompatActivity {
         UserDirectoryBootstrap.ensureLayout(this);
         NativeLibrary.SetUserDirectory(UserDirectoryBootstrap.userDir(this).getAbsolutePath());
         NativeLibrary.CreateUserFolders();
+        inputManager = (InputManager) getSystemService(INPUT_SERVICE);
 
         findViewById(R.id.pick_iso).setOnClickListener(v -> pickIso.launch(new String[]{"*/*"}));
         authSignIn.setOnClickListener(v ->
@@ -220,7 +244,18 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (inputManager != null) {
+            inputManager.registerInputDeviceListener(inputDeviceListener, ui);
+        }
         refresh();
+    }
+
+    @Override
+    protected void onPause() {
+        if (inputManager != null) {
+            inputManager.unregisterInputDeviceListener(inputDeviceListener);
+        }
+        super.onPause();
     }
 
     /**
@@ -315,7 +350,18 @@ public class MainActivity extends AppCompatActivity {
             isoStatus.setText(R.string.iso_label_empty);
         }
         boolean hasAdapter = hasWiiUAdapter();
-        adapterStatus.setText(hasAdapter ? R.string.adapter_connected : R.string.adapter_none);
+        if (hasAdapter) {
+            adapterStatus.setText(R.string.adapter_connected);
+        } else {
+            java.util.List<AndroidControllers.DeviceInfo> externalControllers =
+                    AndroidControllers.listSelectableExternalDevices(this);
+            if (!externalControllers.isEmpty()) {
+                adapterStatus.setText(getString(R.string.external_controller_connected,
+                        externalControllers.get(0).label));
+            } else {
+                adapterStatus.setText(R.string.adapter_none);
+            }
+        }
         DolphinSettings.AudioPreset audioPreset = DolphinSettings.getAudioPreset(this);
         audioStatus.setText(getString(R.string.audio_status_format,
                 audioPreset.backend, audioPreset.bursts));

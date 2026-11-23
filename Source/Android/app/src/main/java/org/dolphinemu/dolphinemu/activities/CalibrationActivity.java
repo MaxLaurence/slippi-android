@@ -15,6 +15,7 @@ import com.google.android.material.button.MaterialButtonToggleGroup;
 import com.google.android.material.slider.Slider;
 
 import org.dolphinemu.dolphinemu.R;
+import org.dolphinemu.dolphinemu.controller.AndroidControllerAxisLayout;
 import org.dolphinemu.dolphinemu.controller.ControllerProfile;
 import org.dolphinemu.dolphinemu.controller.StickCalibration;
 import org.dolphinemu.dolphinemu.utils.RawStickInputProvider;
@@ -176,8 +177,10 @@ public class CalibrationActivity extends AppCompatActivity {
             renderPreview();
         });
 
-        rawStickInput = RawStickInputProviders.create(this);
-        if (rawStickInput != null) rawStickInput.start();
+        if (!ControllerProfile.isAndroidExternalDeviceKey(deviceKey)) {
+            rawStickInput = RawStickInputProviders.create(this);
+            if (rawStickInput != null) rawStickInput.start();
+        }
 
         loadSlidersForCurrentStick();
         renderHeader();
@@ -206,22 +209,30 @@ public class CalibrationActivity extends AppCompatActivity {
     }
 
     /**
-     * Built-in pad / Bluetooth path. Android's MotionEvent only fires
+     * Built-in pad / USB / Bluetooth path. Android's MotionEvent only fires
      * when the stick moves; the rawInputPoll above handles continuous
-     * sampling when an evdev source is open instead.
+     * sampling when an onboard raw source is open for DEVICE_BUILTIN instead.
      */
     @Override
     public boolean dispatchGenericMotionEvent(MotionEvent ev) {
         if ((ev.getSource() & InputDevice.SOURCE_JOYSTICK) != 0
                 || (ev.getSource() & InputDevice.SOURCE_GAMEPAD) != 0) {
             if (rawStickInput == null) {
+                InputDevice evDevice = ev.getDevice();
+                if (ControllerProfile.isAndroidExternalDeviceKey(deviceKey) && evDevice != null) {
+                    String evKey = ControllerProfile.androidDeviceKey(evDevice);
+                    if (!deviceKey.equals(evKey)) {
+                        return true;
+                    }
+                }
+                AndroidControllerAxisLayout layout = AndroidControllerAxisLayout.resolve(evDevice);
                 float x, y;
                 if (stick == Stick.MAIN) {
-                    x = ev.getAxisValue(MotionEvent.AXIS_X);
-                    y = ev.getAxisValue(MotionEvent.AXIS_Y);
+                    x = ev.getAxisValue(layout.mainX);
+                    y = ev.getAxisValue(layout.mainY);
                 } else {
-                    x = ev.getAxisValue(MotionEvent.AXIS_Z);
-                    y = ev.getAxisValue(MotionEvent.AXIS_RZ);
+                    x = ev.getAxisValue(layout.cX);
+                    y = ev.getAxisValue(layout.cY);
                 }
                 onRawSample(x, y);
             }
@@ -328,12 +339,17 @@ public class CalibrationActivity extends AppCompatActivity {
      * user has a stale saved cal from an older app version.
      */
     private void resetSlidersToDefaults() {
-        currentDeadzone = stick == Stick.MAIN
-                ? StickCalibration.DEFAULT_DEADZONE_MAIN
-                : StickCalibration.DEFAULT_DEADZONE_C;
-        currentSensitivity = stick == Stick.MAIN
-                ? StickCalibration.DEFAULT_SENSITIVITY_MAIN
-                : StickCalibration.DEFAULT_SENSITIVITY_C;
+        boolean isExternal = ControllerProfile.isAndroidExternalDeviceKey(deviceKey);
+        currentDeadzone = isExternal
+                ? StickCalibration.DEFAULT_DEADZONE_EXTERNAL
+                : (stick == Stick.MAIN
+                        ? StickCalibration.DEFAULT_DEADZONE_MAIN
+                        : StickCalibration.DEFAULT_DEADZONE_C);
+        currentSensitivity = isExternal
+                ? StickCalibration.DEFAULT_SENSITIVITY_EXTERNAL
+                : (stick == Stick.MAIN
+                        ? StickCalibration.DEFAULT_SENSITIVITY_MAIN
+                        : StickCalibration.DEFAULT_SENSITIVITY_C);
         currentOutputCap = StickCalibration.DEFAULT_OUTPUT_CAP;
         deadzoneSlider.setValue(currentDeadzone);
         sensitivitySlider.setValue(currentSensitivity);
@@ -365,12 +381,17 @@ public class CalibrationActivity extends AppCompatActivity {
             ControllerProfile.Stick which = stick == Stick.MAIN
                     ? ControllerProfile.Stick.MAIN : ControllerProfile.Stick.C;
             StickCalibration saved = profile.getStick(deviceKey, which);
-            float defaultDz = stick == Stick.MAIN
-                    ? StickCalibration.DEFAULT_DEADZONE_MAIN
-                    : StickCalibration.DEFAULT_DEADZONE_C;
-            float defaultSens = stick == Stick.MAIN
-                    ? StickCalibration.DEFAULT_SENSITIVITY_MAIN
-                    : StickCalibration.DEFAULT_SENSITIVITY_C;
+            boolean isExternal = ControllerProfile.isAndroidExternalDeviceKey(deviceKey);
+            float defaultDz = isExternal
+                    ? StickCalibration.DEFAULT_DEADZONE_EXTERNAL
+                    : (stick == Stick.MAIN
+                            ? StickCalibration.DEFAULT_DEADZONE_MAIN
+                            : StickCalibration.DEFAULT_DEADZONE_C);
+            float defaultSens = isExternal
+                    ? StickCalibration.DEFAULT_SENSITIVITY_EXTERNAL
+                    : (stick == Stick.MAIN
+                            ? StickCalibration.DEFAULT_SENSITIVITY_MAIN
+                            : StickCalibration.DEFAULT_SENSITIVITY_C);
             e.deadzone = clampSlider(saved.deadzone,
                     StickCalibration.MIN_DEADZONE, StickCalibration.MAX_DEADZONE,
                     0.01f, defaultDz);

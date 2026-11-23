@@ -2,6 +2,7 @@ package org.dolphinemu.dolphinemu.activities;
 
 import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
+import android.hardware.input.InputManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.FileObserver;
@@ -38,7 +39,8 @@ import org.dolphinemu.dolphinemu.MainlineCore;
 import org.dolphinemu.dolphinemu.NativeLibrary;
 import org.dolphinemu.dolphinemu.R;
 import org.dolphinemu.dolphinemu.UserDirectoryBootstrap;
-import org.dolphinemu.dolphinemu.controller.ButtonMap;
+import org.dolphinemu.dolphinemu.controller.AndroidControllers;
+import org.dolphinemu.dolphinemu.controller.AndroidGamepadInputRouter;
 import org.dolphinemu.dolphinemu.controller.ControllerProfile;
 import org.dolphinemu.dolphinemu.controller.GameCubePadState;
 import org.dolphinemu.dolphinemu.controller.StickCalibration;
@@ -126,8 +128,33 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     private static final long FRAME_LATENCY_LOG_INTERVAL_MS = 2000L;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private final StickCalibration.Out stickOut = new StickCalibration.Out();
     private final GameCubePadState padState = new GameCubePadState(0);
+    private AndroidGamepadInputRouter gamepadInputRouter;
+    private InputManager inputManager;
+    private final InputManager.InputDeviceListener inputDeviceListener =
+            new InputManager.InputDeviceListener() {
+                @Override
+                public void onInputDeviceAdded(int deviceId) {
+                    updateTouchOverlayVisibility();
+                }
+
+                @Override
+                public void onInputDeviceRemoved(int deviceId) {
+                    if (gamepadInputRouter != null) {
+                        gamepadInputRouter.onDeviceDisconnected(deviceId);
+                        pushPad();
+                    }
+                    updateTouchOverlayVisibility();
+                }
+
+                @Override
+                public void onInputDeviceChanged(int deviceId) {
+                    if (gamepadInputRouter != null) {
+                        gamepadInputRouter.onDeviceDisconnected(deviceId);
+                    }
+                    updateTouchOverlayVisibility();
+                }
+            };
     private Thread emuThread;
     private HandlerThread rawInputThread;
     private Handler rawInputHandler;
@@ -136,9 +163,6 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     private volatile boolean emuStarted;
     private volatile boolean rawInputPolling;
     private volatile int rawInputThreadTid = -1;
-    private StickCalibration mainStickCal = StickCalibration.IDENTITY;
-    private StickCalibration cStickCal = StickCalibration.IDENTITY;
-    private ButtonMap buttonMap = ButtonMap.defaults();
     private RawStickInputProvider rawStickInput;
     private TouchControlOverlayView touchOverlay;
     private ReplayHudView replayHud;
@@ -247,11 +271,15 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             RawStickState state = rawStickInput != null && rawStickInput.supportsBlockingWait()
                     ? rawStickInput.waitForSnapshot(rawInputWaitMs)
                     : (rawStickInput == null ? null : rawStickInput.snapshot());
-            if (feedRawStickState(state)) {
-                traceInputEvent("raw:" + rawSourceLabel(), SystemClock.uptimeMillis(), 0);
-                pushPad();
-                ControllerDiagnosticsCapture.recordInputEvent("raw:" + rawSourceLabel(),
-                        describeRawStickState(state) + " pad=" + padState.snapshotString());
+            if (state != null && state.hasAnyAxis()) {
+                if (gamepadInputRouter != null
+                        && gamepadInputRouter.handleRawStickSnapshot(
+                                state, SystemClock.uptimeMillis())) {
+                    traceInputEvent("raw:" + rawSourceLabel(), SystemClock.uptimeMillis(), 0);
+                    pushPad();
+                    ControllerDiagnosticsCapture.recordInputEvent("raw:" + rawSourceLabel(),
+                            describeRawStickState(state) + " pad=" + padState.snapshotString());
+                }
                 postRawInputPoll();
                 return;
             }
@@ -262,8 +290,9 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
             }
 
             rawInputPolling = false;
-            mainStickCal = mainStickCal.withOuterScaleEnabled(false);
-            cStickCal = cStickCal.withOuterScaleEnabled(false);
+            if (gamepadInputRouter != null) {
+                gamepadInputRouter.onRawProviderLost();
+            }
             if (rawStickInput != null) {
                 rawStickInput.stop();
                 rawStickInput = null;
@@ -368,6 +397,9 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         }
         startFrameLatencyTrace();
         updateTouchOverlayVisibility();
+        if (inputManager != null) {
+            inputManager.registerInputDeviceListener(inputDeviceListener, ui);
+        }
         ui.post(controllerDetectorPoll);
         if (shouldPollRawStickSource()) startRawInputPolling();
         if (isReplayMode && replayHud != null) {
@@ -380,6 +412,9 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
     protected void onPause() {
         stopRawInputPolling();
         stopFrameLatencyTrace();
+        if (inputManager != null) {
+            inputManager.unregisterInputDeviceListener(inputDeviceListener);
+        }
         ui.removeCallbacks(controllerDetectorPoll);
         if (replayHud != null) replayHud.stopPolling();
         super.onPause();
@@ -471,17 +506,13 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
-        if (isReplayMode || useGcAdapter) {
+        if (isReplayMode || useGcAdapter || gamepadInputRouter == null) {
             return super.dispatchKeyEvent(event);
         }
         int action = event.getAction();
-        int bit = buttonMap.gcBitForKey(event.getKeyCode());
+        int bit = gamepadInputRouter.handleKeyEvent(event);
         if (bit == 0) return super.dispatchKeyEvent(event);
-        if (action != KeyEvent.ACTION_DOWN && action != KeyEvent.ACTION_UP) {
-            return super.dispatchKeyEvent(event);
-        }
         traceInputEvent("key", event.getEventTime(), event.getRepeatCount());
-        padState.setButton(bit, action == KeyEvent.ACTION_DOWN);
         pushPad();
         ControllerDiagnosticsCapture.recordInputEvent("key",
                 "device=" + safeDeviceName(event.getDevice())
@@ -502,25 +533,11 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
                 && (event.getSource() & android.view.InputDevice.SOURCE_GAMEPAD) == 0) {
             return super.dispatchGenericMotionEvent(event);
         }
-        if (isReplayMode || useGcAdapter) {
+        if (isReplayMode || useGcAdapter || gamepadInputRouter == null) {
             return super.dispatchGenericMotionEvent(event);
         }
-        if (!shouldPollRawStickSource()) {
-            feedStickPairToBytes(event.getAxisValue(MotionEvent.AXIS_X),
-                    event.getAxisValue(MotionEvent.AXIS_Y), mainStickCal, true, true);
-            feedStickPairToBytes(event.getAxisValue(MotionEvent.AXIS_Z),
-                    event.getAxisValue(MotionEvent.AXIS_RZ), cStickCal, true, false);
-        }
         traceInputEvent("motion", event.getEventTime(), event.getHistorySize());
-
-        float lt = event.getAxisValue(MotionEvent.AXIS_LTRIGGER);
-        float rt = event.getAxisValue(MotionEvent.AXIS_RTRIGGER);
-        if (lt == 0f) lt = event.getAxisValue(MotionEvent.AXIS_BRAKE);
-        if (rt == 0f) rt = event.getAxisValue(MotionEvent.AXIS_GAS);
-        padState.setAnalogTriggerL(lt);
-        padState.setAnalogTriggerR(rt);
-        padState.setHat(event.getAxisValue(MotionEvent.AXIS_HAT_X),
-                event.getAxisValue(MotionEvent.AXIS_HAT_Y));
+        gamepadInputRouter.handleMotionEvent(event, SystemClock.uptimeMillis());
         pushPad();
         ControllerDiagnosticsCapture.recordInputEvent("motion",
                 describeMotionEvent(event) + " pad=" + padState.snapshotString());
@@ -1019,32 +1036,21 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
 
     private void setupCalibratedInput() {
         ControllerProfile profile = new ControllerProfile(this);
-        mainStickCal = profile.getStick(ControllerProfile.DEVICE_BUILTIN,
-                ControllerProfile.Stick.MAIN);
-        cStickCal = profile.getStick(ControllerProfile.DEVICE_BUILTIN,
-                ControllerProfile.Stick.C);
-        buttonMap = profile.getButtonMap(ControllerProfile.DEVICE_BUILTIN);
-
         if (!useGcAdapter && !isReplayMode) {
             rawStickInput = RawStickInputProviders.create(this);
             if (rawStickInput != null) {
                 rawStickInput.start();
             }
         }
-        if (rawStickInput != null && rawStickInput.isPotentiallySaturated()) {
-            if (!profile.hasCalibration(ControllerProfile.DEVICE_BUILTIN,
-                    ControllerProfile.Stick.MAIN)) {
-                mainStickCal = StickCalibration.compensatingMain();
-            }
-            if (!profile.hasCalibration(ControllerProfile.DEVICE_BUILTIN,
-                    ControllerProfile.Stick.C)) {
-                cStickCal = StickCalibration.compensatingC();
-            }
-        }
-        if (!hasRawStickSource()) {
-            mainStickCal = mainStickCal.withOuterScaleEnabled(false);
-            cStickCal = cStickCal.withOuterScaleEnabled(false);
-        }
+        gamepadInputRouter = new AndroidGamepadInputRouter(
+                this,
+                profile,
+                padState,
+                AndroidControllers.hasBuiltInGamepadControls(this),
+                hasRawStickSource(),
+                rawStickInput != null && rawStickInput.isPotentiallySaturated());
+        inputManager = (InputManager) getSystemService(INPUT_SERVICE);
+        StickCalibration mainStickCal = gamepadInputRouter.getBuiltInMainCalibration();
         Log.i(TAG, "loaded mainline calibrated input rawReader=" + hasRawStickSource()
                 + " rawSource=" + rawSourceLabel()
                 + " mainDz=" + mainStickCal.deadzone
@@ -1061,42 +1067,6 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
         if (LATENCY_TRACE) {
             Trace.endSection();
         }
-    }
-
-    private synchronized void feedStickPairToBytes(float rawX, float rawY,
-                                                   StickCalibration cal, boolean invertY,
-                                                   boolean main) {
-        cal.apply(rawX, rawY, stickOut);
-        float fx = stickOut.x;
-        float fy = invertY ? -stickOut.y : stickOut.y;
-        if (main) {
-            padState.setMainStick(fx, fy);
-        } else {
-            padState.setCStick(fx, fy);
-        }
-    }
-
-    private synchronized boolean feedRawStickState(RawStickState state) {
-        if (state == null) {
-            return false;
-        }
-
-        boolean fed = false;
-        Float mainX = state.valueForAxis(MotionEvent.AXIS_X);
-        Float mainY = state.valueForAxis(MotionEvent.AXIS_Y);
-        if (mainX != null && mainY != null) {
-            feedStickPairToBytes(mainX, mainY, mainStickCal, true, true);
-            fed = true;
-        }
-
-        Float cX = state.valueForAxis(MotionEvent.AXIS_Z);
-        Float cY = state.valueForAxis(MotionEvent.AXIS_RZ);
-        if (cX != null && cY != null) {
-            feedStickPairToBytes(cX, cY, cStickCal, true, false);
-            fed = true;
-        }
-
-        return fed;
     }
 
     private String describeRawStickState(RawStickState state) {
@@ -1120,6 +1090,8 @@ public class MainlineEmulationActivity extends AppCompatActivity implements Surf
                 + ",y=" + formatAxis(event.getAxisValue(MotionEvent.AXIS_Y))
                 + ",z=" + formatAxis(event.getAxisValue(MotionEvent.AXIS_Z))
                 + ",rz=" + formatAxis(event.getAxisValue(MotionEvent.AXIS_RZ))
+                + ",rx=" + formatAxis(event.getAxisValue(MotionEvent.AXIS_RX))
+                + ",ry=" + formatAxis(event.getAxisValue(MotionEvent.AXIS_RY))
                 + ",lt=" + formatAxis(event.getAxisValue(MotionEvent.AXIS_LTRIGGER))
                 + ",rt=" + formatAxis(event.getAxisValue(MotionEvent.AXIS_RTRIGGER))
                 + ",brake=" + formatAxis(event.getAxisValue(MotionEvent.AXIS_BRAKE))

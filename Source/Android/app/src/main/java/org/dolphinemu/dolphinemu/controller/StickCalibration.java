@@ -33,6 +33,8 @@ public final class StickCalibration {
      */
     public static final float DEFAULT_DEADZONE_MAIN = 0.02f;
     public static final float DEFAULT_DEADZONE_C    = 0.10f;
+    /** External USB / Bluetooth controllers default to linear passthrough (matches desktop Dolphin). */
+    public static final float DEFAULT_DEADZONE_EXTERNAL = 0.0f;
     /** Back-compat: callers without stick context get the main-stick default. */
     public static final float DEFAULT_DEADZONE = DEFAULT_DEADZONE_MAIN;
 
@@ -52,6 +54,7 @@ public final class StickCalibration {
      */
     public static final float DEFAULT_SENSITIVITY_MAIN = 1.5f;
     public static final float DEFAULT_SENSITIVITY_C    = 2.0f;
+    public static final float DEFAULT_SENSITIVITY_EXTERNAL = 1.0f;
     /** Back-compat: callers without stick context get the main-stick default. */
     public static final float DEFAULT_SENSITIVITY = DEFAULT_SENSITIVITY_MAIN;
 
@@ -98,6 +101,20 @@ public final class StickCalibration {
         return new StickCalibration(0f, 0f,
                 DEFAULT_SCALE, DEFAULT_SCALE, DEFAULT_SCALE, DEFAULT_SCALE,
                 DEFAULT_DEADZONE_C, DEFAULT_SENSITIVITY_C, DEFAULT_OUTPUT_CAP);
+    }
+
+    /**
+     * Linear 1:1 defaults for external USB / Bluetooth controllers (Xbox,
+     * HayBox / B0XX, USB GameCube, Switch Pro, PlayStation). Matches
+     * standard Dolphin's out-of-the-box 0% deadzone / linear response so
+     * hardware-calibrated coordinates (such as HayBox's ±80/127.5 values)
+     * reach Melee unaltered.
+     */
+    public static StickCalibration defaultsForExternal() {
+        return new StickCalibration(0f, 0f,
+                DEFAULT_SCALE, DEFAULT_SCALE, DEFAULT_SCALE, DEFAULT_SCALE,
+                DEFAULT_DEADZONE_EXTERNAL, DEFAULT_SENSITIVITY_EXTERNAL, DEFAULT_OUTPUT_CAP,
+                false);
     }
 
     /**
@@ -215,11 +232,11 @@ public final class StickCalibration {
             dy *= (dy >= 0f) ? scaleYPos : scaleYNeg;
         }
 
-        // Inner deadzone (radial). Below this magnitude the stick is
-        // considered released — kills the "accidental tap-jump from
-        // resting your thumb" failure mode.
+        // Inner deadzone (radial). Below or at this magnitude (and always at
+        // exact zero to avoid 0/0 = NaN when deadzone == 0) the stick is
+        // considered released.
         float mag = (float) Math.sqrt(dx * dx + dy * dy);
-        if (mag < deadzone) {
+        if (mag <= deadzone || mag <= 1e-6f) {
             out.x = 0f;
             out.y = 0f;
             return;

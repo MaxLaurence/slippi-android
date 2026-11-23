@@ -104,6 +104,7 @@
     <string name="display_latency_fastest">Fastest response</string>
     <string name="adapter_none">No GC adapter detected</string>
     <string name="adapter_connected">GC adapter ✓</string>
+    <string name="external_controller_connected">%1$s ✓</string>
     <string name="calibrate_sticks_link">⚙ Calibrate sticks</string>
     <string name="remap_buttons_link">🎮 Remap buttons</string>
     <string name="touch_controls_link">Touch controls</string>

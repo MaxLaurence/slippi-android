@@ -19,6 +19,8 @@ import org.dolphinemu.dolphinemu.EmulatorCore;
 import org.dolphinemu.dolphinemu.MainlineCore;
 import org.dolphinemu.dolphinemu.NativeLibrary;
 import org.dolphinemu.dolphinemu.UserDirectoryBootstrap;
+import org.dolphinemu.dolphinemu.controller.AndroidControllerAxisLayout;
+import org.dolphinemu.dolphinemu.controller.AndroidControllers;
 import org.dolphinemu.dolphinemu.controller.ButtonMap;
 import org.dolphinemu.dolphinemu.controller.ControllerProfile;
 import org.dolphinemu.dolphinemu.gpu.GpuDriverManager;
@@ -186,7 +188,7 @@ public final class DiagnosticsExporter {
     private static void appendControllers(StringBuilder sb, Context context) {
         appendSection(sb, "Controllers");
         appendUsbDevices(sb, context);
-        appendAndroidInputDevices(sb);
+        appendAndroidInputDevices(sb, context);
         try {
             RawStickInputProvider rawProvider = RawStickInputProviders.create(context);
             if (rawProvider == null) {
@@ -432,7 +434,8 @@ public final class DiagnosticsExporter {
         appendKV(sb, "WUP-028 adapter attached", hasGcAdapter);
     }
 
-    private static void appendAndroidInputDevices(StringBuilder sb) {
+    private static void appendAndroidInputDevices(StringBuilder sb, Context context) {
+        ControllerProfile profile = new ControllerProfile(context);
         int count = 0;
         for (int id : InputDevice.getDeviceIds()) {
             InputDevice device = InputDevice.getDevice(id);
@@ -444,12 +447,20 @@ public final class DiagnosticsExporter {
                     == InputDevice.SOURCE_GAMEPAD;
             if (!joystick && !gamepad) continue;
             count++;
+            String profileKey = ControllerProfile.androidDeviceKey(device);
+            AndroidControllerAxisLayout layout = AndroidControllerAxisLayout.resolve(device);
             appendKV(sb, "Android input " + count, String.format(Locale.US,
-                    "id=%d name=%s descriptor=%s sources=0x%08X vendor=%d product=%d",
+                    "id=%d name=%s descriptor=%s sources=0x%08X vendor=0x%04X product=0x%04X external=%s key=%s",
                     id, safe(device.getName()), safe(device.getDescriptor()),
-                    sources, device.getVendorId(), device.getProductId()));
+                    sources, device.getVendorId() & 0xFFFF, device.getProductId() & 0xFFFF,
+                    AndroidControllers.isDeviceExternal(device), profileKey));
             appendKV(sb, "Android input " + count + " axes",
                     describeGamepadAxes(device, sources));
+            appendKV(sb, "Android input " + count + " layout",
+                    layout.describe()
+                            + " savedMain=" + profile.hasCalibration(profileKey, ControllerProfile.Stick.MAIN)
+                            + " savedC=" + profile.hasCalibration(profileKey, ControllerProfile.Stick.C)
+                            + " savedMap=" + profile.hasButtonMap(profileKey));
         }
         appendKV(sb, "Android gamepad count", count);
     }

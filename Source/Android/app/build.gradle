@@ -289,6 +289,7 @@ dependencies {
     // is the latest published as of 2026-01; the stable 1.0.0 line still
     // works but uses the deprecated KeyGenParameterSpec helper.
     implementation 'androidx.security:security-crypto:1.1.0-alpha06'
+    testImplementation 'junit:junit:4.13.2'
 }
 
 def mainlineOboeAar = configurations.detachedConfiguration(

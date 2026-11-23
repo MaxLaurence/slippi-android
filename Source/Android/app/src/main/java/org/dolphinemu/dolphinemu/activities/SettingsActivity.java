@@ -5,10 +5,13 @@ import android.content.Intent;
 import android.content.res.ColorStateList;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.hardware.input.InputManager;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.util.Log;
@@ -36,6 +39,7 @@ import org.dolphinemu.dolphinemu.BuildConfig;
 import org.dolphinemu.dolphinemu.NativeLibrary;
 import org.dolphinemu.dolphinemu.R;
 import org.dolphinemu.dolphinemu.UserDirectoryBootstrap;
+import org.dolphinemu.dolphinemu.controller.AndroidControllers;
 import org.dolphinemu.dolphinemu.controller.ControllerProfile;
 import org.dolphinemu.dolphinemu.gpu.GpuDriverManager;
 import org.dolphinemu.dolphinemu.settings.DolphinSettings;
@@ -60,6 +64,25 @@ public class SettingsActivity extends AppCompatActivity {
     private ScrollView currentScroll;
     private Pane selectedPane = Pane.GRAPHICS;
     private final EnumMap<Pane, Integer> paneScrollY = new EnumMap<>(Pane.class);
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private InputManager inputManager;
+    private final InputManager.InputDeviceListener inputDeviceListener =
+            new InputManager.InputDeviceListener() {
+                @Override
+                public void onInputDeviceAdded(int deviceId) {
+                    if (selectedPane == Pane.CONTROLS) refreshCurrentPane();
+                }
+
+                @Override
+                public void onInputDeviceRemoved(int deviceId) {
+                    if (selectedPane == Pane.CONTROLS) refreshCurrentPane();
+                }
+
+                @Override
+                public void onInputDeviceChanged(int deviceId) {
+                    if (selectedPane == Pane.CONTROLS) refreshCurrentPane();
+                }
+            };
 
     private final ActivityResultLauncher<String[]> pickGpuDriver =
             registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
@@ -87,6 +110,7 @@ public class SettingsActivity extends AppCompatActivity {
         UserDirectoryBootstrap.ensureLayout(this);
         NativeLibrary.SetUserDirectory(UserDirectoryBootstrap.userDir(this).getAbsolutePath());
         NativeLibrary.CreateUserFolders();
+        inputManager = (InputManager) getSystemService(INPUT_SERVICE);
         buildShell();
         showPane(Pane.GRAPHICS);
     }
@@ -94,7 +118,18 @@ public class SettingsActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (inputManager != null) {
+            inputManager.registerInputDeviceListener(inputDeviceListener, ui);
+        }
         showPane(selectedPane);
+    }
+
+    @Override
+    protected void onPause() {
+        if (inputManager != null) {
+            inputManager.unregisterInputDeviceListener(inputDeviceListener);
+        }
+        super.onPause();
     }
 
     private void buildShell() {
@@ -286,11 +321,11 @@ public class SettingsActivity extends AppCompatActivity {
     private void populateControlsPane(LinearLayout body) {
         DolphinSettings.TouchControlsMode touchControlsMode =
                 DolphinSettings.getTouchControlsMode(this);
-        addActionRow(body, "Stick calibration", getString(R.string.calibrate_device),
+        addActionRow(body, "Stick calibration",
+                summarizeControllers(false),
                 v -> showCalibrationChooser());
         addActionRow(body, "Button remap",
-                hasWiiUAdapter() ? "Built-in controls and GC adapter ports"
-                        : getString(R.string.calibrate_device),
+                summarizeControllers(hasWiiUAdapter()),
                 v -> showRemapChooser());
         String adapterRumble = DolphinSettings.hasGcAdapterRumbleSetting(this)
                 ? (DolphinSettings.isGcAdapterRumbleEnabled(this) ? "On" : "Off")
@@ -873,39 +908,60 @@ public class SettingsActivity extends AppCompatActivity {
                 GpuDriverManager.selectedLibraryNameForBackend(this, backend));
     }
 
+    private String summarizeControllers(boolean includeAdapterPorts) {
+        List<AndroidControllers.DeviceInfo> external =
+                AndroidControllers.listSelectableExternalDevices(this);
+        List<String> parts = new ArrayList<>();
+        if (AndroidControllers.hasBuiltInGamepadControls(this) || external.isEmpty()) {
+            parts.add(getString(R.string.calibrate_device));
+        }
+        for (AndroidControllers.DeviceInfo info : external) {
+            parts.add(info.label);
+        }
+        if (includeAdapterPorts) {
+            parts.add("GC adapter ports");
+        }
+        return TextUtils.join(" · ", parts);
+    }
+
     private void showRemapChooser() {
-        List<String> labels = new ArrayList<>();
-        List<String> deviceKeys = new ArrayList<>();
-        labels.add(getString(R.string.calibrate_device));
-        deviceKeys.add(ControllerProfile.DEVICE_BUILTIN);
-        if (hasWiiUAdapter()) {
-            for (int i = 0; i < 4; i++) {
-                labels.add(getString(R.string.calibrate_adapter_port, i + 1));
-                deviceKeys.add(ControllerProfile.adapterDeviceKey(i));
-            }
+        List<AndroidControllers.ChooserEntry> entries =
+                AndroidControllers.buildRemapChooserEntries(
+                        this,
+                        getString(R.string.calibrate_device),
+                        hasWiiUAdapter(),
+                        port -> getString(R.string.calibrate_adapter_port, port));
+        CharSequence[] labels = new CharSequence[entries.size()];
+        for (int i = 0; i < entries.size(); i++) {
+            labels[i] = entries.get(i).label;
         }
         new AlertDialog.Builder(this)
                 .setTitle(R.string.remap_pick_controller)
-                .setItems(labels.toArray(new CharSequence[0]), (d, which) -> {
+                .setItems(labels, (d, which) -> {
+                    AndroidControllers.ChooserEntry picked = entries.get(which);
                     Intent it = new Intent(this, ButtonMapActivity.class);
-                    it.putExtra(ButtonMapActivity.EXTRA_DEVICE_KEY, deviceKeys.get(which));
-                    it.putExtra(ButtonMapActivity.EXTRA_DEVICE_LABEL, labels.get(which));
+                    it.putExtra(ButtonMapActivity.EXTRA_DEVICE_KEY, picked.deviceKey);
+                    it.putExtra(ButtonMapActivity.EXTRA_DEVICE_LABEL, picked.label);
                     startActivity(it);
                 })
                 .show();
     }
 
     private void showCalibrationChooser() {
-        List<String> labels = new ArrayList<>();
-        List<String> deviceKeys = new ArrayList<>();
-        labels.add(getString(R.string.calibrate_device));
-        deviceKeys.add(ControllerProfile.DEVICE_BUILTIN);
+        List<AndroidControllers.ChooserEntry> entries =
+                AndroidControllers.buildCalibrationChooserEntries(
+                        this, getString(R.string.calibrate_device));
+        CharSequence[] labels = new CharSequence[entries.size()];
+        for (int i = 0; i < entries.size(); i++) {
+            labels[i] = entries.get(i).label;
+        }
         new AlertDialog.Builder(this)
                 .setTitle(R.string.calibrate_pick_controller)
-                .setItems(labels.toArray(new CharSequence[0]), (d, which) -> {
+                .setItems(labels, (d, which) -> {
+                    AndroidControllers.ChooserEntry picked = entries.get(which);
                     Intent it = new Intent(this, CalibrationActivity.class);
-                    it.putExtra(CalibrationActivity.EXTRA_DEVICE_KEY, deviceKeys.get(which));
-                    it.putExtra(CalibrationActivity.EXTRA_DEVICE_LABEL, labels.get(which));
+                    it.putExtra(CalibrationActivity.EXTRA_DEVICE_KEY, picked.deviceKey);
+                    it.putExtra(CalibrationActivity.EXTRA_DEVICE_LABEL, picked.label);
                     startActivity(it);
                 })
                 .show();

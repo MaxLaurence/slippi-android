@@ -150,7 +150,9 @@ public class ButtonMapActivity extends AppCompatActivity {
         listenDetectedText.setText(isAdapterDevice
                 ? "Press a button on the controller in adapter port "
                         + (adapterPort + 1) + "…"
-                : "Press a button…");
+                : (ControllerProfile.isAndroidExternalDeviceKey(deviceKey)
+                        ? "Press a button on " + deviceLabel + "…"
+                        : "Press a button…"));
 
         listenSaveBtn = v.findViewById(R.id.listen_save);
         listenSaveBtn.setEnabled(false);
@@ -205,6 +207,13 @@ public class ButtonMapActivity extends AppCompatActivity {
                     return true;
                 }
                 if (KeyEvent.isModifierKey(keyCode)) return false;
+                if (ControllerProfile.isAndroidExternalDeviceKey(deviceKey)
+                        && ev.getDevice() != null) {
+                    String evKey = ControllerProfile.androidDeviceKey(ev.getDevice());
+                    if (!deviceKey.equals(evKey)) {
+                        return true;
+                    }
+                }
                 if (ev.getAction() == KeyEvent.ACTION_DOWN && ev.getRepeatCount() == 0) {
                     handleKeyCaptured(keyCode);
                 }

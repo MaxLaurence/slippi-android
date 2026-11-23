@@ -2,6 +2,9 @@ package org.dolphinemu.dolphinemu.controller;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.view.InputDevice;
+
+import java.util.Locale;
 
 /**
  * Per-device persistent calibration record. One row per
@@ -11,24 +14,82 @@ import android.content.SharedPreferences;
  * during the calibration wizard).
  *
  * Device keys:
- *   "builtin"       — stick calibration and button maps for the host
- *                     device's onboard pad / any Bluetooth pad (we
- *                     deliberately don't distinguish Bluetooth pads yet —
- *                     the typical user has exactly one)
- *   "adapter:N"     — WUP-028 GameCube adapter port N (0..3), button maps
- *                     only. Adapter stick bytes are already calibrated by
- *                     the controller hardware and are not app-calibrated.
+ *   "builtin"            — stick calibration and button maps for the host
+ *                          device's onboard controls (and legacy fallback on
+ *                          phones without built-in controls)
+ *   "android:<key>"      — external USB or Bluetooth Android InputDevice,
+ *                          keyed stably by VID/PID + name (or descriptor)
+ *   "adapter:N"          — WUP-028 GameCube adapter port N (0..3), button maps
+ *                          only. Adapter stick bytes are already calibrated by
+ *                          the controller hardware and are not app-calibrated.
  *
  * Stick keys: {@link Stick#MAIN}, {@link Stick#C}.
  */
 public final class ControllerProfile {
 
     private static final String PREF_FILE = "controller_profiles";
+    private static final String ANDROID_KEY_PREFIX = "android:";
 
     public enum Stick { MAIN, C }
 
     public static final String DEVICE_BUILTIN = "builtin";
     public static String adapterDeviceKey(int port) { return "adapter:" + port; }
+
+    public static boolean isAndroidExternalDeviceKey(String deviceKey) {
+        return deviceKey != null && deviceKey.startsWith(ANDROID_KEY_PREFIX);
+    }
+
+    public static String androidDeviceKey(InputDevice device) {
+        if (device == null) return DEVICE_BUILTIN;
+        return androidDeviceKey(device.getVendorId(), device.getProductId(),
+                device.getName(), device.getDescriptor());
+    }
+
+    /**
+     * Stable per-controller key across replugs and reboots. Prefers USB/BT
+     * vendor+product IDs plus sanitized device name so moving a USB controller
+     * across ports or hubs keeps its saved calibration and button map.
+     */
+    public static String androidDeviceKey(int vendorId, int productId,
+                                          String name, String descriptor) {
+        String cleanName = sanitizeKeyToken(name);
+        if (vendorId != 0 || productId != 0) {
+            String suffix = cleanName.isEmpty() ? "controller" : cleanName;
+            return String.format(Locale.US, "%s%04x:%04x:%s",
+                    ANDROID_KEY_PREFIX, vendorId & 0xFFFF, productId & 0xFFFF, suffix);
+        }
+        String cleanDesc = sanitizeKeyToken(descriptor);
+        if (!cleanDesc.isEmpty()) {
+            return ANDROID_KEY_PREFIX + "desc:" + cleanDesc;
+        }
+        if (!cleanName.isEmpty()) {
+            return ANDROID_KEY_PREFIX + "name:" + cleanName;
+        }
+        return DEVICE_BUILTIN;
+    }
+
+    private static String sanitizeKeyToken(String raw) {
+        if (raw == null) return "";
+        String lower = raw.trim().toLowerCase(Locale.US);
+        StringBuilder sb = new StringBuilder(lower.length());
+        boolean lastUnderscore = false;
+        for (int i = 0; i < lower.length(); i++) {
+            char c = lower.charAt(i);
+            boolean alnum = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+            if (alnum) {
+                sb.append(c);
+                lastUnderscore = false;
+            } else if (!lastUnderscore && sb.length() > 0) {
+                sb.append('_');
+                lastUnderscore = true;
+            }
+        }
+        int len = sb.length();
+        if (len > 0 && sb.charAt(len - 1) == '_') {
+            sb.setLength(len - 1);
+        }
+        return sb.toString();
+    }
 
     private final SharedPreferences prefs;
 
@@ -38,14 +99,13 @@ public final class ControllerProfile {
     }
 
     public StickCalibration getStick(String deviceKey, Stick stick) {
-        // Per-stick defaults: the main stick wants a tiny deadzone +
-        // gentle curve (it's used for walking, tilts, jumps); the
-        // C-stick wants a bigger deadzone + steeper curve (it ONLY
-        // fires smashes in Melee, all of which happen at high
-        // magnitude, so anything below should be killed).
-        StickCalibration defaults = stick == Stick.MAIN
-                ? StickCalibration.defaultsForMain()
-                : StickCalibration.defaultsForC();
+        // External USB/BT controllers default to linear passthrough matching
+        // desktop Dolphin; built-in handheld sticks use the softer curve.
+        StickCalibration defaults = isAndroidExternalDeviceKey(deviceKey)
+                ? StickCalibration.defaultsForExternal()
+                : (stick == Stick.MAIN
+                        ? StickCalibration.defaultsForMain()
+                        : StickCalibration.defaultsForC());
         String prefix = keyPrefix(deviceKey, stick);
         if (!prefs.contains(prefix + ".centerX")) return defaults;
         return new StickCalibration(

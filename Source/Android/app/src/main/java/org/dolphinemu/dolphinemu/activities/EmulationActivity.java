@@ -2,6 +2,7 @@ package org.dolphinemu.dolphinemu.activities;
 
 import android.app.GameManager;
 import android.content.pm.ActivityInfo;
+import android.hardware.input.InputManager;
 import android.os.Build;
 import android.os.FileObserver;
 import android.os.Bundle;
@@ -35,7 +36,8 @@ import org.dolphinemu.dolphinemu.BuildConfig;
 import org.dolphinemu.dolphinemu.NativeLibrary;
 import org.dolphinemu.dolphinemu.R;
 import org.dolphinemu.dolphinemu.UserDirectoryBootstrap;
-import org.dolphinemu.dolphinemu.controller.ButtonMap;
+import org.dolphinemu.dolphinemu.controller.AndroidControllers;
+import org.dolphinemu.dolphinemu.controller.AndroidGamepadInputRouter;
 import org.dolphinemu.dolphinemu.controller.ControllerProfile;
 import org.dolphinemu.dolphinemu.controller.GameCubePadState;
 import org.dolphinemu.dolphinemu.controller.StickCalibration;
@@ -130,18 +132,33 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         }
     };
 
-    // Loaded once at activity create from ControllerProfile. Identity by
-    // default until the user runs the calibration wizard from the
-    // launcher, so existing un-calibrated controllers behave identically
-    // to the previous build (modulo the deadzone change baked into
-    // StickCalibration.IDENTITY).
-    private StickCalibration mainStickCal = StickCalibration.IDENTITY;
-    private StickCalibration cStickCal    = StickCalibration.IDENTITY;
-    private final StickCalibration.Out stickOut = new StickCalibration.Out();
     private final GameCubePadState padState = new GameCubePadState(0);
-    // Loaded once at onCreate; remap takes effect when the user
-    // exits the match and returns to the launcher.
-    private ButtonMap buttonMap = ButtonMap.defaults();
+    private AndroidGamepadInputRouter gamepadInputRouter;
+    private InputManager inputManager;
+    private final InputManager.InputDeviceListener inputDeviceListener =
+            new InputManager.InputDeviceListener() {
+                @Override
+                public void onInputDeviceAdded(int deviceId) {
+                    updateTouchOverlayVisibility();
+                }
+
+                @Override
+                public void onInputDeviceRemoved(int deviceId) {
+                    if (gamepadInputRouter != null) {
+                        gamepadInputRouter.onDeviceDisconnected(deviceId);
+                        pushPad();
+                    }
+                    updateTouchOverlayVisibility();
+                }
+
+                @Override
+                public void onInputDeviceChanged(int deviceId) {
+                    if (gamepadInputRouter != null) {
+                        gamepadInputRouter.onDeviceDisconnected(deviceId);
+                    }
+                    updateTouchOverlayVisibility();
+                }
+            };
     private RawStickInputProvider rawStickInput;
     private TouchControlOverlayView touchOverlay;
     private ReplayHudView replayHud;
@@ -169,11 +186,15 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
             RawStickState state = rawStickInput != null && rawStickInput.supportsBlockingWait()
                     ? rawStickInput.waitForSnapshot(rawInputWaitMs)
                     : (rawStickInput == null ? null : rawStickInput.snapshot());
-            if (feedRawStickState(state)) {
-                pushPad();
-                ControllerDiagnosticsCapture.recordInputEvent("raw:" + rawSourceLabel(),
-                        describeRawStickState(state) + " pad=" + padState.snapshotString());
-                traceInputEvent("raw", rawWaitStartMs, 0);
+            if (state != null && state.hasAnyAxis()) {
+                if (gamepadInputRouter != null
+                        && gamepadInputRouter.handleRawStickSnapshot(
+                                state, SystemClock.uptimeMillis())) {
+                    pushPad();
+                    ControllerDiagnosticsCapture.recordInputEvent("raw:" + rawSourceLabel(),
+                            describeRawStickState(state) + " pad=" + padState.snapshotString());
+                    traceInputEvent("raw", rawWaitStartMs, 0);
+                }
                 postRawInputPoll();
                 return;
             }
@@ -184,8 +205,9 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
             }
 
             rawInputPolling = false;
-            mainStickCal = mainStickCal.withOuterScaleEnabled(false);
-            cStickCal = cStickCal.withOuterScaleEnabled(false);
+            if (gamepadInputRouter != null) {
+                gamepadInputRouter.onRawProviderLost();
+            }
             if (rawStickInput != null) {
                 rawStickInput.stop();
                 rawStickInput = null;
@@ -283,35 +305,24 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         surfaceView.requestFocus();
         useGcAdapter = getIntent().getBooleanExtra(EXTRA_USE_GC_ADAPTER, false);
 
-        // Pull the latest on-device stick calibration. GC adapter stick
+        // Pull per-device stick calibration and button remaps. GC adapter stick
         // bytes pass through the native adapter path unchanged.
         ControllerProfile profile = new ControllerProfile(this);
-        mainStickCal = profile.getStick(ControllerProfile.DEVICE_BUILTIN, ControllerProfile.Stick.MAIN);
-        cStickCal    = profile.getStick(ControllerProfile.DEVICE_BUILTIN, ControllerProfile.Stick.C);
-        buttonMap    = profile.getButtonMap(ControllerProfile.DEVICE_BUILTIN);
         if (!useGcAdapter) {
             rawStickInput = RawStickInputProviders.create(this);
         }
         if (rawStickInput != null) {
             rawStickInput.start();
         }
-        // When the raw provider is known to still saturate at the firmware
-        // level (e.g. Ayn/Odin's currentRawEvent on the Thor clips at ~25%
-        // of nominal range), uncalibrated sticks can't reach Melee's tilt
-        // thresholds. Swap in compensating defaults so first-launch users
-        // get usable sticks; the wizard still produces a precise capture.
-        if (rawStickInput != null && rawStickInput.isPotentiallySaturated()) {
-            if (!profile.hasCalibration(ControllerProfile.DEVICE_BUILTIN, ControllerProfile.Stick.MAIN)) {
-                mainStickCal = StickCalibration.compensatingMain();
-            }
-            if (!profile.hasCalibration(ControllerProfile.DEVICE_BUILTIN, ControllerProfile.Stick.C)) {
-                cStickCal = StickCalibration.compensatingC();
-            }
-        }
-        if (!hasRawStickSource()) {
-            mainStickCal = mainStickCal.withOuterScaleEnabled(false);
-            cStickCal = cStickCal.withOuterScaleEnabled(false);
-        }
+        gamepadInputRouter = new AndroidGamepadInputRouter(
+                this,
+                profile,
+                padState,
+                AndroidControllers.hasBuiltInGamepadControls(this),
+                hasRawStickSource(),
+                rawStickInput != null && rawStickInput.isPotentiallySaturated());
+        inputManager = (InputManager) getSystemService(INPUT_SERVICE);
+        StickCalibration mainStickCal = gamepadInputRouter.getBuiltInMainCalibration();
         Log.i(TAG, "loaded mainStick cal: dz=" + mainStickCal.deadzone
                 + " sens=" + mainStickCal.sensitivity
                 + " cap=" + mainStickCal.outputCap
@@ -508,6 +519,9 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         }
         startFrameLatencyTrace();
         updateTouchOverlayVisibility();
+        if (inputManager != null) {
+            inputManager.registerInputDeviceListener(inputDeviceListener, ui);
+        }
         ui.post(controllerDetectorPoll);
         logGameMode();
         if (shouldPollRawStickSource()) startRawInputPolling();
@@ -521,6 +535,9 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     protected void onPause() {
         stopRawInputPolling();
         stopFrameLatencyTrace();
+        if (inputManager != null) {
+            inputManager.unregisterInputDeviceListener(inputDeviceListener);
+        }
         ui.removeCallbacks(controllerDetectorPoll);
         if (replayHud != null) replayHud.stopPolling();
         super.onPause();
@@ -805,23 +822,19 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
-        if (useGcAdapter) {
+        if (useGcAdapter || gamepadInputRouter == null) {
             return super.dispatchKeyEvent(event);
         }
         traceInputEvent("key", event.getEventTime(), 0);
         int action = event.getAction();
         int keyCode = event.getKeyCode();
-        int bit = mapKeyToGcBit(keyCode);
+        int bit = gamepadInputRouter.handleKeyEvent(event);
         if (INPUT_DIAGNOSTICS && event.getRepeatCount() == 0) {
             android.util.Log.i(TAG, "dispatchKeyEvent kc=" + keyCode
                     + " src=0x" + Integer.toHexString(event.getSource())
                     + " action=" + action + " bit=0x" + Integer.toHexString(bit));
         }
         if (bit == 0) return super.dispatchKeyEvent(event);
-        if (action != KeyEvent.ACTION_DOWN && action != KeyEvent.ACTION_UP) {
-            return super.dispatchKeyEvent(event);
-        }
-        padState.setButton(bit, action == KeyEvent.ACTION_DOWN);
         pushPad();
         ControllerDiagnosticsCapture.recordInputEvent("key",
                 "device=" + safeDeviceName(event.getDevice())
@@ -842,99 +855,15 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
                 && (ev.getSource() & android.view.InputDevice.SOURCE_GAMEPAD) == 0) {
             return super.dispatchGenericMotionEvent(ev);
         }
-        if (useGcAdapter) {
+        if (useGcAdapter || gamepadInputRouter == null) {
             return super.dispatchGenericMotionEvent(ev);
         }
         traceInputEvent("motion", ev.getEventTime(), ev.getHistorySize());
-        if (!shouldPollRawStickSource()) {
-            // Main + C stick: pair-wise calibration then convert to GC byte
-            // space (center 128, swing ±127). GC Y is inverted relative to
-            // Android (up = negative Y on Android, positive Y on GC).
-            feedStickPairToBytes(ev, MotionEvent.AXIS_X, MotionEvent.AXIS_Y, mainStickCal,
-                    /*invertY*/ true,
-                    /*main*/ true);
-            feedStickPairToBytes(ev, MotionEvent.AXIS_Z, MotionEvent.AXIS_RZ, cStickCal,
-                    /*invertY*/ true,
-                    /*main*/ false);
-        }
-
-        // Analog triggers (Melee uses these for shield drop / tech).
-        float lt = ev.getAxisValue(MotionEvent.AXIS_LTRIGGER);
-        float rt = ev.getAxisValue(MotionEvent.AXIS_RTRIGGER);
-        if (lt == 0f) lt = ev.getAxisValue(MotionEvent.AXIS_BRAKE);
-        if (rt == 0f) rt = ev.getAxisValue(MotionEvent.AXIS_GAS);
-        padState.setAnalogTriggerL(lt);
-        padState.setAnalogTriggerR(rt);
-
-        // D-pad delivered as HAT_X/HAT_Y axes on most pads.
-        float hx = ev.getAxisValue(MotionEvent.AXIS_HAT_X);
-        float hy = ev.getAxisValue(MotionEvent.AXIS_HAT_Y);
-        padState.setHat(hx, hy);
-
+        gamepadInputRouter.handleMotionEvent(ev, SystemClock.uptimeMillis());
         pushPad();
         ControllerDiagnosticsCapture.recordInputEvent("motion",
                 describeMotionEvent(ev) + " pad=" + padState.snapshotString());
         return true;
-    }
-
-    private long lastFeedLog = 0;
-    private synchronized void feedStickPairToBytes(MotionEvent ev, int androidAxisX, int androidAxisY,
-                                      StickCalibration cal, boolean invertY, boolean main) {
-        feedStickPairToBytes(ev.getAxisValue(androidAxisX), ev.getAxisValue(androidAxisY),
-                cal, invertY, main);
-    }
-
-    private synchronized void feedStickPairToBytes(float rawX, float rawY,
-                                      StickCalibration cal, boolean invertY, boolean main) {
-        cal.apply(rawX, rawY, stickOut);
-        float fx = stickOut.x;
-        // Melee's float-stick convention has stickY positive = up; Android
-        // AXIS_Y is positive = down. invertY captures that.
-        float fy = invertY ? -stickOut.y : stickOut.y;
-        // Byte encoding stays around for the SI override path (kept as a
-        // fallback in case the direct-memory write isn't applied on some
-        // frames — better to have stale-but-calibrated bytes than raw).
-        int byteX = stickByteFromUnit(fx);
-        int byteY = stickByteFromUnit(fy);
-        if (main) {
-            padState.setMainStick(fx, fy);
-        } else {
-            padState.setCStick(fx, fy);
-        }
-        if (INPUT_DIAGNOSTICS) {
-            long now = android.os.SystemClock.uptimeMillis();
-            if (now - lastFeedLog > 200 && (Math.abs(rawX) > 0.05f || Math.abs(rawY) > 0.05f)) {
-                lastFeedLog = now;
-                android.util.Log.i(TAG, "feedPad " + (main ? "main" : "C")
-                        + " raw=(" + String.format("%+.2f", rawX) + ", " + String.format("%+.2f", rawY)
-                        + ") cal=(" + String.format("%+.2f", stickOut.x) + ", " + String.format("%+.2f", stickOut.y)
-                        + ") byte=(" + byteX + ", " + byteY + ")"
-                        + " melee=(" + String.format("%+.2f", fx) + ", " + String.format("%+.2f", fy) + ")");
-            }
-        }
-    }
-
-    private synchronized boolean feedRawStickState(RawStickState state) {
-        if (state == null) {
-            return false;
-        }
-
-        boolean fed = false;
-        Float mainX = state.valueForAxis(MotionEvent.AXIS_X);
-        Float mainY = state.valueForAxis(MotionEvent.AXIS_Y);
-        if (mainX != null && mainY != null) {
-            feedStickPairToBytes(mainX, mainY, mainStickCal, true, true);
-            fed = true;
-        }
-
-        Float cX = state.valueForAxis(MotionEvent.AXIS_Z);
-        Float cY = state.valueForAxis(MotionEvent.AXIS_RZ);
-        if (cX != null && cY != null) {
-            feedStickPairToBytes(cX, cY, cStickCal, true, false);
-            fed = true;
-        }
-
-        return fed;
     }
 
     private String describeRawStickState(RawStickState state) {
@@ -958,6 +887,8 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
                 + ",y=" + formatAxis(ev.getAxisValue(MotionEvent.AXIS_Y))
                 + ",z=" + formatAxis(ev.getAxisValue(MotionEvent.AXIS_Z))
                 + ",rz=" + formatAxis(ev.getAxisValue(MotionEvent.AXIS_RZ))
+                + ",rx=" + formatAxis(ev.getAxisValue(MotionEvent.AXIS_RX))
+                + ",ry=" + formatAxis(ev.getAxisValue(MotionEvent.AXIS_RY))
                 + ",lt=" + formatAxis(ev.getAxisValue(MotionEvent.AXIS_LTRIGGER))
                 + ",rt=" + formatAxis(ev.getAxisValue(MotionEvent.AXIS_RTRIGGER))
                 + ",brake=" + formatAxis(ev.getAxisValue(MotionEvent.AXIS_BRAKE))
@@ -1281,17 +1212,6 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     private String rawSourceLabel() {
         if (rawStickInput != null) return rawStickInput.label();
         return "Android MotionEvent fallback";
-    }
-
-    private static int stickByteFromUnit(float v) {
-        int b = Math.round(v * 127f + 128f);
-        if (b < 0) return 0;
-        if (b > 255) return 255;
-        return b;
-    }
-
-    private int mapKeyToGcBit(int keyCode) {
-        return buttonMap.gcBitForKey(keyCode);
     }
 
     public void onLaunchProgressFromNative(String message) {
