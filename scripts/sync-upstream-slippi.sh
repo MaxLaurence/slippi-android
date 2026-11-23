@@ -106,9 +106,19 @@ fetch_top_level_refs() {
 
 fetch_mainline_refs() {
   log "Fetching mainline Dolphin tags"
-  mainline_fetch "$mainline_remote" \
-    "+refs/heads/slippi:refs/remotes/$mainline_remote/slippi" --prune
-  mainline_fetch "$mainline_remote" "refs/tags/*:refs/tags/*"
+  # Externals/MainlineSlippiDolphin is marked shallow=true in .gitmodules.
+  # When upstream pushes untagged commits on slippi after a beta tag, a depth-1
+  # shallow clone grafts origin/slippi with no parents so `git tag --merged`
+  # cannot see the latest beta tag. Deepen slippi (with automatic tag following)
+  # so recent beta tags are reachable without downloading full 15-year history.
+  if [[ "$(git -C "$submodule" rev-parse --is-shallow-repository)" == "true" ]]; then
+    mainline_fetch --deepen=50 "$mainline_remote" \
+      "+refs/heads/slippi:refs/remotes/$mainline_remote/slippi" --prune
+  else
+    mainline_fetch "$mainline_remote" \
+      "+refs/heads/slippi:refs/remotes/$mainline_remote/slippi" --prune
+    mainline_fetch "$mainline_remote" "refs/tags/*:refs/tags/*"
+  fi
 }
 
 latest_ishiiruka_tag() {
@@ -118,15 +128,30 @@ latest_ishiiruka_tag() {
 }
 
 latest_mainline_tag() {
-  git -C "$submodule" tag --merged "$mainline_remote/slippi" \
-    --list 'v4.0.0-mainline-beta.*' --sort=-v:refname |
-    head -n 1
+  local tag
+  tag="$(
+    git -C "$submodule" tag --merged "$mainline_remote/slippi" \
+      --list 'v4.0.0-mainline-beta.*' --sort=-v:refname |
+      head -n 1 || true
+  )"
+  if [[ -z "$tag" && "$(git -C "$submodule" rev-parse --is-shallow-repository)" == "true" ]]; then
+    log "Mainline tag not within shallow history; unshallowing $submodule_rel" >&2
+    mainline_fetch --unshallow "$mainline_remote" \
+      "+refs/heads/slippi:refs/remotes/$mainline_remote/slippi"
+    mainline_fetch "$mainline_remote" "refs/tags/*:refs/tags/*"
+    tag="$(
+      git -C "$submodule" tag --merged "$mainline_remote/slippi" \
+        --list 'v4.0.0-mainline-beta.*' --sort=-v:refname |
+        head -n 1 || true
+    )"
+  fi
+  printf '%s\n' "$tag"
 }
 
 latest_android_tag_for() {
   local upstream_tag="$1"
   git tag --merged "$base_ref" --list "${upstream_tag}-android-r*" --sort=-v:refname |
-    head -n 1
+    head -n 1 || true
 }
 
 recorded_submodule_sha_for_base() {
